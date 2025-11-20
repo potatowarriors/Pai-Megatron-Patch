@@ -37,10 +37,15 @@ pip install git+https://github.com/huggingface/transformers.git@5f6e278a5177d8b8
 pip install  datasets==3.6.0 packaging==24.2 modelscope -i https://mirrors.aliyun.com/pypi/simple/ 
 
 # 安装triton
-pip install --no-build-isolation  "triton==3.2.0" -i https://mirrors.aliyun.com/pypi/simple/
+pip install --no-build-isolation  "triton==3.3.0" -i https://mirrors.aliyun.com/pypi/simple/
 
 # 安装mamba-ssm
 pip install --no-build-isolation  "mamba-ssm" -i https://mirrors.aliyun.com/pypi/simple/
+
+# Flash-attention3 설치.
+git clone https://github.com/togethercomputer/flash-attention-3.git
+cd hopper
+python setup.py install
 
 # 安装causal-conv1d
 git clone https://github.com/Dao-AILab/causal-conv1d.git

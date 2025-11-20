@@ -39,7 +39,7 @@ model:
 
   # Hybrid Model (Mamba + Attention)
   hybrid:
-    attention_ratio: 0.125       # 12.5% (24 layers 중 3개)
+    attention_ratio: 0.125      # 12.5% (24 layers 중 3개) - FIX: Corrected from 0.25
     mlp_ratio: 0.5
     override_pattern: "M-M-M-*-M-M-M-*-M-M-M-*-"  # 24 layers: 6 groups, 3 attention
     mamba_state_dim: 128

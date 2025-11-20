@@ -12,9 +12,11 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import atexit
 import math
 import sys
 import time
+from datetime import timedelta
 
 import torch
 from megatron import (get_args, get_num_microbatches, get_signal_handler,
@@ -46,6 +48,17 @@ from megatron.checkpointing import load_checkpoint, save_checkpoint
 
 # The earliest we can measure the start time.
 _TRAIN_START_TIME = time.time()
+
+
+def cleanup_distributed():
+    """Clean up distributed resources before exit."""
+    if torch.distributed.is_initialized():
+        try:
+            # Use a longer timeout to prevent premature cleanup failures
+            torch.distributed.barrier(timeout=timedelta(minutes=10))
+            torch.distributed.destroy_process_group()
+        except Exception as e:
+            print(f"Warning: Error during distributed cleanup: {e}")
 
 
 def pretrain(train_valid_test_dataset_provider,
@@ -89,6 +102,9 @@ def pretrain(train_valid_test_dataset_provider,
     from megatron.initialize import initialize_megatron
     initialize_megatron(extra_args_provider=extra_args_provider,
                         args_defaults=args_defaults)
+
+    # Register cleanup handler for graceful shutdown
+    atexit.register(cleanup_distributed)
 
     # Set pytorch JIT layer fusion options and warmup JIT functions.
     set_jit_fusion_options()

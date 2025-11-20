@@ -12,6 +12,8 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 from functools import partial
+import atexit
+from datetime import timedelta
 import torch
 import torch._dynamo
 
@@ -61,9 +63,22 @@ def mamba_builder(args, pre_process, post_process, vp_stage=None, config=None):
 model_provider = partial(base_model_provider, mamba_builder)
 
 
+def cleanup_distributed():
+    """Clean up distributed resources before exit."""
+    if torch.distributed.is_initialized():
+        try:
+            torch.distributed.barrier(timeout=timedelta(seconds=30))
+            torch.distributed.destroy_process_group()
+        except Exception as e:
+            print(f"Warning: Error during distributed cleanup: {e}")
+
+
 if __name__ == "__main__":
     from megatron_patch.template.helper import forward_step
     train_valid_test_datasets_provider.is_distributed = True
+
+    # Register cleanup handler for graceful shutdown
+    atexit.register(cleanup_distributed)
 
     pretrain(
         train_valid_test_datasets_provider,

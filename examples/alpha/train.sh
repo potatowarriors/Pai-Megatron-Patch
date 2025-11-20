@@ -19,10 +19,21 @@
 set -e
 
 #==============================================================================
-# 경로 및 기본 설정
+# WANDB 환경 자동 로드 (Optional)
 #==============================================================================
 
 CURRENT_DIR="$( cd "$( dirname "$0" )" && pwd )"
+
+# WANDB 설정 스크립트가 있으면 자동으로 source
+WANDB_SETUP_SCRIPT="${CURRENT_DIR}/scripts/setup_wandb.sh"
+if [ -f "$WANDB_SETUP_SCRIPT" ]; then
+    source "$WANDB_SETUP_SCRIPT" 2>/dev/null || true
+fi
+
+#==============================================================================
+# 경로 및 기본 설정
+#==============================================================================
+
 MEGATRON_PATCH_PATH=$( dirname $( dirname ${CURRENT_DIR}))
 CONFIG_DIR="${CURRENT_DIR}/configs"
 
@@ -222,6 +233,41 @@ MANUAL_GC_INTERVAL=$(yaml_get $TRAINING_CONFIG_FILE "training.manual_gc_interval
 echo "✅ 학습 설정 완료"
 echo "  - 학습 토큰: ${TRAIN_TOKENS}, Iterations: ${TRAIN_ITERS}"
 echo "  - Learning Rate: ${LR} → ${MIN_LR}"
+echo ""
+
+#==============================================================================
+# WANDB 설정 로드 (Optional)
+#==============================================================================
+
+WANDB_ENABLED=$(yaml_get $TRAINING_CONFIG_FILE "training.wandb.enabled")
+
+if [ "$WANDB_ENABLED" = "True" ] || [ "$WANDB_ENABLED" = "true" ]; then
+    echo "WANDB 설정 로드 중..."
+
+    WANDB_PROJECT=$(yaml_get $TRAINING_CONFIG_FILE "training.wandb.project")
+    WANDB_ENTITY=$(yaml_get $TRAINING_CONFIG_FILE "training.wandb.entity")
+    WANDB_SAVE_DIR=$(yaml_get $TRAINING_CONFIG_FILE "training.wandb.save_dir")
+
+    # Experiment name: 자동 생성 (모델_데이터_시간)
+    WANDB_EXP_NAME="${MODEL_CONFIG}_${DATA_CONFIG}_${TIMESTAMP}"
+
+    # API 키 확인
+    if [ -z "$WANDB_API_KEY" ]; then
+        echo "⚠️  경고: WANDB_API_KEY가 설정되지 않았습니다."
+        echo "   WANDB 로깅을 건너뜁니다. API 키 설정:"
+        echo "   export WANDB_API_KEY='your_api_key'"
+        WANDB_ENABLED="false"
+    else
+        echo "✅ WANDB 설정 완료"
+        echo "  - Project: ${WANDB_PROJECT}"
+        echo "  - Run Name: ${WANDB_EXP_NAME}"
+        [ ! -z "$WANDB_ENTITY" ] && echo "  - Entity: ${WANDB_ENTITY}"
+    fi
+else
+    echo "WANDB: 비활성화됨"
+    WANDB_ENABLED="false"
+fi
+
 echo ""
 
 #==============================================================================
@@ -465,6 +511,30 @@ TRAINING_ARGS=(
     --manual-gc-interval ${MANUAL_GC_INTERVAL}
 )
 
+#==============================================================================
+# WANDB Arguments (조건부 추가)
+#==============================================================================
+
+if [ "$WANDB_ENABLED" = "True" ] || [ "$WANDB_ENABLED" = "true" ]; then
+    echo "📊 WANDB 인자 추가 중..."
+
+    TRAINING_ARGS+=(
+        --wandb-project "${WANDB_PROJECT}"
+        --wandb-exp-name "${WANDB_EXP_NAME}"
+    )
+
+    # Optional arguments
+    if [ ! -z "$WANDB_ENTITY" ]; then
+        TRAINING_ARGS+=(--wandb-entity "${WANDB_ENTITY}")
+    fi
+
+    if [ ! -z "$WANDB_SAVE_DIR" ]; then
+        TRAINING_ARGS+=(--wandb-save-dir "${WANDB_SAVE_DIR}")
+    fi
+
+    echo "  ✅ WANDB 인자 추가 완료"
+fi
+
 # Activation Checkpointing (YAML에서 로드)
 AC_GRANULARITY=$(yaml_get $INFRA_CONFIG_FILE "infrastructure.activation_checkpointing.granularity")
 if [ ! -z "$AC_GRANULARITY" ]; then
@@ -496,8 +566,8 @@ INFRA_ARGS=(
     --overlap-grad-reduce
     --overlap-param-gather
 
-    # Attention Backend
-    --attention-backend auto
+    # Attention Backend (Flash Attention for H100)
+    --attention-backend flash
 
     # Loss Fusion
     --cross-entropy-loss-fusion

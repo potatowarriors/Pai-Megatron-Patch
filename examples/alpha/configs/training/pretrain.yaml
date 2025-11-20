@@ -4,7 +4,7 @@
 training:
   # 학습 토큰
   train_tokens: 10663817216    # ~10.7B tokens
-  warmup_tokens: 100000
+  warmup_tokens: 319815680     # ~320M tokens (전체 iteration의 3%, 305 iters)
 
   # Optimizer
   optimizer: "adam"
@@ -15,15 +15,15 @@ training:
   clip_grad: 1.0
 
   # Learning Rate
-  lr: 3.0e-4
-  min_lr: 3.0e-5
+  lr: 3.0e-3
+  min_lr: 3.0e-4
   lr_decay_style: "cosine"
 
   # Precision
   precision: "bf16"
 
   # 체크포인트
-  save_interval: 500
+  save_interval: 1000
   save_optim: false
   auto_detect_ckpt_format: true
 
@@ -42,3 +42,11 @@ training:
   log_memory_to_tensorboard: true
   log_validation_ppl_to_tensorboard: true
   log_throughput: true
+
+  # Weights & Biases
+  wandb:
+    enabled: true  # true로 변경하면 WANDB 활성화
+    project: "alpha-pretraining"
+    entity: ""  # 팀/조직 이름 (선택사항)
+    save_dir: ""  # 기본값: {checkpoint_dir}/wandb
+    notes: "Alpha project baseline experiments"

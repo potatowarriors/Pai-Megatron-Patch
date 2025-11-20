@@ -163,6 +163,7 @@ def get_args():
     args.rank = 0
     args.make_vocab_size_divisible_by = 128
     args.model_parallel_size = 1
+    args.padded_vocab_size = 0
 
     return args
 

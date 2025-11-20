@@ -194,9 +194,67 @@ tensorboard --logdir outputs/alpha_*/tensorboard --port 6006
 
 ---
 
+## 모델 평가
+
+학습 완료 후 벤치마크로 모델 성능을 평가할 수 있습니다.
+
+### 통합 평가 파이프라인 (권장)
+
+```bash
+# Megatron checkpoint → HF 변환 → 벤치마크 평가 (원스텝)
+bash scripts/evaluate_checkpoint.sh \
+  outputs/alpha_baseline_24L_*/checkpoints/iter_0010000
+```
+
+결과는 `experiments/<timestamp>_<model>_<iter>/`에 자동 저장됩니다.
+
+### 단계별 평가
+
+**1. Megatron → HuggingFace 변환**
+```bash
+bash scripts/convert_to_hf.sh \
+  outputs/alpha_*/checkpoints/iter_0010000 \
+  hf_models/alpha_baseline_24L_iter10k
+```
+
+**2. Config 검증 및 수정**
+```bash
+python scripts/validate_conversion_config.py \
+  hf_models/alpha_baseline_24L_iter10k --fix
+```
+
+**3. 벤치마크 평가**
+```bash
+# 모든 벤치마크 (Korean + English)
+bash scripts/run_benchmarks.sh hf_models/alpha_baseline_24L_iter10k
+
+# Korean 벤치마크만
+bash scripts/run_benchmarks.sh hf_models/alpha_baseline_24L_iter10k korean
+
+# 특정 tasks만
+bash scripts/run_benchmarks.sh hf_models/alpha_baseline_24L_iter10k "kmmlu,mmlu,hellaswag"
+```
+
+### 지원 벤치마크
+
+**Korean**:
+- KMMLU (Korean MMLU)
+- KoBEST (WiC, COPA, HellaSwag, BoolQ, SentiNeg)
+- Belebele Korean
+
+**English**:
+- MMLU (Multitask Language Understanding)
+- HellaSwag, ARC, Winogrande
+- TruthfulQA, GSM8K
+
+자세한 내용은 [**CONVERSION.md**](docs/CONVERSION.md)를 참고하세요.
+
+---
+
 ## 문서
 
 - [**ARCHITECTURE.md**](docs/ARCHITECTURE.md): 모델 아키텍처 상세 설명
+- [**CONVERSION.md**](docs/CONVERSION.md): HuggingFace 변환 및 평가 가이드
 - [**EXPERIMENTS.md**](docs/EXPERIMENTS.md): 실험 로그 및 결과
 - [**SETUP.md**](docs/SETUP.md): 환경 세팅 상세 가이드
 
