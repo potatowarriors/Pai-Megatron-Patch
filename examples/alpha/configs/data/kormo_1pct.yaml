@@ -1,0 +1,28 @@
+# KORMo 데이터셋 설정 (1% subset)
+# 빠른 테스트 및 프로토타이핑용
+
+data:
+  # 데이터셋 경로
+  train_path: "/home/work/Datasets/KORMo_processed/mmap/qwen3_1pct/kormo_content_document"
+  valid_path: null  # 동일 경로 사용 (split으로 분리)
+
+  # 데이터셋 타입
+  dataset_impl: "mmap"
+
+  # Train/Valid/Test split
+  split: [99, 1, 0]  # 99% train, 1% valid, 0% test
+
+  # 데이터 로더
+  num_workers: 32
+
+  # 데이터셋 정보
+  description: "KORMo corpus 1% random subset"
+  total_documents: ~1000000  # 예상 문서 수
+  tokenizer: "Qwen3Tokenizer"
+
+# KORMo 전체 데이터셋 경로 (참고용)
+# full_dataset_path: "/home/work/Datasets/KORMo_processed/mmap/qwen3_full/kormo_content_document"
+
+# 데이터 전처리 명령 (재생성 필요 시):
+# cd toolkits/pretrain_data_preprocessing/
+# bash preprocess_kormo_subset.sh 1  # 1% subset

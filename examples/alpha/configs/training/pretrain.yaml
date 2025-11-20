@@ -1,0 +1,44 @@
+# Alpha 사전학습 설정
+# Baseline configuration for pretraining
+
+training:
+  # 학습 토큰
+  train_tokens: 10663817216    # ~10.7B tokens
+  warmup_tokens: 100000
+
+  # Optimizer
+  optimizer: "adam"
+  weight_decay: 0.01
+  adam_beta1: 0.9
+  adam_beta2: 0.95
+  init_method_std: 0.008
+  clip_grad: 1.0
+
+  # Learning Rate
+  lr: 3.0e-4
+  min_lr: 3.0e-5
+  lr_decay_style: "cosine"
+
+  # Precision
+  precision: "bf16"
+
+  # 체크포인트
+  save_interval: 500
+  save_optim: false
+  auto_detect_ckpt_format: true
+
+  # 평가
+  eval_iters: 10
+  eval_interval: 1000
+
+  # 분산 학습
+  distributed_timeout_minutes: 60
+  manual_gc: true
+  manual_gc_interval: 5
+
+  # 로깅
+  log_interval: 1
+  log_timers_to_tensorboard: true
+  log_memory_to_tensorboard: true
+  log_validation_ppl_to_tensorboard: true
+  log_throughput: true

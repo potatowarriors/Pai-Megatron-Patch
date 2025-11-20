@@ -1,0 +1,57 @@
+# H100 8-GPU 최적화 설정
+# Best Practice 기반 병렬화 및 최적화 전략
+
+infrastructure:
+  # 병렬화 전략 (Best Practice)
+  # Reference: https://github.com/yanring/Megatron-MoE-ModelZoo/tree/main/best_practice/Qwen3
+  # Data Parallel = 8 / (TP * PP * EP * CP) = 8 / (1 * 1 * 8 * 1) = 1
+  parallelism:
+    tensor_parallel: 1          # TP 최소화 (Best Practice)
+    pipeline_parallel: 1        # PP=4로 메모리 분산 가능 (24 layers → 6 per stage)
+    expert_parallel: 8          # MoE 핵심! 256 experts를 8 GPU에 분산
+    expert_tensor_parallel: 1
+    context_parallel: 1
+    # Data Parallel: 자동 계산 = 1
+
+  # 배치 설정
+  batch:
+    micro_batch_size: 2         # GPU당 마이크로 배치
+    global_batch_size: 256       # 전체 배치 크기
+    seq_length: 4096
+    max_position_embeddings: 4096
+
+  # Activation Checkpointing (Best Practice)
+  # ~60-70% 메모리 절감, ~15-20% 연산 오버헤드
+  activation_checkpointing:
+    granularity: "selective"
+    recompute_modules:
+      - "layernorm"
+      - "moe_act"
+      - "shared_experts"
+
+  # 최적화 기법
+  optimizations:
+    use_distributed_optimizer: true
+    sequence_parallel: true
+    overlap_grad_reduce: true
+    overlap_param_gather: true
+    attention_backend: "auto"      # Flash Attention 3 자동 선택
+    cross_entropy_loss_fusion: true
+    cross_entropy_fusion_impl: "te"
+    moe_token_dispatcher_type: "alltoall"
+
+    # Optimizer CPU Offload (OOM 대비용, 필요시 활성화)
+    optimizer_cpu_offload: false
+    optimizer_offload_fraction: 1.0
+    use_precision_aware_optimizer: false
+
+  # Virtual Pipeline (현재 미사용)
+  # Mamba hybrid 모델에서는 VP 미지원
+  virtual_pipeline: null
+
+# 노트:
+# - TP=1: Best Practice 권장 (통신 오버헤드 최소화)
+# - PP=1: 24 layers는 단일 stage로 처리 가능
+#   - OOM 시 PP=4로 변경 (각 stage 6 layers)
+# - EP=8: 256 experts를 8 GPU에 균등 분산 (각 GPU 32 experts)
+# - Selective Checkpointing: 메모리 효율성 극대화

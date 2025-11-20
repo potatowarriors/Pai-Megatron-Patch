@@ -3,3 +3,45 @@
 .vscode
 *.DS_Store
 .ipynb_checkpoints
+
+# Datasets and data directories
+datasets
+logs/
+models/
+outputs/qwen3next_h100x8_20251112_182410/logs
+
+# Temporary and intermediate files
+*.tmp
+*.temp
+.temp_*
+*.log
+.nfs*
+
+# OS and editor files
+*~
+*.swp
+*.swo
+
+# Project outputs
+outputs/
+examples/*/outputs/
+examples/*/checkpoints/
+examples/*/tensorboard/
+
+# Weights & Biases
+wandb/
+examples/*/wandb/
+**/wandb/
+
+# Python bytecode
+*.pyc
+*.pyo
+__pycache__/
+
+# Jupyter
+*.ipynb_checkpoints
+
+# IDEs
+.vscode/
+.idea/
+*.sublime-*
