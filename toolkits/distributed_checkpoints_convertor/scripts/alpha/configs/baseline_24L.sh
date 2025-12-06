@@ -2,10 +2,10 @@
 # Copyright (c) 2025 Alibaba PAI Team.
 # Copyright (c) 2025 Alpha Project Team.
 #
-# Alpha baseline_24L Configuration
+# Alpha alpha-baseline-24L Configuration
 # =================================
-# 24 Megatron layers → 12 HF layers (2:1 mapping)
-# Based on: examples/alpha/configs/model/baseline_24L.yaml
+# 24 Megatron layers -> 12 HF layers (2:1 mapping)
+# Auto-generated from: examples/alpha/configs/model/baseline-24L.yaml
 
 GPT_MODEL_ARGS+=(
     # Basic Architecture
@@ -17,12 +17,13 @@ GPT_MODEL_ARGS+=(
     --num-query-groups 2
 
     # Hybrid Model Pattern
-    # 24 layers = 6 groups × (M-M-M-*) = 18 Mamba + 6 Attention
-    # Attention ratio: 3/24 = 0.125 (12.5%)
-    # MLP ratio: 12/24 = 0.5 (50%)
+    # Pattern: MDM-M-*-M-M-M-*-M-M-M-*- (24 chars total)
+    # M=Mamba(9), D=Dense MLP(1), -=MoE MLP(11), *=Attention(3)
+    # Attention ratio: 0.125 (3 layers)
+    # MLP ratio: 0.5 (12 layers)
     --hybrid-attention-ratio 0.125
     --hybrid-mlp-ratio 0.5
-    --hybrid-override-pattern M-M-M-*-M-M-M-*-M-M-M-*-M-M-M-*-M-M-M-*-M-M-M-*-
+    --hybrid-override-pattern MDM-M-*-M-M-M-*-M-M-M-*-
     --is-hybrid-model
 
     # MoE Configuration
@@ -30,6 +31,7 @@ GPT_MODEL_ARGS+=(
     --moe-router-topk 8
     --moe-ffn-hidden-size 768
     --moe-shared-expert-intermediate-size 768
+    --moe-shared-expert-gate
     --moe-grouped-gemm
     --moe-router-score-function softmax
     --moe-token-dispatcher-type alltoall

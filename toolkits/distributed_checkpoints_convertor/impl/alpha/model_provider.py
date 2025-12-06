@@ -41,7 +41,7 @@ from megatron.core.transformer import TransformerConfig
 from megatron.training import print_rank_0
 from megatron.training.arguments import core_transformer_config_from_args
 
-from megatron_patch.model.qwen3_next.layer_specs import get_qwen3_next_layer_spec
+from megatron_patch.model.alpha.layer_specs import get_alpha_layer_spec
 from megatron_patch.model.qwen3_next.transformer_config import Qwen3NextTransformerConfig
 
 
@@ -96,7 +96,7 @@ def _validate_alpha_args(args):
 
     # 3. Check pattern format
     pattern = args.hybrid_override_pattern
-    valid_chars = {'M', '*', '-'}
+    valid_chars = {'M', '*', '-', 'D'}
     invalid_chars = set(pattern) - valid_chars
 
     if invalid_chars:
@@ -110,9 +110,10 @@ def _validate_alpha_args(args):
             f"Valid characters:\n"
             f"  M = Mamba layer (Linear Attention SSM)\n"
             f"  * = Full Attention layer (Multi-Head Attention)\n"
-            f"  - = MLP layer (Feed-Forward Network)\n"
+            f"  - = MoE MLP layer (Feed-Forward Network with MoE)\n"
+            f"  D = Dense MLP layer (Standard Feed-Forward Network)\n"
             f"\n"
-            f"Example valid pattern: M-M-M-*-M-M-M-*-M-M-M-*-\n"
+            f"Example valid pattern: MDM-M-*-M-M-M-*-M-M-M-*-\n"
             f"{'='*70}"
         )
 
@@ -161,7 +162,7 @@ def mamba_builder(args, pre_process, post_process, vp_stage=None, config=None):
 
     model = MambaModel(
         config=config,
-        mamba_stack_spec=get_qwen3_next_layer_spec(args),
+        mamba_stack_spec=get_alpha_layer_spec(args),
         vocab_size=args.padded_vocab_size,
         max_sequence_length=args.max_position_embeddings,
         pre_process=pre_process,

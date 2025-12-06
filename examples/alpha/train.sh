@@ -61,17 +61,21 @@ echo ""
 # 사용: yaml_get <file> <key_path>
 # 예: yaml_get configs/model/baseline_24L.yaml "model.num_layers"
 yaml_get() {
-    local file=$1
-    local key=$2
+    local file="$1"
+    local key="$2"
     python3 -c "
 import yaml
 import sys
-with open('$file', 'r') as f:
+with open('${file}', 'r') as f:
     data = yaml.safe_load(f)
-keys = '$key'.split('.')
+keys = '${key}'.split('.')
 value = data
 for k in keys:
-    value = value.get(k, '')
+    if isinstance(value, dict):
+        value = value.get(k, '')
+    else:
+        value = ''
+        break
 print(value if value != '' else '')
 " 2>/dev/null || echo ""
 }
@@ -202,17 +206,46 @@ fi
 echo "학습 설정 로드 중: ${TRAINING_CONFIG}.yaml"
 
 # 토큰 및 Iteration 계산
-TRAIN_TOKENS=$(yaml_get $TRAINING_CONFIG_FILE "training.train_tokens")
-WARMUP_TOKENS=$(yaml_get $TRAINING_CONFIG_FILE "training.warmup_tokens")
+# train_samples가 지정되면 samples 기반, 아니면 tokens 기반으로 계산
+TRAIN_SAMPLES=$(yaml_get $TRAINING_CONFIG_FILE "training.train_samples" 2>/dev/null || echo "")
+if [ -n "${TRAIN_SAMPLES}" ] && [ "${TRAIN_SAMPLES}" != "null" ]; then
+    # 새 방식: 실제 데이터셋 샘플 수 기반 (정확한 1 epoch)
+    TRAIN_ITERS=$(( ${TRAIN_SAMPLES} / ${GBS} ))
+    echo "📊 Train iterations 계산: ${TRAIN_SAMPLES} samples / ${GBS} GBS = ${TRAIN_ITERS} iters"
+else
+    # 기존 방식: train_tokens 기반 계산 (fallback)
+    TRAIN_TOKENS=$(yaml_get $TRAINING_CONFIG_FILE "training.train_tokens")
+    TRAIN_ITERS=$(( ${TRAIN_TOKENS} / ${GBS} / ${SEQ_LEN} ))
+    echo "📊 Train iterations 계산: ${TRAIN_TOKENS} tokens / ${GBS} GBS / ${SEQ_LEN} seq_len = ${TRAIN_ITERS} iters"
+fi
 
-TRAIN_ITERS=$(( ${TRAIN_TOKENS} / ${GBS} / ${SEQ_LEN} ))
-LR_WARMUP_ITERS=$(( ${WARMUP_TOKENS} / ${GBS} / ${SEQ_LEN} ))
+# Warmup 계산: lr_warmup_fraction이 있으면 fraction 기반, 아니면 tokens 기반
+LR_WARMUP_FRACTION=$(yaml_get $TRAINING_CONFIG_FILE "training.lr_warmup_fraction" 2>/dev/null || echo "")
+if [ -n "${LR_WARMUP_FRACTION}" ] && [ "${LR_WARMUP_FRACTION}" != "null" ]; then
+    # fraction 기반 warmup (iteration과 독립적)
+    LR_WARMUP_ITERS=$(echo "${TRAIN_ITERS} * ${LR_WARMUP_FRACTION}" | bc | cut -d. -f1)
+    echo "📊 Warmup iterations 계산: ${TRAIN_ITERS} * ${LR_WARMUP_FRACTION} = ${LR_WARMUP_ITERS} iters"
+else
+    # 기존 방식: warmup_tokens 기반
+    WARMUP_TOKENS=$(yaml_get $TRAINING_CONFIG_FILE "training.warmup_tokens")
+    LR_WARMUP_ITERS=$(( ${WARMUP_TOKENS} / ${GBS} / ${SEQ_LEN} ))
+fi
+
 LR_DECAY_ITERS=${TRAIN_ITERS}
 
 # Learning Rate
 LR=$(yaml_get $TRAINING_CONFIG_FILE "training.lr")
 MIN_LR=$(yaml_get $TRAINING_CONFIG_FILE "training.min_lr")
 LR_DECAY_STYLE=$(yaml_get $TRAINING_CONFIG_FILE "training.lr_decay_style")
+
+# WSD Scheduler (when lr_decay_style is "WSD")
+LR_WSD_DECAY_STYLE=$(yaml_get $TRAINING_CONFIG_FILE "training.lr_wsd_decay_style")
+LR_WSD_DECAY_TOKENS=$(yaml_get $TRAINING_CONFIG_FILE "training.lr_wsd_decay_tokens")
+
+# QK-Clip (Muon training stabilization, requires TE >= 2.9.0)
+QK_CLIP=$(yaml_get $TRAINING_CONFIG_FILE "training.qk_clip")
+QK_CLIP_ALPHA=$(yaml_get $TRAINING_CONFIG_FILE "training.qk_clip_alpha")
+QK_CLIP_THRESHOLD=$(yaml_get $TRAINING_CONFIG_FILE "training.qk_clip_threshold")
 
 # Optimizer
 OPTIMIZER=$(yaml_get $TRAINING_CONFIG_FILE "training.optimizer")
@@ -221,6 +254,15 @@ ADAM_BETA1=$(yaml_get $TRAINING_CONFIG_FILE "training.adam_beta1")
 ADAM_BETA2=$(yaml_get $TRAINING_CONFIG_FILE "training.adam_beta2")
 INIT_STD=$(yaml_get $TRAINING_CONFIG_FILE "training.init_method_std")
 CLIP_GRAD=$(yaml_get $TRAINING_CONFIG_FILE "training.clip_grad")
+
+# Muon hyperparameters (when using muon/dist_muon)
+MUON_MOMENTUM=$(yaml_get $TRAINING_CONFIG_FILE "training.muon_momentum")
+MUON_USE_NESTEROV=$(yaml_get $TRAINING_CONFIG_FILE "training.muon_use_nesterov")
+MUON_NUM_NS_STEPS=$(yaml_get $TRAINING_CONFIG_FILE "training.muon_num_ns_steps")
+MUON_SCALE_MODE=$(yaml_get $TRAINING_CONFIG_FILE "training.muon_scale_mode")
+MUON_FP32_MATMUL_PREC=$(yaml_get $TRAINING_CONFIG_FILE "training.muon_fp32_matmul_prec")
+MUON_TP_MODE=$(yaml_get $TRAINING_CONFIG_FILE "training.muon_tp_mode")
+MUON_EXTRA_SCALE_FACTOR=$(yaml_get $TRAINING_CONFIG_FILE "training.muon_extra_scale_factor")
 
 # 체크포인트 및 로깅
 SAVE_INTERVAL=$(yaml_get $TRAINING_CONFIG_FILE "training.save_interval")
@@ -234,6 +276,12 @@ echo "✅ 학습 설정 완료"
 echo "  - 학습 토큰: ${TRAIN_TOKENS}, Iterations: ${TRAIN_ITERS}"
 echo "  - Learning Rate: ${LR} → ${MIN_LR}"
 echo ""
+
+#==============================================================================
+# 타임스탬프 설정 (WANDB 및 출력 디렉토리에서 사용)
+#==============================================================================
+
+TIMESTAMP=$(date +%Y%m%d_%H%M%S)
 
 #==============================================================================
 # WANDB 설정 로드 (Optional)
@@ -283,7 +331,6 @@ fi
 
 echo "데이터 설정 로드 중: ${DATA_CONFIG}.yaml"
 
-DATA_PATH=$(yaml_get $DATA_CONFIG_FILE "data.train_path")
 DATASET_IMPL=$(yaml_get $DATA_CONFIG_FILE "data.dataset_impl")
 NUM_WORKERS=$(yaml_get $DATA_CONFIG_FILE "data.num_workers")
 DATA_SPLIT=$(yaml_get $DATA_CONFIG_FILE "data.split")
@@ -291,20 +338,43 @@ DATA_SPLIT=$(yaml_get $DATA_CONFIG_FILE "data.split")
 # Split 배열 파싱 [99, 1, 0] → "99,1,0"
 DATA_SPLIT=$(echo $DATA_SPLIT | tr -d '[]' | tr ' ' ',')
 
-# 데이터 존재 확인
-if [ ! -f "${DATA_PATH}.bin" ] || [ ! -f "${DATA_PATH}.idx" ]; then
-    echo "❌ 오류: 데이터셋 파일을 찾을 수 없습니다!"
-    echo "   필요: ${DATA_PATH}.bin"
-    echo "   필요: ${DATA_PATH}.idx"
-    echo ""
-    echo "데이터 전처리를 먼저 실행하세요:"
-    echo "  cd toolkits/pretrain_data_preprocessing/"
-    echo "  bash preprocess_kormo_subset.sh 1"
-    exit 1
+# Blended dataset 또는 단일 dataset 파싱
+BLEND_CONFIG=$(yaml_get $DATA_CONFIG_FILE "data.blend")
+if [ ! -z "$BLEND_CONFIG" ] && [ "$BLEND_CONFIG" != "None" ] && [ "$BLEND_CONFIG" != "" ]; then
+    echo "  Blended dataset 설정 감지..."
+    DATA_PATH=$(python3 -c "
+import yaml
+import os
+with open('${DATA_CONFIG_FILE}') as f:
+    data = yaml.safe_load(f)
+blend = data.get('data', {}).get('blend', [])
+parts = []
+for item in blend:
+    path = os.path.expandvars(item['path'])
+    # 가중치가 있으면 추가
+    if 'weight' in item:
+        parts.append(str(item['weight']))
+    parts.append(path)
+print(' '.join(parts))
+")
+    echo "  - Blend 경로: ${DATA_PATH}"
+else
+    DATA_PATH=$(yaml_get $DATA_CONFIG_FILE "data.train_path")
+    # 단일 데이터셋 존재 확인
+    if [ ! -f "${DATA_PATH}.bin" ] || [ ! -f "${DATA_PATH}.idx" ]; then
+        echo "❌ 오류: 데이터셋 파일을 찾을 수 없습니다!"
+        echo "   필요: ${DATA_PATH}.bin"
+        echo "   필요: ${DATA_PATH}.idx"
+        echo ""
+        echo "데이터 전처리를 먼저 실행하세요:"
+        echo "  cd toolkits/pretrain_data_preprocessing/"
+        echo "  bash preprocess_kormo_subset.sh 1"
+        exit 1
+    fi
+    echo "  - 경로: ${DATA_PATH}"
 fi
 
 echo "✅ 데이터 설정 완료"
-echo "  - 경로: ${DATA_PATH}"
 echo "  - Split: ${DATA_SPLIT}"
 echo ""
 
@@ -348,11 +418,14 @@ MAMBA_NUM_HEADS=$(yaml_get $MODEL_CONFIG_FILE "model.hybrid.mamba_num_heads")
 # RoPE
 ROTARY_BASE=$(yaml_get $MODEL_CONFIG_FILE "model.rotary_base")
 ROTARY_PERCENT=$(yaml_get $MODEL_CONFIG_FILE "model.rotary_percent")
+# NoPE for Full Attention (Kimi-Linear style)
+NO_ROPE_FREQ=$(yaml_get $MODEL_CONFIG_FILE "model.no_rope_freq")
 
 # Tokenizer
 PADDED_VOCAB_SIZE=$(yaml_get $MODEL_CONFIG_FILE "model.padded_vocab_size")
 TOKENIZER_TYPE=$(yaml_get $MODEL_CONFIG_FILE "model.tokenizer_type")
-TOKENIZER_PATH=$(yaml_get $MODEL_CONFIG_FILE "model.tokenizer_path")
+# Fixed tokenizer path (Alpha uses Qwen3-Next tokenizer)
+TOKENIZER_PATH="${CURRENT_DIR}/tokenizer"
 
 echo "✅ 모델 설정 완료"
 echo "  - 아키텍처: ${NUM_LAYERS} layers, ${HIDDEN_SIZE} hidden, ${NUM_EXPERTS} experts"
@@ -363,7 +436,6 @@ echo ""
 # 출력 디렉토리 설정
 #==============================================================================
 
-TIMESTAMP=$(date +%Y%m%d_%H%M%S)
 OUTPUT_DIR=${CURRENT_DIR}/outputs/alpha_${MODEL_CONFIG}_${TIMESTAMP}
 TENSORBOARD_DIR=${OUTPUT_DIR}/tensorboard
 CHECKPOINT_DIR=${OUTPUT_DIR}/checkpoints
@@ -414,6 +486,7 @@ MODEL_ARGS=(
     --moe-permute-fusion
     --moe-router-fusion
     --moe-shared-expert-intermediate-size ${SHARED_EXPERT_SIZE}
+    --moe-shared-expert-gate
 
     # Hybrid Model
     --hybrid-attention-ratio ${HYBRID_ATTN_RATIO}
@@ -437,7 +510,7 @@ MODEL_ARGS=(
     --hidden-dropout 0.0
     --disable-bias-linear
 
-    # Positional Encoding (RoPE)
+    # Positional Encoding (RoPE with NoPE for Full Attention)
     --use-rotary-position-embeddings
     --rotary-base ${ROTARY_BASE}
     --rotary-percent ${ROTARY_PERCENT}
@@ -483,6 +556,8 @@ TRAINING_ARGS=(
     --lr-decay-iters ${LR_DECAY_ITERS}
     --lr-warmup-iters ${LR_WARMUP_ITERS}
 
+    # WSD Scheduler (추가 인자는 조건부로 뒤에서 추가)
+
     # Precision
     --bf16
 
@@ -490,7 +565,7 @@ TRAINING_ARGS=(
     --save ${CHECKPOINT_DIR}
     --save-interval ${SAVE_INTERVAL}
     --no-save-optim
-    --ckpt-format torch_dist
+    --ckpt-format torch_dist  # Muon supports both torch and torch_dist (Megatron-LM-251125+)
 
     # 평가
     --eval-iters ${EVAL_ITERS}
@@ -535,7 +610,135 @@ if [ "$WANDB_ENABLED" = "True" ] || [ "$WANDB_ENABLED" = "true" ]; then
     echo "  ✅ WANDB 인자 추가 완료"
 fi
 
-# Activation Checkpointing (YAML에서 로드)
+# WSD Scheduler Arguments (조건부 추가)
+if [[ "${LR_DECAY_STYLE}" == "WSD" ]]; then
+    echo "📈 WSD scheduler 인자 추가 중..."
+
+    # tokens → iters 변환
+    LR_WSD_DECAY_ITERS=$(( ${LR_WSD_DECAY_TOKENS} / ${GBS} / ${SEQ_LEN} ))
+
+    TRAINING_ARGS+=(
+        --lr-wsd-decay-style ${LR_WSD_DECAY_STYLE}
+        --lr-wsd-decay-iters ${LR_WSD_DECAY_ITERS}
+    )
+
+    echo "  - WSD Decay Style: ${LR_WSD_DECAY_STYLE}"
+    echo "  - WSD Decay Iters: ${LR_WSD_DECAY_ITERS} (from ${LR_WSD_DECAY_TOKENS} tokens)"
+    echo "  ✅ WSD 인자 추가 완료"
+fi
+
+# QK-Clip Arguments (조건부 추가, TE >= 2.9.0 필요)
+if [[ "${QK_CLIP}" == "true" || "${QK_CLIP}" == "True" ]]; then
+    echo "🔒 QK-Clip 인자 추가 중..."
+
+    TRAINING_ARGS+=(
+        --qk-clip
+        --qk-clip-alpha ${QK_CLIP_ALPHA}
+        --qk-clip-threshold ${QK_CLIP_THRESHOLD}
+    )
+
+    echo "  - QK-Clip Alpha: ${QK_CLIP_ALPHA}"
+    echo "  - QK-Clip Threshold: ${QK_CLIP_THRESHOLD}"
+    echo "  ⚠️  주의: TE >= 2.9.0 필요 (현재 환경 확인 필요)"
+    echo "  ✅ QK-Clip 인자 추가 완료"
+fi
+
+# Muon Optimizer Arguments (조건부 추가)
+if [[ "${OPTIMIZER}" == "muon" || "${OPTIMIZER}" == "dist_muon" ]]; then
+    echo "🚀 Muon optimizer 인자 추가 중..."
+
+    TRAINING_ARGS+=(
+        --muon-momentum ${MUON_MOMENTUM}
+        --muon-num-ns-steps ${MUON_NUM_NS_STEPS}
+        --muon-scale-mode ${MUON_SCALE_MODE}
+        --muon-fp32-matmul-prec ${MUON_FP32_MATMUL_PREC}
+        --muon-tp-mode ${MUON_TP_MODE}
+        --muon-extra-scale-factor ${MUON_EXTRA_SCALE_FACTOR}
+    )
+
+    # Nesterov flag 처리 (false일 때만 --muon-no-use-nesterov 추가)
+    if [[ "${MUON_USE_NESTEROV}" == "false" || "${MUON_USE_NESTEROV}" == "False" ]]; then
+        TRAINING_ARGS+=(--muon-no-use-nesterov)
+    fi
+
+    echo "  ✅ Muon 인자 추가 완료"
+fi
+
+# NoPE Arguments (조건부 추가 - Kimi-Linear style)
+if [ ! -z "$NO_ROPE_FREQ" ] && [ "$NO_ROPE_FREQ" != "None" ] && [ "$NO_ROPE_FREQ" != "" ]; then
+    echo "🎯 NoPE 인자 추가 중... (Full Attention에서 RoPE 비활성화)"
+
+    MODEL_ARGS+=(
+        --no-rope-freq "${NO_ROPE_FREQ}"
+    )
+
+    echo "  - Pattern: ${NO_ROPE_FREQ}"
+    echo "  ✅ NoPE 인자 추가 완료"
+fi
+
+# INFRA_ARGS 기본 정의 (병렬화 및 최적화 설정)
+INFRA_ARGS=(
+    # 병렬화
+    --tensor-model-parallel-size ${TP}
+    --pipeline-model-parallel-size ${PP}
+    --expert-model-parallel-size ${EP}
+    --expert-tensor-parallel-size ${ETP}
+    --context-parallel-size ${CP}
+
+    # 최적화
+    # --use-distributed-optimizer  # Muon uses LayerWise distributed optimizer
+    --overlap-grad-reduce
+    # --overlap-param-gather  # Requires distributed optimizer (disabled for Muon)
+
+    # Attention Backend (Flash Attention for H100)
+    --attention-backend flash
+
+    # Loss Fusion
+    --cross-entropy-loss-fusion
+    --cross-entropy-fusion-impl te
+
+    # MoE Token Dispatcher & Communication Optimization
+    --moe-token-dispatcher-type alltoall
+)
+
+# MoE 통신 최적화 (YAML에서 로드, TransformerEngine #2438 권장)
+MOE_PERMUTE_FUSION=$(yaml_get $INFRA_CONFIG_FILE "infrastructure.optimizations.moe_permute_fusion")
+if [ "$MOE_PERMUTE_FUSION" = "True" ] || [ "$MOE_PERMUTE_FUSION" = "true" ]; then
+    # 이미 MODEL_ARGS에 --moe-permute-fusion 있음, 중복 체크
+    if [[ ! " ${MODEL_ARGS[*]} " =~ " --moe-permute-fusion " ]]; then
+        INFRA_ARGS+=(--moe-permute-fusion)
+    fi
+fi
+
+OVERLAP_MOE_EP_COMM=$(yaml_get $INFRA_CONFIG_FILE "infrastructure.optimizations.overlap_moe_expert_parallel_comm")
+if [ "$OVERLAP_MOE_EP_COMM" = "True" ] || [ "$OVERLAP_MOE_EP_COMM" = "true" ]; then
+    echo "  - MoE EP 통신 오버랩: 활성화"
+    INFRA_ARGS+=(--overlap-moe-expert-parallel-comm)
+fi
+
+DELAY_WGRAD=$(yaml_get $INFRA_CONFIG_FILE "infrastructure.optimizations.delay_wgrad_compute")
+if [ "$DELAY_WGRAD" = "True" ] || [ "$DELAY_WGRAD" = "true" ]; then
+    echo "  - Delay wgrad compute: 활성화"
+    INFRA_ARGS+=(--delay-wgrad-compute)
+fi
+
+# Fine-Grained Activation Offloading (YAML에서 로드, Megatron-LM-251125+)
+FINE_GRAINED_OFFLOAD=$(yaml_get $INFRA_CONFIG_FILE "infrastructure.optimizations.fine_grained_activation_offloading")
+if [ "$FINE_GRAINED_OFFLOAD" = "True" ] || [ "$FINE_GRAINED_OFFLOAD" = "true" ]; then
+    echo "  - Fine-Grained Activation Offloading: 활성화"
+    INFRA_ARGS+=(--fine-grained-activation-offloading)
+
+    # Offload modules
+    OFFLOAD_MODULES=$(yaml_get $INFRA_CONFIG_FILE "infrastructure.optimizations.offload_modules")
+    if [ ! -z "$OFFLOAD_MODULES" ]; then
+        # 공백과 따옴표 정리
+        OFFLOAD_MODULES=$(echo $OFFLOAD_MODULES | tr -d '"' | tr ',' ' ')
+        INFRA_ARGS+=(--offload-modules ${OFFLOAD_MODULES})
+        echo "    - Modules: ${OFFLOAD_MODULES}"
+    fi
+fi
+
+# Activation Checkpointing (YAML에서 로드, INFRA_ARGS에 추가)
 AC_GRANULARITY=$(yaml_get $INFRA_CONFIG_FILE "infrastructure.activation_checkpointing.granularity")
 if [ ! -z "$AC_GRANULARITY" ]; then
     INFRA_ARGS+=(--recompute-granularity ${AC_GRANULARITY})
@@ -546,36 +749,14 @@ if [ ! -z "$AC_GRANULARITY" ]; then
         # YAML 배열을 공백으로 구분된 문자열로 변환
         MODULES=$(echo $RECOMPUTE_MODULES | tr -d '[],' | tr "'" ' ')
         INFRA_ARGS+=(--recompute-modules ${MODULES})
+    else
+        # YAML에 없으면 기본값 사용
+        INFRA_ARGS+=(--recompute-modules layernorm moe_act shared_experts)
     fi
+else
+    # Activation checkpointing 비활성화 (기본값)
+    echo "  ℹ️  Activation checkpointing 설정이 없습니다. 기본값 사용."
 fi
-
-INFRA_ARGS=(
-    # 병렬화
-    --tensor-model-parallel-size ${TP}
-    --pipeline-model-parallel-size ${PP}
-    --expert-model-parallel-size ${EP}
-    --expert-tensor-parallel-size ${ETP}
-    --context-parallel-size ${CP}
-
-    # Activation Checkpointing
-    --recompute-granularity ${AC_GRANULARITY}
-    --recompute-modules layernorm moe_act shared_experts
-
-    # 최적화
-    --use-distributed-optimizer
-    --overlap-grad-reduce
-    --overlap-param-gather
-
-    # Attention Backend (Flash Attention for H100)
-    --attention-backend flash
-
-    # Loss Fusion
-    --cross-entropy-loss-fusion
-    --cross-entropy-fusion-impl te
-
-    # MoE Token Dispatcher
-    --moe-token-dispatcher-type alltoall
-)
 
 # TP > 1일 때만 통신 최적화 활성화
 if [ $TP -gt 1 ]; then

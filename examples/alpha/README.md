@@ -89,7 +89,12 @@ examples/alpha/
 │
 ├── docs/                        # 문서
 │   ├── ARCHITECTURE.md         # 모델 아키텍처 상세
+│   ├── CONVERSION.md           # HuggingFace 변환 가이드
+│   ├── DEBUGGING.md            # VSCode 디버깅 가이드
+│   ├── EVALUATION.md           # 벤치마크 평가 가이드
 │   ├── EXPERIMENTS.md          # 실험 로그
+│   ├── MUON.md                 # Muon optimizer 가이드
+│   ├── PARAMETERS.md           # 파라미터 분석 가이드
 │   └── SETUP.md                # 환경 세팅 가이드
 │
 └── outputs/                     # 학습 결과 (자동 생성)
@@ -146,9 +151,34 @@ bash scripts/validate_environment.sh
 bash scripts/load_config.sh
 ```
 
+### 파라미터 계산
+```bash
+# 기본 요약
+bash calc_params.sh
+
+# 상세 분석
+bash calc_params.sh configs/model/baseline_24L.yaml --detailed
+
+# 또는 직접 실행
+python calculate_parameters.py --config configs/model/baseline_24L.yaml --detailed
+```
+
 ### 학습 시작
 ```bash
 bash train.sh
+```
+
+### 디버깅 (VSCode)
+```bash
+# VSCode에서 F5 누르기
+# 드롭다운에서 선택:
+# 1. "Alpha: Single GPU Debug (Minimal)" ⭐ 권장
+# 2. "Alpha: Multi-GPU Debug (8 GPUs)"
+# 3. "Alpha: Model Init Only"
+# 4. "Alpha: Data Loading Debug"
+
+# 상세 가이드
+cat docs/DEBUGGING.md
 ```
 
 ### TensorBoard
@@ -171,11 +201,18 @@ tensorboard --logdir outputs/alpha_*/tensorboard --port 6006
 | **Experts** | 256 |
 | **Router TopK** | 8 |
 | **Hybrid Ratio** | 12.5% (3/24 layers) |
+| **전체 파라미터** | 15.31B |
+| **활성화 파라미터** | 1.27B (8.3%) |
 
 **메모리 절약 전략**:
 - 레이어 75% 감소 (96 → 24)
 - Expert 50% 감소 (512 → 256), 크기 증가로 보상
 - Attention head_dim 4배 감소 (256 → 64)
+
+**파라미터 구성**:
+- MoE가 전체 파라미터의 95.1% 차지
+- Top-8 expert 선택으로 실제 활성화는 8.3%만 사용
+- 추론 시 효율성: 15.31B 모델을 1.27B처럼 동작
 
 ---
 
@@ -198,56 +235,132 @@ tensorboard --logdir outputs/alpha_*/tensorboard --port 6006
 
 학습 완료 후 벤치마크로 모델 성능을 평가할 수 있습니다.
 
-### 통합 평가 파이프라인 (권장)
+### 사전 준비: HuggingFace 토큰 설정
+
+벤치마크 데이터셋을 다운로드하려면 HuggingFace 토큰이 필요합니다:
 
 ```bash
-# Megatron checkpoint → HF 변환 → 벤치마크 평가 (원스텝)
-bash scripts/evaluate_checkpoint.sh \
-  outputs/alpha_baseline_24L_*/checkpoints/iter_0010000
+# 방법 1: 환경 변수로 설정 (권장)
+export HF_TOKEN="hf_your_token_here"
+
+# 방법 2: huggingface-cli 로그인
+huggingface-cli login
 ```
 
-결과는 `experiments/<timestamp>_<model>_<iter>/`에 자동 저장됩니다.
+토큰 생성: https://huggingface.co/settings/tokens
 
-### 단계별 평가
+> **Note**: 토큰은 이미 `run_benchmarks.sh`에 설정되어 있으나, 보안을 위해 환경 변수 사용을 권장합니다.
 
-**1. Megatron → HuggingFace 변환**
+### 빠른 시작: HuggingFace 모델로 평가
+
+**변환된 HF 모델이 있는 경우**:
 ```bash
-bash scripts/convert_to_hf.sh \
-  outputs/alpha_*/checkpoints/iter_0010000 \
-  hf_models/alpha_baseline_24L_iter10k
+# 기본 벤치마크 세트 (추천)
+bash scripts/run_benchmarks.sh \
+  outputs/alpha_baseline_24L_*/hfmodel \
+  "mmlu,hellaswag,arc_easy,arc_challenge,winogrande"
+
+# 한 줄로 실행
+bash scripts/run_benchmarks.sh outputs/alpha_baseline_24L_*/hfmodel
 ```
 
-**2. Config 검증 및 수정**
+**지원 벤치마크 태스크**:
 ```bash
-python scripts/validate_conversion_config.py \
-  hf_models/alpha_baseline_24L_iter10k --fix
-```
+# 영어 표준 벤치마크
+bash scripts/run_benchmarks.sh MODEL_PATH \
+  "mmlu,hellaswag,arc_easy,arc_challenge,winogrande,boolq,piqa,social_iqa,openbookqa"
 
-**3. 벤치마크 평가**
-```bash
-# 모든 벤치마크 (Korean + English)
-bash scripts/run_benchmarks.sh hf_models/alpha_baseline_24L_iter10k
+# 수학 & 추론
+bash scripts/run_benchmarks.sh MODEL_PATH \
+  "gsm8k,mathqa"
 
-# Korean 벤치마크만
-bash scripts/run_benchmarks.sh hf_models/alpha_baseline_24L_iter10k korean
-
-# 특정 tasks만
-bash scripts/run_benchmarks.sh hf_models/alpha_baseline_24L_iter10k "kmmlu,mmlu,hellaswag"
+# 한국어 벤치마크
+bash scripts/run_benchmarks.sh MODEL_PATH \
+  "kmmlu"
 ```
 
 ### 지원 벤치마크
 
-**Korean**:
-- KMMLU (Korean MMLU)
-- KoBEST (WiC, COPA, HellaSwag, BoolQ, SentiNeg)
-- Belebele Korean
+**영어 (English)**:
+- **MMLU**: 대학 수준 지식 평가 (57 과목)
+- **HellaSwag**: 상식 추론 (이야기 완성)
+- **ARC-Easy/Challenge**: 초/중등 과학 질문
+- **Winogrande**: 문장 이해 (대명사 해결)
+- **BoolQ**: Yes/No 질문 답변
+- **PIQA**: 물리적 상식 추론
+- **Social IQA**: 사회적 상황 이해
+- **OpenBookQA**: 과학 지식 추론
+- **GSM8K**: 초등 수학 문제
 
-**English**:
-- MMLU (Multitask Language Understanding)
-- HellaSwag, ARC, Winogrande
-- TruthfulQA, GSM8K
+**한국어 (Korean)**:
+- **KMMLU**: Korean MMLU (한국형 지식 평가)
 
-자세한 내용은 [**CONVERSION.md**](docs/CONVERSION.md)를 참고하세요.
+> **주의**: GPQA는 gated dataset으로 별도 접근 권한 필요
+
+### 결과 해석
+
+평가 완료 후 결과는 JSON 형식으로 출력됩니다:
+
+```json
+{
+  "results": {
+    "mmlu": {
+      "acc": 0.45,
+      "acc_stderr": 0.01
+    },
+    "hellaswag": {
+      "acc_norm": 0.62
+    }
+  }
+}
+```
+
+**참고 점수 (Qwen2.5 기준)**:
+- MMLU: 70-85% (모델 크기에 따라)
+- HellaSwag: 75-85%
+- ARC-Challenge: 85-95%
+
+### 고급: Megatron 체크포인트 변환 후 평가
+
+**1. Megatron → HuggingFace 변환**
+```bash
+cd /home/work/vidsearch/repos/project_s/Pai-Megatron-Patch/toolkits/distributed_checkpoints_convertor
+
+bash scripts/alpha/run_8xH20.sh \
+  baseline_24L \
+  ../../examples/alpha/outputs/alpha_*/checkpoints/iter_0010000 \
+  ../../examples/alpha/outputs/alpha_*/hfmodel \
+  true true bf16
+```
+
+**2. 벤치마크 실행**
+```bash
+cd /home/work/vidsearch/repos/project_s/Pai-Megatron-Patch/examples/alpha
+
+bash scripts/run_benchmarks.sh \
+  outputs/alpha_baseline_24L_*/hfmodel \
+  "mmlu,hellaswag"
+```
+
+자세한 변환 가이드는 [**CONVERSION.md**](docs/CONVERSION.md)를 참고하세요.
+
+### 성능 최적화
+
+**배치 크기 조정**:
+```bash
+# 기본 (auto)
+bash scripts/run_benchmarks.sh MODEL_PATH TASKS auto
+
+# 수동 지정 (메모리 부족 시)
+bash scripts/run_benchmarks.sh MODEL_PATH TASKS 1
+```
+
+**멀티 GPU 설정**:
+`run_benchmarks.sh`는 기본적으로 8 GPU를 사용합니다. 수정하려면:
+```bash
+# scripts/run_benchmarks.sh 편집
+accelerate launch --multi_gpu --num_processes=4 -m lm_eval ...
+```
 
 ---
 
@@ -255,27 +368,30 @@ bash scripts/run_benchmarks.sh hf_models/alpha_baseline_24L_iter10k "kmmlu,mmlu,
 
 - [**ARCHITECTURE.md**](docs/ARCHITECTURE.md): 모델 아키텍처 상세 설명
 - [**CONVERSION.md**](docs/CONVERSION.md): HuggingFace 변환 및 평가 가이드
+- [**DEBUGGING.md**](docs/DEBUGGING.md): VSCode 디버거 사용 가이드 🐛
+- [**EVALUATION.md**](docs/EVALUATION.md): 벤치마크 평가 완전 가이드 ⭐
 - [**EXPERIMENTS.md**](docs/EXPERIMENTS.md): 실험 로그 및 결과
+- [**MUON.md**](docs/MUON.md): Muon optimizer 사용 가이드 🚀
+- [**PARAMETERS.md**](docs/PARAMETERS.md): 파라미터 분석 가이드 📊
 - [**SETUP.md**](docs/SETUP.md): 환경 세팅 상세 가이드
 
 ---
 
 ## 트러블슈팅
 
-### OOM (Out of Memory)
+### 학습 관련
 
+#### OOM (Out of Memory)
 1. `configs/training/h100x8.yaml`에서 `micro_batch_size` 감소
 2. `pipeline_parallel` 증가 (1 → 2 또는 4)
 3. Activation checkpointing 강화
 
-### 낮은 Throughput
-
+#### 낮은 Throughput
 1. `micro_batch_size` 증가
 2. `num_workers` 조정
 3. Flash Attention 3 활성화 확인
 
-### 설정 오류
-
+#### 설정 오류
 ```bash
 # YAML 문법 확인
 python3 -c "import yaml; yaml.safe_load(open('configs/model/baseline_24L.yaml'))"
@@ -283,6 +399,41 @@ python3 -c "import yaml; yaml.safe_load(open('configs/model/baseline_24L.yaml'))
 # 환경 검증
 bash scripts/validate_environment.sh
 ```
+
+### 평가 관련
+
+#### HuggingFace Rate Limit
+**에러**: `429 Client Error: Too Many Requests`
+
+**해결**:
+```bash
+# HF 토큰 설정
+export HF_TOKEN="hf_your_token_here"
+
+# 또는 CLI 로그인
+huggingface-cli login
+```
+
+#### Gated Dataset 접근 불가
+**에러**: `Dataset 'xxx' is a gated dataset`
+
+**해결**:
+- 해당 데이터셋 페이지에서 접근 권한 요청
+- 또는 벤치마크 실행 시 해당 태스크 제외
+
+#### 모델 경로 에러
+**에러**: `Unrecognized model in .../checkpoints`
+
+**해결**: HuggingFace 포맷 모델 경로 사용
+```bash
+# 올바름 ✅
+bash scripts/run_benchmarks.sh outputs/alpha_*/hfmodel
+
+# 잘못됨 ❌
+# bash scripts/run_benchmarks.sh outputs/alpha_*/checkpoints
+```
+
+자세한 내용은 [**EVALUATION.md**](docs/EVALUATION.md)를 참고하세요.
 
 ---
 

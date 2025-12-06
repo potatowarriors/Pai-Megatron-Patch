@@ -1,10 +1,12 @@
-# KORMo 데이터셋 설정 (1% subset)
-# 빠른 테스트 및 프로토타이핑용
+# KORMo 데이터셋 설정 (1% subset) - Blended Dataset
+# DCLM(영어) + korean_web(한글) 균일 혼합
 
 data:
-  # 데이터셋 경로
-  train_path: "/home/work/Datasets/KORMo_processed/mmap/qwen3_1pct/kormo_content_document"
-  valid_path: null  # 동일 경로 사용 (split으로 분리)
+  # Blended dataset (가중치 생략 시 데이터 크기 비례로 자동 혼합)
+  # DCLM 39GB (~95%), korean_web 2.1GB (~5%)
+  blend:
+    - path: "/home/work/vidsearch/repos/project_s/Pai-Megatron-Patch/datasets/processed/qwen3_1pct_blended/dclm_content_document"
+    - path: "/home/work/vidsearch/repos/project_s/Pai-Megatron-Patch/datasets/processed/qwen3_1pct_blended/korean_web_content_document"
 
   # 데이터셋 타입
   dataset_impl: "MMAP"
@@ -16,13 +18,14 @@ data:
   num_workers: 32
 
   # 데이터셋 정보
-  description: "KORMo corpus 1% random subset"
-  total_documents: ~1000000  # 예상 문서 수
+  description: "KORMo corpus 1% blended (DCLM + korean_web)"
   tokenizer: "Qwen3Tokenizer"
 
-# KORMo 전체 데이터셋 경로 (참고용)
-# full_dataset_path: "/home/work/Datasets/KORMo_processed/mmap/qwen3_full/kormo_content_document"
-
-# 데이터 전처리 명령 (재생성 필요 시):
-# cd toolkits/pretrain_data_preprocessing/
-# bash preprocess_kormo_subset.sh 1  # 1% subset
+  # 데이터셋 통계 (참고용 - Megatron 로그에서 확인)
+  # 이 값들은 pretrain.yaml의 train_samples 계산에 사용됨
+  stats:
+    dclm_documents: 7134892
+    dclm_train_samples: 2466205      # 99% split 후
+    korean_web_documents: 403665
+    korean_web_train_samples: 132989  # 99% split 후
+    total_train_samples: 2599194      # = 2466205 + 132989

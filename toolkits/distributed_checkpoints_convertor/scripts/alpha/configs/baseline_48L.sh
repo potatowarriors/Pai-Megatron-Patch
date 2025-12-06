@@ -11,23 +11,24 @@ GPT_MODEL_ARGS+=(
     # Basic Architecture
     --num-layers 48                         # 24 → 48
     --hidden-size 2048
-    --ffn-hidden-size 5120
+    --ffn-hidden-size 8192
     --num-attention-heads 32
     --kv-channels 128
     --num-query-groups 2
 
     # Hybrid Model Pattern
-    # 48 layers = 12 groups × (M-M-M-*) = 36 Mamba + 12 Attention
+    # Pattern: MDM-M-*-M-M-M-*-... (48 chars total)
+    # M=Mamba(18), D=Dense MLP(1), -=MoE MLP(23), *=Attention(6)
     # Attention ratio: 6/48 = 0.125 (12.5%)
     # MLP ratio: 24/48 = 0.5 (50%)
     --hybrid-attention-ratio 0.125
     --hybrid-mlp-ratio 0.5
-    --hybrid-override-pattern M-M-M-*-M-M-M-*-M-M-M-*-M-M-M-*-M-M-M-*-M-M-M-*-M-M-M-*-M-M-M-*-M-M-M-*-M-M-M-*-M-M-M-*-M-M-M-*-
+    --hybrid-override-pattern MDM-M-*-M-M-M-*-M-M-M-*-M-M-M-*-M-M-M-*-M-M-M-*-
     --is-hybrid-model
 
     # MoE Configuration
     # Option 1: Keep 256 experts (same density as 24L)
-    --num-experts 256
+    --num-experts 128
     --moe-router-topk 8
 
     # Option 2: Scale to 512 experts (double for 2x layers)
@@ -40,6 +41,7 @@ GPT_MODEL_ARGS+=(
     --moe-grouped-gemm
     --moe-router-score-function softmax
     --moe-token-dispatcher-type alltoall
+    --moe-shared-expert-gate
 
     # RoPE Settings
     --rotary-base 10000000

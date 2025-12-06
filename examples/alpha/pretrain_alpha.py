@@ -31,8 +31,10 @@ Architecture: Mamba + Hybrid Attention
 from functools import partial
 import atexit
 from datetime import timedelta
+from typing import Optional
 import torch
 import torch._dynamo
+from torch import Tensor
 
 from megatron.core.enums import ModelType
 from model_provider import model_provider as base_model_provider  # Megatron-LM-250908/model_provider.py
@@ -45,10 +47,12 @@ from megatron.training import pretrain, print_rank_0
 torch._dynamo.config.suppress_errors = True
 
 from megatron.core.models.mamba import MambaModel
+from megatron.core.inference.contexts import BaseInferenceContext
 from megatron.training import print_rank_0
 from megatron.training.arguments import core_transformer_config_from_args
 
-from megatron_patch.model.qwen3_next.layer_specs import get_qwen3_next_layer_spec
+# Alpha model with Dense MLP support (D symbol in pattern)
+from megatron_patch.model.alpha.layer_specs import get_alpha_layer_spec
 from megatron_patch.model.qwen3_next.transformer_config import Qwen3NextTransformerConfig
 
 
@@ -73,7 +77,7 @@ def mamba_builder(args, pre_process, post_process, vp_stage=None, config=None):
 
     model = MambaModel(
         config=config,
-        mamba_stack_spec=get_qwen3_next_layer_spec(args),
+        mamba_stack_spec=get_alpha_layer_spec(args),
         vocab_size=args.padded_vocab_size,
         max_sequence_length=args.max_position_embeddings,
         pre_process=pre_process,

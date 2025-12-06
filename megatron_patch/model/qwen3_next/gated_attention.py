@@ -53,7 +53,7 @@ try:
     )
 
     HAVE_FA3 = True
-except:
+except (ImportError, ModuleNotFoundError):
     HAVE_FA3 = False
 
 class GatedSoftmaxAttention(Attention):
@@ -275,6 +275,7 @@ class GatedSoftmaxAttention(Attention):
         rotary_pos_emb: Optional[Union[Tensor, Tuple[Tensor, Tensor]]] = None,
         rotary_pos_cos: Optional[Tensor] = None,
         rotary_pos_sin: Optional[Tensor] = None,
+        rotary_pos_cos_sin: Optional[Tensor] = None,
         attention_bias: Optional[Tensor] = None,
         packed_seq_params: Optional[PackedSeqParams] = None,
         sequence_len_offset: Optional[int] = None,
@@ -371,6 +372,7 @@ class GatedSoftmaxAttention(Attention):
                 rotary_pos_emb,
                 rotary_pos_cos,
                 rotary_pos_sin,
+                rotary_pos_cos_sin,
                 sequence_len_offset,
             )
         )

@@ -16,17 +16,45 @@ import logging
 from typing import Dict
 from general.h2m_synchronizer import HF2MGSynchronizer as _HF2MGSynchronizer
 from general.synchronizer import ParamType
+from .common import (
+    validate_hybrid_pattern,
+    log_conversion_summary,
+    build_pipeline_parallel_mapping,
+    CHAR_MAMBA, CHAR_ATTENTION, CHAR_MLP
+)
 
 class HF2MGSynchronizer(_HF2MGSynchronizer):
     # TODO: to be refactored to Hybrid Model convertor
     def __init__(self, load_dir, model_provider_func=None):
         super().__init__(load_dir, model_provider_func)
         self.layout = self.get_hybrid_layout()
-        
+        self._validate_conversion_config()
 
     def get_hybrid_layout(self) -> str:
-        assert self.args.hybrid_override_pattern is not None
+        assert self.args.hybrid_override_pattern is not None, \
+            "hybrid_override_pattern is required for Alpha conversion"
         return self.args.hybrid_override_pattern
+
+    def _validate_conversion_config(self):
+        """Validate Alpha conversion configuration to catch errors early."""
+        # Use common validation function
+        validate_hybrid_pattern(
+            layout=self.layout,
+            num_layers=self.args.num_layers,
+            hybrid_attention_ratio=self.args.hybrid_attention_ratio,
+            rank=self.rank
+        )
+
+        # Log conversion summary
+        log_conversion_summary(
+            direction="HF2MG",
+            layout=self.layout,
+            args=self.args,
+            tp_size=self.tp_size,
+            pp_size=self.pp_size,
+            ep_size=self.ep_size,
+            rank=self.rank
+        )
 
 
     def sync_params(self, mg_model = None, hf_model = None):
@@ -63,8 +91,13 @@ class HF2MGSynchronizer(_HF2MGSynchronizer):
                 self.set_mamba_layer_state(layer.mixer, hf_layer.linear_attn)
                 self.copy(hf_layer.input_layernorm.weight, layer.mixer.in_proj.layer_norm_weight)
             elif self.layout[global_mg_layer_id] == '-':
-                # transformer_layer of MLP
+                # transformer_layer of MLP (MoE)
                 self.set_moe_layer_state(layer.mlp, hf_layer.mlp)
+                self.copy(hf_layer.post_attention_layernorm.weight, layer.pre_mlp_layernorm.weight)
+            elif self.layout[global_mg_layer_id] == 'D':
+                # Dense MLP layer (standard FFN with SwiGLU)
+                # Uses inherited set_mlp_state() from base class
+                self.set_mlp_state(layer.mlp, hf_layer.mlp)
                 self.copy(hf_layer.post_attention_layernorm.weight, layer.pre_mlp_layernorm.weight)
             elif self.layout[global_mg_layer_id] == '*':
                 # transformer_layer of Attention
@@ -143,19 +176,11 @@ class HF2MGSynchronizer(_HF2MGSynchronizer):
 
 
     def _build_pipeline_parallel_mapping(self) -> Dict[int, int]:
-        remained_num_layers = self.args.num_layers
-        remained_stages = self.pp_size
-        pp_layers_per_stage = [remained_num_layers // remained_stages] * remained_stages
-
-        pp_mapping = {
-            i: v for i, v in enumerate(
-                range(
-                    sum(pp_layers_per_stage[:self.pp_rank]), 
-                    sum(pp_layers_per_stage[:self.pp_rank + 1])
-                )
-            )
-        }
-        return pp_mapping
+        return build_pipeline_parallel_mapping(
+            num_layers=self.args.num_layers,
+            pp_size=self.pp_size,
+            pp_rank=self.pp_rank
+        )
 
     def set_gated_selfattn_state(self, attn, hf_attn):
         '''Set gated self-attention params.'''

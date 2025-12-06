@@ -32,7 +32,7 @@ Pai-Megatron-Patch is a production-grade deep learning training toolkit for Larg
   - `auto_configurator/`: Auto training config suggestions
 
 - **`backends/`**: Git submodules
-  - `megatron/Megatron-LM-*`: 8 versions (Megatron-LM-250908 is latest)
+  - `megatron/Megatron-LM-*`: 9 versions (Megatron-LM-251125 is latest dev, Megatron-LM-250908 is latest stable)
   - `rl/ChatLearn/`: RL training framework (GRPO, GSPO, PPO)
   - `rl/verl/`: Alternative RL framework
   - `LM-Evaluation-Harness-240310/`: Benchmark evaluation
@@ -257,12 +257,71 @@ python test_dataset.py --data-path /path/to/dataset
 - `AC=1`: Checkpoint full layers (balanced)
 - `AC=2`: Checkpoint per-layer components (lowest memory)
 
+### Optimizers
+
+**Adam/AdamW (Default):**
+- Standard optimizer for most training
+- Supports distributed optimizer with ZeRO-1
+- Compatible with all parallelism strategies
+
+**Muon Optimizer (Advanced):**
+- **Location**: `megatron/core/optimizer/muon.py` (Megatron-LM-251125+)
+- **Description**: Hybrid Muon+Adam optimizer using Newton-Schulz orthogonalization
+- **Benefits**: ~2x faster convergence in tokens, better loss trajectories
+- **Use case**: Alpha model and other experimental training
+- **Dependency**: `emerging-optimizers==0.2.0`
+
+**Configuration:**
+```yaml
+# In training config (YAML format)
+optimizer: "dist_muon"  # LayerWise distributed mode (memory-efficient)
+# or
+optimizer: "muon"       # Standard mode (higher memory)
+
+# Muon hyperparameters
+muon_momentum: 0.95              # Momentum (like Adam beta1)
+muon_use_nesterov: true          # Nesterov momentum
+muon_num_ns_steps: 5             # Newton-Schulz iterations (3-7 recommended)
+muon_scale_mode: "spectral"      # Scaling mode
+muon_fp32_matmul_prec: "medium"  # Matrix multiply precision
+muon_tp_mode: "blockwise"        # Tensor parallel mode
+muon_split_qkv: true             # Split QKV for GQA models
+```
+
+**Compatibility:**
+- ✅ TP (any size, including TP=1 for Mamba)
+- ✅ EP (Expert Parallel) - tested with EP=8, 256 experts
+- ✅ MoE models
+- ✅ BF16 precision
+- ❌ Distributed optimizer (`use_distributed_optimizer: false` required)
+- ❌ FP16 precision (not supported)
+- ❌ CPU optimizer offloading (not compatible with Muon)
+
+**Muon Parameter Selection:**
+- **2D parameters** (Linear/Conv weights): Use Muon with Newton-Schulz
+- **1D parameters** (LayerNorm, biases): Fall back to Adam
+- **Expert parameters**: Automatically handled via `expert_tp` process group
+
+**Optional: QK-Clip Stabilization**
+```yaml
+qk_clip: true
+qk_clip_alpha: 0.5
+qk_clip_threshold: 100
+```
+
+**References:**
+- Implementation: [backends/megatron/Megatron-LM-251125/megatron/core/optimizer/muon.py](backends/megatron/Megatron-LM-251125/megatron/core/optimizer/muon.py)
+- Tests: `tests/unit_tests/test_muon_optimizer.py`
+- Example: [examples/alpha/](examples/alpha/) (uses dist_muon)
+
 ### Optimizer Offloading
 
 Enable CPU optimizer offloading for large models with limited GPU memory:
 ```bash
 OPTIMIZER_OFFLOAD=true  # Automatic offloading based on memory
 ```
+
+**Note**: CPU optimizer offloading is **NOT compatible** with Muon optimizer. Use LayerWise distributed Muon (`dist_muon`) for memory efficiency instead.
 
 ### Checkpoint Formats
 
@@ -337,10 +396,17 @@ Both require: SFT model checkpoint + reward model checkpoint + RL data.
 Alpha is a Qwen3-Next based Mamba Hybrid architecture for efficient LLM training experiments.
 
 **Architecture:**
-- **Base**: Qwen3-Next Mamba Hybrid (Linear Attention SSM + Multi-Head Attention)
+- **Base**: Qwen3-Next Mamba Hybrid (**GatedDeltaNet** + Multi-Head Attention)
+  - **GatedDeltaNet**: ICLR 2025 linear attention architecture (O(n) complexity)
+  - Combines gating mechanism with delta rule updates for improved in-context retrieval
+  - Superior to Mamba2 in long-context understanding and common-sense reasoning
+- **Implementation**: Custom Pai-Megatron GatedDeltaNet with Context Parallel support
+  - File: `megatron_patch/model/qwen3_next/gated_deltanet.py` (445 lines)
+  - Extends `MambaMixer` for optimal hybrid architecture integration
+  - Context Parallel enabled (not available in official Megatron GDN yet)
 - **Layer Mapping**: 2:1 ratio (24 Megatron layers → 12 HuggingFace layers)
-- **Hybrid Pattern**: `M-M-M-*-` (3 Mamba + 1 Full Attention, repeating)
-  - M = Mamba layer (Linear Attention SSM)
+- **Hybrid Pattern**: `M-M-M-*-` (3 GDN + 1 Full Attention, repeating)
+  - M = GatedDeltaNet layer (Linear Attention with Gated Delta Rule)
   - `*` = Full Attention layer (Multi-Head Attention)
   - `-` = MLP layer (Feed-Forward Network)
 - **Typical Config (baseline_24L)**:
@@ -354,14 +420,25 @@ Alpha is a Qwen3-Next based Mamba Hybrid architecture for efficient LLM training
 - Training script: `bash train.sh <config_name>`
 - Config files: `examples/alpha/configs/` (YAML-based, modular design)
 - Model provider: `examples/alpha/pretrain_alpha.py`
+- **Optimizer**: Uses Muon optimizer (`dist_muon`) for faster convergence
+- **Backend**: Megatron-LM-251125 (dev branch with Muon support)
 
 **Checkpoint Conversion (MG ↔ HF):**
 - Converter: [toolkits/distributed_checkpoints_convertor/scripts/alpha/](toolkits/distributed_checkpoints_convertor/scripts/alpha/)
+- **Alpha Config Tool**: [examples/alpha/tools/alpha_config.py](examples/alpha/tools/alpha_config.py) - 통합 설정에서 자동 생성
 - Quick start:
   ```bash
   cd toolkits/distributed_checkpoints_convertor
 
-  # Megatron → HuggingFace
+  # Megatron → HuggingFace (with HF config auto-generation)
+  bash scripts/alpha/run_8xH20.sh \
+    baseline_24L \
+    /path/to/mcore-checkpoint \
+    /path/to/hf-output \
+    true true bf16
+  # HF_DIR 생략 시 config.json이 통합 config에서 자동 생성됨
+
+  # 또는 기존 HF 모델 참조 사용
   bash scripts/alpha/run_8xH20.sh \
     baseline_24L \
     /path/to/mcore-checkpoint \
@@ -370,21 +447,31 @@ Alpha is a Qwen3-Next based Mamba Hybrid architecture for efficient LLM training
     /path/to/hf-reference
   ```
 - Validation: Automatic validation checks pattern length, TP constraint, attention ratio
-- Documentation: [toolkits/.../scripts/alpha/README.md](toolkits/distributed_checkpoints_convertor/scripts/alpha/README.md)
-- Detailed guide: [examples/alpha/docs/CONVERSION.md](examples/alpha/docs/CONVERSION.md)
+- Documentation: [examples/alpha/tools/README.md](examples/alpha/tools/README.md)
+
+**Unified Config Tool (NEW):**
+- **Single Source of Truth**: `examples/alpha/configs/model/baseline_24L.yaml`에서 모든 설정 관리
+- **자동 생성**: 변환 스크립트, HF config.json을 통합 config에서 자동 생성
+- **검증**: 패턴 길이, attention ratio, MLP ratio 자동 검증
+  ```bash
+  cd examples/alpha
+  python tools/alpha_config.py validate baseline_24L  # 설정 검증
+  python tools/alpha_config.py sync baseline_24L      # 변환 스크립트 동기화
+  python tools/alpha_config.py generate-hf-config baseline_24L  # HF config 생성
+  ```
+- **효과**: 새 모델 추가 시 수정 파일 5-7개 → 1개로 감소
 
 **Key Constraints:**
 - **TP=1 required**: Mamba layers do not support Tensor Parallelism > 1
 - **EP=8 recommended**: 256 experts / 8 GPUs = 32 experts per GPU
 - **Pattern validation**: Must match `--num-layers` (each layer = 1 token)
 
-**Adding New Model Sizes:**
-1. Create config: `toolkits/.../scripts/alpha/configs/<model_size>.sh`
-2. Update pattern: Ensure length = num_layers (e.g., 32L needs 32-token pattern)
-3. Adjust experts: Scale `--num-experts` and `--expert-model-parallel-size`
-4. Test conversion: Run with new MODEL_SIZE parameter
+**Adding New Model Sizes (Simplified):**
+1. Create YAML config: `examples/alpha/configs/model/<model_size>.yaml`
+2. Validate and sync: `python tools/alpha_config.py sync <model_size>`
+3. Run conversion: `bash run_8xH20.sh <model_size> ...` (HF config 자동 생성)
 
-> **상세 가이드**: [toolkits/.../scripts/alpha/docs/ADDING_NEW_MODELS.md](toolkits/distributed_checkpoints_convertor/scripts/alpha/docs/ADDING_NEW_MODELS.md)에 단계별 설명, pattern 자동 생성 스크립트, 체크리스트 제공
+> **상세 가이드**: [examples/alpha/tools/README.md](examples/alpha/tools/README.md)에 통합 Config 도구 사용법 제공
 
 **Common Issues:**
 - `assert self.tp_size == 1`: Set `--tensor-model-parallel-size 1`
@@ -392,10 +479,27 @@ Alpha is a Qwen3-Next based Mamba Hybrid architecture for efficient LLM training
 - `Invalid characters in pattern`: Only use M, *, - characters
 - `Attention ratio mismatch`: Count of `*` should match `hybrid_attention_ratio × num_layers`
 
+**Environment Variables:**
+- `ALPHA_TOKENIZER_PATH`: 토크나이저 경로 (default: `${MEGATRON_PATCH_PATH}/models/Qwen3-Next-tokenizer`)
+- `ALPHA_DATA_PATH`: 데이터셋 경로 (default: `/home/work/Datasets/KORMo_processed/mmap/qwen3_1pct`)
+- `MEGATRON_PATCH_PATH`: Pai-Megatron-Patch 루트 (필수)
+
 **Related Files:**
-- Model definition: [toolkits/.../impl/alpha/model_provider.py](toolkits/distributed_checkpoints_convertor/impl/alpha/model_provider.py)
-- Synchronizer: [toolkits/.../impl/alpha/m2h_synchronizer.py](toolkits/distributed_checkpoints_convertor/impl/alpha/m2h_synchronizer.py)
-- Training config: [examples/alpha/configs/model/baseline_24L.yaml](examples/alpha/configs/model/baseline_24L.yaml)
+- **GatedDeltaNet**: [megatron_patch/model/qwen3_next/gated_deltanet.py](megatron_patch/model/qwen3_next/gated_deltanet.py)
+- **Layer Specs**: [megatron_patch/model/qwen3_next/layer_specs.py](megatron_patch/model/qwen3_next/layer_specs.py)
+- **Model Provider**: [toolkits/.../impl/alpha/model_provider.py](toolkits/distributed_checkpoints_convertor/impl/alpha/model_provider.py)
+- **Synchronizer (MG→HF)**: [toolkits/.../impl/alpha/m2h_synchronizer.py](toolkits/distributed_checkpoints_convertor/impl/alpha/m2h_synchronizer.py)
+- **Synchronizer (HF→MG)**: [toolkits/.../impl/alpha/h2m_synchronizer.py](toolkits/distributed_checkpoints_convertor/impl/alpha/h2m_synchronizer.py)
+- **Common Utils**: [toolkits/.../impl/alpha/common.py](toolkits/distributed_checkpoints_convertor/impl/alpha/common.py) - 패턴 검증, 로깅 공통 모듈
+- **Training Config**: [examples/alpha/configs/model/baseline_24L.yaml](examples/alpha/configs/model/baseline_24L.yaml)
+- **Refactoring Guide**: [examples/alpha/docs/REFACTORING.md](examples/alpha/docs/REFACTORING.md)
+
+**GatedDeltaNet vs Official Megatron:**
+- Pai-Megatron implementation is optimized for hybrid architectures
+- Context Parallel support (official version: TODO)
+- Simpler codebase (445 vs 669 lines)
+- Production-ready and tested with Muon optimizer
+- See [MIGRATION_251125.md](examples/alpha/docs/MIGRATION_251125.md#gateddeltanet-implementation-analysis) for detailed comparison
 
 ## Debugging Tips
 
@@ -473,19 +577,41 @@ python evaluate_megatron_{model}.py --checkpoint /path/to/checkpoint --tasks mml
 
 ### Megatron-LM Versions
 
-- **Megatron-LM-250908** (latest): Use for Qwen3, DeepSeek-V3
+- **Megatron-LM-251125** (latest dev, **recommended for Alpha**):
+  - **Branch**: `dev` (experimental features)
+  - **Commit**: `31f5049e8f8bc5a5550e74948223525b30bdc8f0` (2025-11-21)
+  - **Key Features**:
+    - ✅ Muon optimizer with LayerWise distribution
+    - ✅ Enhanced Mamba Mixer (+37% code improvement)
+    - ✅ Gated Delta Net (new SSM building block)
+    - ✅ Fine-grained activation offloading for MoE
+    - ✅ MoE router fusion and A2A overlapping
+    - ✅ Improved TEGroupedMLP with bias support
+    - ✅ HybridEP support (DeepSeek's expert parallelism)
+  - **Use case**: Alpha model, experimental training with Muon
+  - **Stability**: Dev branch (6-month feature lifecycle)
+  - **Migration guide**: [examples/alpha/docs/MIGRATION_251125.md](examples/alpha/docs/MIGRATION_251125.md)
+
+- **Megatron-LM-250908** (latest stable): Use for Qwen3, DeepSeek-V3
 - **Megatron-LM-250624**: Use for Qwen3, Moonlight
 - **Megatron-LM-241113**: General purpose
 - **PAI-Megatron-LM-240718**: Legacy PAI version
 
 Select version by setting PYTHONPATH in training scripts (line 6 of `run_mcore_*.sh`).
 
+**Version Selection Guide:**
+- **Stable production**: Use Megatron-LM-250908
+- **Alpha/Experimental with Muon**: Use Megatron-LM-251125
+- **Legacy models**: Use version-specific backends
+
 ### Framework Requirements
 
 - PyTorch: ≥2.0 (2.3+ recommended)
-- Transformer Engine: 1.0+ (with FA2 support)
+- Transformer Engine: ≥2.9.0 (required for QK-Clip support in Muon optimizer)
 - Flash Attention: 2.x or 3.x
 - CUDA: 11.8+ (12.1+ recommended for FA3)
+
+**Note**: Transformer Engine 2.9+ is required for QK-Clip stabilization feature used with Muon optimizer. Use `release_v2.9` branch for maximum compatibility with Megatron-LM-251125.
 
 ## References
 

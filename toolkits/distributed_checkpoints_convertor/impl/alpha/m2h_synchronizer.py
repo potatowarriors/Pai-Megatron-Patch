@@ -17,6 +17,12 @@ import torch
 from typing import Dict
 from general.m2h_synchronizer import MG2HFSynchronizer as _MG2HFSynchronizer
 from general.synchronizer import ParamType
+from .common import (
+    validate_hybrid_pattern,
+    log_conversion_summary,
+    build_pipeline_parallel_mapping,
+    CHAR_MAMBA, CHAR_ATTENTION, CHAR_MLP
+)
 
 class MG2HFSynchronizer(_MG2HFSynchronizer):
     # TODO: to be refactored to Hybrid Model convertor
@@ -35,91 +41,26 @@ class MG2HFSynchronizer(_MG2HFSynchronizer):
 
     def _validate_conversion_config(self):
         """Validate Alpha conversion configuration to catch errors early."""
-        # 1. Validate pattern length
-        expected_mg_layers = self.args.num_layers
-        actual_pattern_len = len(self.layout)
+        # Use common validation function
+        validate_hybrid_pattern(
+            layout=self.layout,
+            num_layers=self.args.num_layers,
+            hybrid_attention_ratio=self.args.hybrid_attention_ratio,
+            rank=self.rank
+        )
 
-        if actual_pattern_len != expected_mg_layers:
-            raise ValueError(
-                f"\n{'='*70}\n"
-                f"Pattern length mismatch!\n"
-                f"{'='*70}\n"
-                f"  Expected: {expected_mg_layers} (--num-layers={self.args.num_layers})\n"
-                f"  Actual:   {actual_pattern_len}\n"
-                f"  Pattern:  '{self.layout}'\n"
-                f"\n"
-                f"Hint: Each HF layer = 2 MG layers.\n"
-                f"      Pattern should have exactly num_layers tokens.\n"
-                f"      For {expected_mg_layers} MG layers → {expected_mg_layers//2} HF layers\n"
-                f"{'='*70}"
-            )
-
-        # 2. Validate pattern characters
-        valid_chars = {'M', '*', '-'}
-        invalid_chars = set(self.layout) - valid_chars
-        if invalid_chars:
-            raise ValueError(
-                f"\n{'='*70}\n"
-                f"Invalid characters in hybrid_override_pattern!\n"
-                f"{'='*70}\n"
-                f"  Invalid: {invalid_chars}\n"
-                f"  Valid:   {valid_chars}\n"
-                f"  Pattern: '{self.layout}'\n"
-                f"\n"
-                f"Legend:\n"
-                f"  M = Mamba layer\n"
-                f"  * = Full Attention layer\n"
-                f"  - = MLP layer\n"
-                f"{'='*70}"
-            )
-
-        # 3. Validate attention ratio consistency (warning only)
-        attention_count = self.layout.count('*')
-        expected_attention = int(self.args.num_layers * self.args.hybrid_attention_ratio)
-
-        if attention_count != expected_attention:
-            logging.warning(
-                f"\n{'='*70}\n"
-                f"Attention layer count mismatch (non-fatal):\n"
-                f"{'='*70}\n"
-                f"  Expected: {expected_attention} layers ({self.args.hybrid_attention_ratio*100:.1f}%)\n"
-                f"  Actual:   {attention_count} layers ({attention_count/self.args.num_layers*100:.1f}%)\n"
-                f"\n"
-                f"This may be intentional if using a custom pattern.\n"
-                f"Continuing with pattern: '{self.layout}'\n"
-                f"{'='*70}"
-            )
-
-        # 4. Log conversion summary
-        if self.rank == 0:
-            mamba_count = self.layout.count('M')
-            mlp_count = self.layout.count('-')
-
-            logging.info(
-                f"\n{'='*70}\n"
-                f"Alpha MG2HF Conversion Configuration\n"
-                f"{'='*70}\n"
-                f"Model Architecture:\n"
-                f"  MG Layers:        {self.args.num_layers}\n"
-                f"  HF Layers:        {self.args.num_layers // 2}\n"
-                f"  Mapping Ratio:    2:1 (MG → HF)\n"
-                f"\n"
-                f"Hybrid Pattern:\n"
-                f"  Pattern:          '{self.layout}'\n"
-                f"  Mamba layers:     {mamba_count} ({mamba_count/self.args.num_layers*100:.1f}%)\n"
-                f"  Attention layers: {attention_count} ({attention_count/self.args.num_layers*100:.1f}%)\n"
-                f"  MLP layers:       {mlp_count} ({mlp_count/self.args.num_layers*100:.1f}%)\n"
-                f"\n"
-                f"MoE Configuration:\n"
-                f"  Num Experts:      {self.args.num_experts}\n"
-                f"  Router TopK:      {self.args.moe_router_topk}\n"
-                f"  Expert FFN Size:  {self.args.moe_ffn_hidden_size}\n"
-                f"\n"
-                f"Parallelism:\n"
-                f"  TP: {self.tp_size}, PP: {self.pp_size}, EP: {self.ep_size}\n"
-                f"  DP: {self.dp_rank}/{torch.distributed.get_world_size()//self.tp_size//self.pp_size//self.ep_size}\n"
-                f"{'='*70}\n"
-            )
+        # Log conversion summary
+        dp_size = torch.distributed.get_world_size() // self.tp_size // self.pp_size // self.ep_size
+        log_conversion_summary(
+            direction="MG2HF",
+            layout=self.layout,
+            args=self.args,
+            tp_size=self.tp_size,
+            pp_size=self.pp_size,
+            ep_size=self.ep_size,
+            rank=self.rank,
+            dp_info=f"{self.dp_rank}/{dp_size}"
+        )
 
     def set_preprocess_state(self, mg_model, hf_model):
         '''Override to use hf_model.model.embed_tokens for Qwen3Next structure.'''
@@ -183,8 +124,13 @@ class MG2HFSynchronizer(_MG2HFSynchronizer):
                 self.set_mamba_layer_state(layer.mixer, hf_layer.linear_attn)
                 self.copy(layer.mixer.in_proj.layer_norm_weight, hf_layer.input_layernorm.weight)
             elif self.layout[global_mg_layer_id] == '-':
-                # transformer_layer of MLP
+                # transformer_layer of MLP (MoE)
                 self.set_moe_layer_state(layer.mlp, hf_layer.mlp)
+                self.copy(layer.pre_mlp_layernorm.weight, hf_layer.post_attention_layernorm.weight)
+            elif self.layout[global_mg_layer_id] == 'D':
+                # Dense MLP layer (standard FFN with SwiGLU)
+                # Uses inherited set_mlp_state() from base class
+                self.set_mlp_state(layer.mlp, hf_layer.mlp)
                 self.copy(layer.pre_mlp_layernorm.weight, hf_layer.post_attention_layernorm.weight)
             elif self.layout[global_mg_layer_id] == '*':
                 # transformer_layer with Full Attention only (no MLP!)
@@ -254,19 +200,11 @@ class MG2HFSynchronizer(_MG2HFSynchronizer):
         self.copy(mixer.out_proj.weight, hf_mixer.out_proj.weight, param_type=ParamType.ROW)
 
     def _build_pipeline_parallel_mapping(self) -> Dict[int, int]:
-        remained_num_layers = self.args.num_layers
-        remained_stages = self.pp_size
-        pp_layers_per_stage = [remained_num_layers // remained_stages] * remained_stages
-
-        pp_mapping = {
-            i: v for i, v in enumerate(
-                range(
-                    sum(pp_layers_per_stage[:self.pp_rank]), 
-                    sum(pp_layers_per_stage[:self.pp_rank + 1])
-                )
-            )
-        }
-        return pp_mapping
+        return build_pipeline_parallel_mapping(
+            num_layers=self.args.num_layers,
+            pp_size=self.pp_size,
+            pp_rank=self.pp_rank
+        )
 
     def set_gated_selfattn_state(self, attn, hf_attn):
         '''Set gated self-attention params.'''

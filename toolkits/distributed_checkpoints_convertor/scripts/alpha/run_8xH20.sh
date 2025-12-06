@@ -16,20 +16,24 @@
 #   MG2HF       : Conversion direction (true: MG→HF, false: HF→MG)
 #   USE_CUDA    : Use GPU for conversion (true/false)
 #   PRECISION   : bf16/fp16/fp32
-#   HF_DIR      : HuggingFace model directory (required for MG→HF)
+#   HF_DIR      : HuggingFace model directory (optional for MG→HF)
+#                 If not provided, config.json will be auto-generated from unified config
 #
 # Examples:
 #   # HF → Megatron
 #   bash run_8xH20.sh baseline_24L /path/to/hf /path/to/mcore false true bf16
 #
-#   # Megatron → HF
+#   # Megatron → HF (with existing HF reference)
 #   bash run_8xH20.sh baseline_24L /path/to/mcore /path/to/hf true true bf16 /path/to/hf-orig
+#
+#   # Megatron → HF (auto-generate HF config from unified config)
+#   bash run_8xH20.sh baseline_24L /path/to/mcore /path/to/hf true true bf16
 
 set -e
 CURRENT_DIR="$( cd "$( dirname "$0" )" && pwd )"
 CONVERTOR_DIR=$( dirname $( dirname ${CURRENT_DIR}))
 MEGATRON_PATCH_PATH=$( dirname $( dirname ${CONVERTOR_DIR}))
-export PYTHONPATH=${MEGATRON_PATCH_PATH}:${MEGATRON_PATCH_PATH}/backends/megatron/Megatron-LM-250908:${CONVERTOR_DIR}/impl:$PYTHONPATH
+export PYTHONPATH=${MEGATRON_PATCH_PATH}:${MEGATRON_PATCH_PATH}/backends/megatron/Megatron-LM-251125:${CONVERTOR_DIR}/impl:$PYTHONPATH
 export CUDA_DEVICE_MAX_CONNECTIONS=1
 export TORCH_FORCE_NO_WEIGHTS_ONLY_LOAD=true # for PyTorch >= 2.6
 
@@ -48,25 +52,55 @@ USE_CUDA=$5
 PR=$6
 HF_DIR=$7
 
+# Alpha config tool path
+ALPHA_DIR="${MEGATRON_PATCH_PATH}/examples/alpha"
+ALPHA_CONFIG_TOOL="${ALPHA_DIR}/tools/alpha_config.py"
+
+# Fixed tokenizer path (Alpha uses Qwen3-Next tokenizer)
+TOKENIZER_PATH="${ALPHA_DIR}/tokenizer"
+
 OTHER_ARGS=()
 if [ ${MG2HF} = true ]; then
+    mkdir -p ${SAVE_DIR}
+
+    if [ -z "${HF_DIR}" ] || [ ! -d "${HF_DIR}" ]; then
+        # Auto-generate HF config from unified config
+        echo "🔧 Auto-generating HF config from unified config..."
+
+        # Generate config.json
+        python3 ${ALPHA_CONFIG_TOOL} generate-hf-config ${MODEL_SIZE} --output ${SAVE_DIR}/config.json
+
+        # Copy tokenizer files from fixed tokenizer path (exclude config.json to preserve generated one)
+        echo "📋 Copying tokenizer files from ${TOKENIZER_PATH}..."
+        find -L ${TOKENIZER_PATH} -maxdepth 1 -type f -name "tokenizer*.json" -print0 2>/dev/null | xargs -0 -r cp -t ${SAVE_DIR} || true
+        find -L ${TOKENIZER_PATH} -maxdepth 1 -type f -name "vocab.json" -print0 2>/dev/null | xargs -0 -r cp -t ${SAVE_DIR} || true
+        find -L ${TOKENIZER_PATH} -maxdepth 1 -type f -name "*.txt" -print0 2>/dev/null | xargs -0 -r cp -t ${SAVE_DIR} || true
+        find -L ${TOKENIZER_PATH} -maxdepth 1 -type f -name "*.model" -print0 2>/dev/null | xargs -0 -r cp -t ${SAVE_DIR} || true
+
+        HF_DIR=${SAVE_DIR}
+        echo "✅ HF config auto-generated at ${SAVE_DIR}/config.json"
+    else
+        # Use existing HF reference
+        echo "📋 Copying HF config from ${HF_DIR}..."
+        find -L ${HF_DIR} -maxdepth 1 -type f -name "*.json" -print0 | xargs -0 cp -t ${SAVE_DIR}
+        find -L ${HF_DIR} -maxdepth 1 -type f -name "merges.txt" -print0 2>/dev/null | xargs -0 -r cp -t ${SAVE_DIR} || true
+    fi
+
     OTHER_ARGS+=(
         --tokenizer-type HuggingFaceTokenizer
         --tokenizer-model ${HF_DIR}
         --hf-dir ${HF_DIR}
         --mcore2hf
     )
-    mkdir -p ${SAVE_DIR}
-    find -L ${HF_DIR} -maxdepth 1 -type f -name "*.json" -print0 | xargs -0 cp -t ${SAVE_DIR}
-    find -L ${HF_DIR} -maxdepth 1 -type f -name "merges.txt" -print0 | xargs -0 cp -t ${SAVE_DIR}
 else
+    # HF → Megatron conversion
     OTHER_ARGS+=(
         --tokenizer-type HuggingFaceTokenizer
         --tokenizer-model ${LOAD_DIR}
     )
     mkdir -p ${SAVE_DIR}
     find -L ${LOAD_DIR} -maxdepth 1 -type f -name "*.json" -print0 | xargs -0 cp -t ${SAVE_DIR}
-    find -L ${LOAD_DIR} -maxdepth 1 -type f -name "merges.txt" -print0 | xargs -0 cp -t ${SAVE_DIR}
+    find -L ${LOAD_DIR} -maxdepth 1 -type f -name "merges.txt" -print0 2>/dev/null | xargs -0 -r cp -t ${SAVE_DIR} || true
 fi
 
 if [ ${USE_CUDA} = true ]; then
@@ -174,6 +208,7 @@ CONVERT_ARGS=(
 
     --synchronizer alpha
     --pretrain-script alpha.model_provider
+    --auto-detect-ckpt-format    # Support both torch and torch_dist checkpoint formats
     # --debug  # Disabled for Alpha EP-only conversion
 )
 

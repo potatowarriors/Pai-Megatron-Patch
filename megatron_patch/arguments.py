@@ -504,11 +504,12 @@ def get_patch_args(parser):
         help="Use activation checkpointing.",
     )
 
-    group.add_argument(
+    patch_if_not_exist(
+        group,
         "--cpu-offloading-num-layers",
         type=int,
         default=0,
-        help="The num of layers to be moved to CPU",
+        help="The num of layers to be moved to CPU"
     )
 
     group.add_argument('--dataset-config', type=str, default=None)
