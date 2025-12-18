@@ -7,10 +7,10 @@
 # 단일 YAML 설정에서 학습/변환/HF 설정을 자동 생성하는 도구
 #
 # 사용법:
-#   python alpha_config.py validate baseline_24L
-#   python alpha_config.py generate-train-args baseline_24L
-#   python alpha_config.py generate-convert-args baseline_24L
-#   python alpha_config.py generate-hf-config baseline_24L --output /path/to/config.json
+#   python alpha_config.py validate baseline_48L
+#   python alpha_config.py generate-train-args baseline_48L
+#   python alpha_config.py generate-convert-args baseline_48L
+#   python alpha_config.py generate-hf-config baseline_48L --output /path/to/config.json
 
 import argparse
 import json
@@ -499,8 +499,12 @@ def generate_hf_config(config: ModelConfig) -> Dict:
     mlp_only_layers = sorted(set(idx // 2 for idx in dense_mlp_mg_indices))
 
     return {
-        "architectures": ["Qwen3NextForCausalLM"],
+        "architectures": ["AlphaForCausalLM"],
         "attention_dropout": config.attention_dropout,
+        "auto_map": {
+            "AutoConfig": "configuration_alpha.AlphaConfig",
+            "AutoModelForCausalLM": "modeling_alpha.AlphaForCausalLM"
+        },
         "bos_token_id": config.tokens.bos_token_id,
         "decoder_sparse_step": 1,
         "eos_token_id": config.tokens.eos_token_id,
@@ -517,7 +521,7 @@ def generate_hf_config(config: ModelConfig) -> Dict:
         "linear_value_head_dim": config.hybrid.mamba_head_dim,
         "max_position_embeddings": 262144,
         "mlp_only_layers": mlp_only_layers,
-        "model_type": "qwen3_next",
+        "model_type": "alpha",
         "moe_intermediate_size": config.moe.moe_ffn_hidden_size,
         "norm_topk_prob": True,
         "num_attention_heads": config.num_attention_heads,
@@ -738,24 +742,24 @@ def main():
 
     # validate
     p_validate = subparsers.add_parser("validate", help="Validate configuration")
-    p_validate.add_argument("config_name", help="Config name (e.g., baseline_24L)")
+    p_validate.add_argument("config_name", help="Config name (e.g., baseline_48L)")
     p_validate.set_defaults(func=cmd_validate)
 
     # generate-train-args
     p_train = subparsers.add_parser("generate-train-args", help="Generate training arguments")
-    p_train.add_argument("config_name", help="Config name (e.g., baseline_24L)")
+    p_train.add_argument("config_name", help="Config name (e.g., baseline_48L)")
     p_train.add_argument("--output", "-o", help="Output file path")
     p_train.set_defaults(func=cmd_generate_train_args)
 
     # generate-convert-args
     p_convert = subparsers.add_parser("generate-convert-args", help="Generate conversion arguments")
-    p_convert.add_argument("config_name", help="Config name (e.g., baseline_24L)")
+    p_convert.add_argument("config_name", help="Config name (e.g., baseline_48L)")
     p_convert.add_argument("--output", "-o", help="Output file path")
     p_convert.set_defaults(func=cmd_generate_convert_args)
 
     # generate-hf-config
     p_hf = subparsers.add_parser("generate-hf-config", help="Generate HuggingFace config.json")
-    p_hf.add_argument("config_name", help="Config name (e.g., baseline_24L)")
+    p_hf.add_argument("config_name", help="Config name (e.g., baseline_48L)")
     p_hf.add_argument("--output", "-o", help="Output file path")
     p_hf.set_defaults(func=cmd_generate_hf_config)
 
@@ -763,13 +767,13 @@ def main():
     p_script = subparsers.add_parser(
         "generate-convert-script", help="Generate conversion bash script"
     )
-    p_script.add_argument("config_name", help="Config name (e.g., baseline_24L)")
+    p_script.add_argument("config_name", help="Config name (e.g., baseline_48L)")
     p_script.add_argument("--output", "-o", help="Output file path")
     p_script.set_defaults(func=cmd_generate_convert_script)
 
     # sync
     p_sync = subparsers.add_parser("sync", help="Sync all generated files from unified config")
-    p_sync.add_argument("config_name", help="Config name (e.g., baseline_24L)")
+    p_sync.add_argument("config_name", help="Config name (e.g., baseline_48L)")
     p_sync.set_defaults(func=cmd_sync)
 
     args = parser.parse_args()

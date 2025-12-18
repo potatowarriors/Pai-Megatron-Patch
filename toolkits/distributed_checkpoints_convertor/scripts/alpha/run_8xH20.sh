@@ -10,7 +10,7 @@
 #   bash run_8xH20.sh <MODEL_SIZE> <LOAD_DIR> <SAVE_DIR> <MG2HF> <USE_CUDA> <PRECISION> [HF_DIR]
 #
 # Arguments:
-#   MODEL_SIZE  : Model configuration (baseline_24L)
+#   MODEL_SIZE  : Model configuration (baseline_48L)
 #   LOAD_DIR    : Input checkpoint directory
 #   SAVE_DIR    : Output checkpoint directory
 #   MG2HF       : Conversion direction (true: MG→HF, false: HF→MG)
@@ -21,13 +21,13 @@
 #
 # Examples:
 #   # HF → Megatron
-#   bash run_8xH20.sh baseline_24L /path/to/hf /path/to/mcore false true bf16
+#   bash run_8xH20.sh baseline_48L /path/to/hf /path/to/mcore false true bf16
 #
 #   # Megatron → HF (with existing HF reference)
-#   bash run_8xH20.sh baseline_24L /path/to/mcore /path/to/hf true true bf16 /path/to/hf-orig
+#   bash run_8xH20.sh baseline_48L /path/to/mcore /path/to/hf true true bf16 /path/to/hf-orig
 #
 #   # Megatron → HF (auto-generate HF config from unified config)
-#   bash run_8xH20.sh baseline_24L /path/to/mcore /path/to/hf true true bf16
+#   bash run_8xH20.sh baseline_48L /path/to/mcore /path/to/hf true true bf16
 
 set -e
 CURRENT_DIR="$( cd "$( dirname "$0" )" && pwd )"
@@ -76,6 +76,13 @@ if [ ${MG2HF} = true ]; then
         find -L ${TOKENIZER_PATH} -maxdepth 1 -type f -name "vocab.json" -print0 2>/dev/null | xargs -0 -r cp -t ${SAVE_DIR} || true
         find -L ${TOKENIZER_PATH} -maxdepth 1 -type f -name "*.txt" -print0 2>/dev/null | xargs -0 -r cp -t ${SAVE_DIR} || true
         find -L ${TOKENIZER_PATH} -maxdepth 1 -type f -name "*.model" -print0 2>/dev/null | xargs -0 -r cp -t ${SAVE_DIR} || true
+
+        # Copy Alpha HF modeling files (required for auto_map in config.json)
+        ALPHA_HF_MODEL_DIR="${MEGATRON_PATCH_PATH}/examples/alpha/hf_model"
+        if [ -d "${ALPHA_HF_MODEL_DIR}" ]; then
+            echo "📋 Copying Alpha HF modeling files..."
+            cp ${ALPHA_HF_MODEL_DIR}/*.py ${SAVE_DIR}/
+        fi
 
         HF_DIR=${SAVE_DIR}
         echo "✅ HF config auto-generated at ${SAVE_DIR}/config.json"
@@ -225,3 +232,12 @@ cmd="torchrun ${DISTRIBUTED_ARGS[@]} impl/convert.py \
 
 echo $cmd
 eval $cmd
+
+# Post-conversion: Verify Alpha HF modeling files exist
+if [ ${MG2HF} = true ]; then
+    if [ -f "${SAVE_DIR}/configuration_alpha.py" ] && [ -f "${SAVE_DIR}/modeling_alpha.py" ]; then
+        echo "✅ Alpha HF model conversion complete: ${SAVE_DIR}"
+    else
+        echo "⚠️ Warning: Alpha HF modeling files missing in ${SAVE_DIR}"
+    fi
+fi
