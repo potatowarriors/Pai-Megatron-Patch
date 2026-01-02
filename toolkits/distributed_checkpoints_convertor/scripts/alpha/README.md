@@ -52,6 +52,43 @@ bash scripts/alpha/run_8xH20.sh \
   /path/to/alpha-hf-reference
 ```
 
+### 🚀 Auto Mode (권장)
+
+훈련 출력 디렉토리를 직접 지정하면 자동으로 체크포인트를 찾아 변환합니다:
+
+```bash
+# 최신 체크포인트 자동 변환
+bash scripts/alpha/run_8xH20.sh \
+  baseline_48L \
+  /path/to/outputs/alpha_baseline_48L_20251219_095156 \
+  auto \
+  true \
+  true \
+  bf16
+
+# 특정 iteration 지정
+bash scripts/alpha/run_8xH20.sh \
+  baseline_48L \
+  /path/to/outputs/alpha_baseline_48L_20251219_095156 \
+  auto:50000 \
+  true \
+  true \
+  bf16
+```
+
+**Auto Mode 동작:**
+- `auto`: `checkpoints/latest_checkpointed_iteration.txt`에서 최신 iteration 자동 감지
+- `auto:50000`: 지정된 iteration 사용
+- 출력 경로 자동 생성: `{OUTPUT_DIR}/hfmodel_{ITERATION:07d}`
+
+```
+📍 Using latest iteration: 100000
+
+🔄 Auto mode enabled:
+   Input:  .../checkpoints/iter_0100000
+   Output: .../hfmodel_0100000
+```
+
 ---
 
 ## Script Arguments
@@ -59,12 +96,12 @@ bash scripts/alpha/run_8xH20.sh \
 | 위치 | 인자 | 설명 | 예시 |
 |------|------|------|------|
 | 1 | `MODEL_SIZE` | 모델 설정 | `baseline_48L`, `baseline_32L` |
-| 2 | `LOAD_DIR` | 입력 체크포인트 경로 | `/data/ckpts/alpha-hf` |
-| 3 | `SAVE_DIR` | 출력 경로 | `/data/ckpts/alpha-mcore` |
+| 2 | `LOAD_DIR` | 입력 체크포인트 또는 훈련 출력 경로 (auto mode) | `/data/ckpts/alpha-hf` |
+| 3 | `SAVE_DIR` | 출력 경로, 또는 `auto`/`auto:ITER` | `auto`, `auto:50000` |
 | 4 | `MG2HF` | 변환 방향 | `true` (MG→HF), `false` (HF→MG) |
 | 5 | `USE_CUDA` | GPU 사용 | `true` (권장), `false` (CPU) |
 | 6 | `PRECISION` | 정밀도 | `bf16`, `fp16`, `fp32` |
-| 7 | `HF_DIR` | 원본 HF 모델 (MG→HF 시) | `/data/alpha-hf-orig` |
+| 7 | `HF_DIR` | 원본 HF 모델 (MG→HF 시, optional) | `/data/alpha-hf-orig` |
 
 ---
 
@@ -148,16 +185,18 @@ print(f'✓ Loaded {len(model.model.layers)} layers')
 
 ## Advanced Usage
 
-### 다중 모델 배치 변환
+### 다중 iteration 배치 변환
 
 ```bash
-for iter in 1000 5000 10000; do
+# Auto mode로 간편하게 특정 iteration들 변환
+for iter in 50000 100000 150000; do
   bash scripts/alpha/run_8xH20.sh \
     baseline_48L \
-    outputs/alpha_*/checkpoints/iter_$(printf "%07d" $iter) \
-    hf_models/alpha_iter${iter} \
-    true true bf16 /path/to/hf-reference
+    /path/to/outputs/alpha_baseline_48L_20251219_095156 \
+    auto:${iter} \
+    true true bf16
 done
+# 결과: hfmodel_0050000, hfmodel_0100000, hfmodel_0150000
 ```
 
 ### Custom Expert Parallelism

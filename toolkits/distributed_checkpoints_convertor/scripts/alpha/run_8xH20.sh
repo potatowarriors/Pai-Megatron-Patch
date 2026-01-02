@@ -11,8 +11,10 @@
 #
 # Arguments:
 #   MODEL_SIZE  : Model configuration (baseline_48L)
-#   LOAD_DIR    : Input checkpoint directory
-#   SAVE_DIR    : Output checkpoint directory
+#   LOAD_DIR    : Input checkpoint directory (or training output directory for auto mode)
+#   SAVE_DIR    : Output checkpoint directory, or:
+#                 - "auto"       : Auto-detect latest checkpoint, save to hfmodel_{iter}
+#                 - "auto:50000" : Use specific iteration, save to hfmodel_0050000
 #   MG2HF       : Conversion direction (true: MG→HF, false: HF→MG)
 #   USE_CUDA    : Use GPU for conversion (true/false)
 #   PRECISION   : bf16/fp16/fp32
@@ -28,6 +30,12 @@
 #
 #   # Megatron → HF (auto-generate HF config from unified config)
 #   bash run_8xH20.sh baseline_48L /path/to/mcore /path/to/hf true true bf16
+#
+#   # Megatron → HF (AUTO MODE - latest checkpoint)
+#   bash run_8xH20.sh baseline_48L /path/to/outputs auto true true bf16
+#
+#   # Megatron → HF (AUTO MODE - specific iteration)
+#   bash run_8xH20.sh baseline_48L /path/to/outputs auto:50000 true true bf16
 
 set -e
 CURRENT_DIR="$( cd "$( dirname "$0" )" && pwd )"
@@ -51,6 +59,64 @@ MG2HF=$4
 USE_CUDA=$5
 PR=$6
 HF_DIR=$7
+
+# ============================================================================
+# Auto Mode Detection
+# ============================================================================
+# When SAVE_DIR is "auto" or "auto:ITERATION", automatically detect paths:
+#   - "auto"       : Use latest checkpoint from latest_checkpointed_iteration.txt
+#   - "auto:50000" : Use specific iteration
+#
+# Example:
+#   bash run_8xH20.sh baseline_48L /path/to/outputs auto true true bf16
+#   bash run_8xH20.sh baseline_48L /path/to/outputs auto:50000 true true bf16
+# ============================================================================
+if [[ "${SAVE_DIR}" == "auto"* ]]; then
+    OUTPUT_DIR="${LOAD_DIR}"
+
+    # Check if this is a training output directory
+    if [ ! -d "${OUTPUT_DIR}/checkpoints" ]; then
+        echo "❌ Error: ${OUTPUT_DIR}/checkpoints not found"
+        echo "   Auto mode requires training output directory with checkpoints/"
+        exit 1
+    fi
+
+    # Parse iteration from "auto" or "auto:ITERATION"
+    if [[ "${SAVE_DIR}" == "auto:"* ]]; then
+        ITERATION="${SAVE_DIR#auto:}"
+        echo "📍 Using specified iteration: ${ITERATION}"
+    else
+        # Read latest iteration
+        LATEST_FILE="${OUTPUT_DIR}/checkpoints/latest_checkpointed_iteration.txt"
+        if [ ! -f "${LATEST_FILE}" ]; then
+            echo "❌ Error: ${LATEST_FILE} not found"
+            exit 1
+        fi
+        ITERATION=$(cat "${LATEST_FILE}" | tr -d '[:space:]')
+        echo "📍 Using latest iteration: ${ITERATION}"
+    fi
+
+    # Format iteration with leading zeros (7 digits)
+    ITERATION_PADDED=$(printf "%07d" ${ITERATION})
+
+    # Set actual paths
+    LOAD_DIR="${OUTPUT_DIR}/checkpoints/iter_${ITERATION_PADDED}"
+    SAVE_DIR="${OUTPUT_DIR}/hfmodel_${ITERATION_PADDED}"
+
+    echo ""
+    echo "🔄 Auto mode enabled:"
+    echo "   Input:  ${LOAD_DIR}"
+    echo "   Output: ${SAVE_DIR}"
+    echo ""
+
+    # Validate checkpoint exists
+    if [ ! -d "${LOAD_DIR}" ]; then
+        echo "❌ Error: Checkpoint not found: ${LOAD_DIR}"
+        echo "   Available checkpoints:"
+        ls -1 "${OUTPUT_DIR}/checkpoints/" | grep "iter_" | sed 's/^/     /'
+        exit 1
+    fi
+fi
 
 # Alpha config tool path
 ALPHA_DIR="${MEGATRON_PATCH_PATH}/examples/alpha"
@@ -95,7 +161,7 @@ if [ ${MG2HF} = true ]; then
 
     OTHER_ARGS+=(
         --tokenizer-type HuggingFaceTokenizer
-        --tokenizer-model ${HF_DIR}
+        --tokenizer-model ${TOKENIZER_PATH}
         --hf-dir ${HF_DIR}
         --mcore2hf
     )
