@@ -13,22 +13,28 @@
 # limitations under the License.
 
 import numpy as np
-try:
-    # <= 240126
-    from megatron import (
-        get_args, 
-        print_rank_0,
-    )
-except:
-    # >= 240405
-    from megatron.training import (
-        get_args,
-        print_rank_0
-    )
+from megatron.training import (
+    get_args,
+    print_rank_0
+)
 
 from megatron.core import mpu
-from megatron_patch.tokenizer import build_tokenizer, get_tokenizer
+from megatron.core.tokenizers.text.utils.build_tokenizer import build_tokenizer
 from .json_sft import JSONSFTDataset
+
+# Global tokenizer cache for backward compatibility
+_GLOBAL_TOKENIZER = None
+
+def get_tokenizer():
+    """Return the global tokenizer."""
+    return _GLOBAL_TOKENIZER
+
+def _build_and_cache_tokenizer(args):
+    """Build tokenizer using Megatron-LM standard method and cache it globally."""
+    global _GLOBAL_TOKENIZER
+    if _GLOBAL_TOKENIZER is None:
+        _GLOBAL_TOKENIZER = build_tokenizer(args)
+    return _GLOBAL_TOKENIZER
 
 def build_evaluation_dataset(dataset):
     raise NotImplementedError(f"Dataset {dataset} is no longer supported in Pai-Megatron-Patch anymore, downgrade to v0.10.2 or lower to use it.")
@@ -44,8 +50,8 @@ def train_valid_test_datasets_provider(train_val_test_num_samples):
         train_val_test_num_samples : A list containing the number of samples in train test and validation.
     """
     args = get_args()
-    if get_tokenizer() is None:
-        build_tokenizer(args)
+    # Build tokenizer using Megatron-LM standard method
+    _build_and_cache_tokenizer(args)
     print_rank_0("> building train, validation, and test datasets for GPT ...")
     return build_dataset(args, train_val_test_num_samples)
 
@@ -76,7 +82,7 @@ def core_gpt_dataset_config_from_args(args):
     )
     try:
         return GPTDatasetConfig(
-            num_dataset_builder_threads=args.num_dataset_builder_threads, 
+            num_dataset_builder_threads=args.num_dataset_builder_threads,
             **kwargs
         )
     except Exception:
@@ -101,8 +107,8 @@ def build_dataset(args, train_val_test_num_samples):
     from megatron.core.datasets.blended_megatron_dataset_builder import (
         BlendedMegatronDatasetBuilder,
     )
-    if get_tokenizer() is None:
-        build_tokenizer(args)
+    # Ensure tokenizer is built
+    _build_and_cache_tokenizer(args)
     if args.dataset == 'JSON-SFT':
         train_dataset = JSONSFTDataset(args.train_data_path, args.max_padding_length)
         val_dataset = JSONSFTDataset(args.valid_data_path, args.max_padding_length)
@@ -124,6 +130,5 @@ def build_dataset(args, train_val_test_num_samples):
         print_rank_0("> finished creating GPT datasets ...")
     else:
         raise NotImplementedError(f"Dataset {args.dataset} is no longer supported in Pai-Megatron-Patch anymore, downgrade to v0.10.2 or lower to use it.")
-    
-    return train_dataset, val_dataset, test_dataset
 
+    return train_dataset, val_dataset, test_dataset

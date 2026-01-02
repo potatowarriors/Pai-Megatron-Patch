@@ -108,7 +108,7 @@ def get_moe_module_spec(
     experts = ModuleSpec(module=expert_module, submodules=expert_submodule)
 
     # shared experts spec
-    shared_experts = ModuleSpec(module=SharedExpertMLP, params={"gate": use_shared_expert_gate}, submodules=mlp)
+    shared_experts = ModuleSpec(module=SharedExpertMLP, submodules=mlp)
 
     # MoE module spec
     moe_module_spec = ModuleSpec(
