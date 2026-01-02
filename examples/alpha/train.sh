@@ -8,7 +8,7 @@
 #
 # 예시:
 #   bash train.sh  # 기본 설정 사용
-#   bash train.sh baseline_24L pretrain h100x8 kormo_1pct
+#   bash train.sh baseline_48L pretrain h100x8 kormo_1pct
 #
 # 설정 파일 위치:
 #   configs/model/*.yaml
@@ -38,7 +38,7 @@ MEGATRON_PATCH_PATH=$( dirname $( dirname ${CURRENT_DIR}))
 CONFIG_DIR="${CURRENT_DIR}/configs"
 
 # 설정 파일 인자 (기본값)
-MODEL_CONFIG=${1:-"baseline_24L"}
+MODEL_CONFIG=${1:-"baseline_48L"}
 TRAINING_CONFIG=${2:-"pretrain"}
 INFRA_CONFIG=${3:-"h100x8"}
 DATA_CONFIG=${4:-"kormo_1pct"}
@@ -59,7 +59,7 @@ echo ""
 
 # yaml_get: YAML 파일에서 값 추출
 # 사용: yaml_get <file> <key_path>
-# 예: yaml_get configs/model/baseline_24L.yaml "model.num_layers"
+# 예: yaml_get configs/model/baseline_48L.yaml "model.num_layers"
 yaml_get() {
     local file="$1"
     local key="$2"
@@ -376,10 +376,15 @@ fi
 
 echo "✅ 데이터 설정 완료"
 echo "  - Split: ${DATA_SPLIT}"
+
+# 데이터셋 캐시 경로 (데이터셋별 공유)
+DATA_CACHE_PATH="${CONFIG_DIR}/data/.cache/${DATA_CONFIG}"
+mkdir -p ${DATA_CACHE_PATH}
+echo "  - Cache: ${DATA_CACHE_PATH}"
 echo ""
 
 #==============================================================================
-# 모델 설정 로드 (baseline_24L.yaml)
+# 모델 설정 로드 (baseline_48L.yaml)
 #==============================================================================
 
 MODEL_CONFIG_FILE="${CONFIG_DIR}/model/${MODEL_CONFIG}.yaml"
@@ -421,11 +426,12 @@ ROTARY_PERCENT=$(yaml_get $MODEL_CONFIG_FILE "model.rotary_percent")
 # NoPE for Full Attention (Kimi-Linear style)
 NO_ROPE_FREQ=$(yaml_get $MODEL_CONFIG_FILE "model.no_rope_freq")
 
-# Tokenizer
+# Tokenizer (Megatron-LM standard)
 PADDED_VOCAB_SIZE=$(yaml_get $MODEL_CONFIG_FILE "model.padded_vocab_size")
 TOKENIZER_TYPE=$(yaml_get $MODEL_CONFIG_FILE "model.tokenizer_type")
+TOKENIZER_MODEL=$(yaml_get $MODEL_CONFIG_FILE "model.tokenizer_model")
 # Fixed tokenizer path (Alpha uses Qwen3-Next tokenizer)
-TOKENIZER_PATH="${CURRENT_DIR}/tokenizer"
+TOKENIZER_PATH="${CURRENT_DIR}/${TOKENIZER_MODEL}"
 
 echo "✅ 모델 설정 완료"
 echo "  - 아키텍처: ${NUM_LAYERS} layers, ${HIDDEN_SIZE} hidden, ${NUM_EXPERTS} experts"
@@ -518,15 +524,17 @@ MODEL_ARGS=(
     --seq-length ${SEQ_LEN}
     --max-position-embeddings ${MAX_POS_EMB}
 
-    # Tokenizer & Vocab
+    # Tokenizer & Vocab (Megatron-LM standard)
     --untie-embeddings-and-output-weights
     --padded-vocab-size ${PADDED_VOCAB_SIZE}
-    --patch-tokenizer-type ${TOKENIZER_TYPE}
+    --tokenizer-type ${TOKENIZER_TYPE}
+    --tokenizer-model ${TOKENIZER_PATH}
 )
 
 TRAINING_ARGS=(
     # 데이터
     --data-path ${DATA_PATH}
+    --data-cache-path ${DATA_CACHE_PATH}
     --split ${DATA_SPLIT}
     --dataset ${DATASET_IMPL}
     --num-workers ${NUM_WORKERS}
@@ -536,10 +544,8 @@ TRAINING_ARGS=(
     --global-batch-size ${GBS}
     --train-iters ${TRAIN_ITERS}
 
-    # 토크나이저 로드
-    --load ${TOKENIZER_PATH}
-    --no-load-optim
-    --no-load-rng
+    # NOTE: --load is for checkpoint loading, not tokenizer
+    # Tokenizer is loaded via --tokenizer-model in MODEL_ARGS
 
     # Optimizer
     --optimizer ${OPTIMIZER}

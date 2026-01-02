@@ -2,17 +2,23 @@
 # Baseline configuration for pretraining
 
 training:
-  # 학습량 설정 (1 epoch)
+  # 학습량 설정 (1 epoch on 50% subset = ~1.13T tokens)
   # 방법 1: train_samples - 실제 데이터셋 샘플 수 기반으로 정확한 1 epoch 학습 (bc 필요)
   # 방법 2: train_tokens - 토큰 수 기반 계산 (정수 연산만 사용)
-  # train_samples: 2599194     # Blended dataset: DCLM(2,466,205) + korean_web(132,989)
-  train_tokens: 10646426624    # 2,599,194 × 4096 = ~10.6B tokens
+  # 50% subset: DCLM(1.02T) + korean_web(0.11T) = 1.13T tokens
+  # With seq_len=4096, GBS=1024: ~269,440 iterations
+  train_tokens: 1130112331960  # ~1.13T tokens (1 epoch)
 
   # Warmup 설정
   # 방법 1: lr_warmup_fraction - train_iters에 대한 비율 (bc 필요)
   # 방법 2: warmup_tokens - 토큰 수 기반 (정수 연산만 사용)
-  # lr_warmup_fraction: 0.03   # 전체의 3% (10153 × 0.03 ≈ 305 iters)
-  warmup_tokens: 319815680     # ~3% warmup (~320M tokens)
+  # lr_warmup_fraction: 0.03
+  warmup_tokens: 33903369959   # ~3% warmup (~34B tokens)
+
+  # WSD Scheduler 설정
+  # Phase: Warmup (3%) → Stable (87%) → Decay (10%)
+  lr_wsd_decay_style: "cosine"  # Options: exponential, linear, cosine, minus_sqrt
+  lr_wsd_decay_tokens: 113011233196  # 마지막 10% (~113B tokens)에서 decay
 
   # Optimizer
   optimizer: "dist_muon"  # Options: adam, sgd, muon, dist_muon
@@ -44,27 +50,22 @@ training:
   clip_grad: 1.0
 
   # Learning Rate
-  lr: 2.0e-4
-  min_lr: 2.0e-5
+  lr: 1.0e-4
+  min_lr: 1.0e-4
   lr_decay_style: "WSD"  # Warmup-Stable-Decay (Muon과 잘 맞음)
-
-  # WSD Scheduler 설정
-  # Phase: Warmup (3%) → Stable (87%) → Decay (10%)
-  lr_wsd_decay_style: "cosine"  # Options: exponential, linear, cosine, minus_sqrt
-  lr_wsd_decay_tokens: 1064642662  # 마지막 10% (2,599,194 × 0.1 × 4096 ≈ 1.06B tokens)에서 decay
 
   # Precision
   precision: "bf16"
 
   # 체크포인트
-  save_interval: 1000
+  save_interval: 50000
   save_optim: false
   auto_detect_ckpt_format: false
   ckpt_format: "torch_dist"  # Muon supports both torch and torch_dist (Megatron-LM-251125+)
 
   # 평가
-  eval_iters: 10
-  eval_interval: 1000
+  eval_iters: 8
+  eval_interval: 50000
 
   # 분산 학습
   distributed_timeout_minutes: 60
@@ -81,6 +82,7 @@ training:
   # Weights & Biases
   wandb:
     enabled: true  # true로 변경하면 WANDB 활성화
+    api_key: "ffbe195db0033ed7b92ba142cfd01ca70b29974d"  # WANDB API 키 (https://wandb.ai/authorize 에서 발급)
     project: "alpha-pretraining"
     entity: ""  # 팀/조직 이름 (선택사항)
     save_dir: ""  # 기본값: {checkpoint_dir}/wandb

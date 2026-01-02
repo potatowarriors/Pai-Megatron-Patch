@@ -5,7 +5,7 @@
 #
 # 사용법:
 #   source scripts/load_config.sh
-#   value=$(yaml_get "configs/model/baseline_24L.yaml" "model.num_layers")
+#   value=$(yaml_get "configs/model/baseline_48L.yaml" "model.num_layers")
 #
 
 # yaml_get: YAML 파일에서 값 추출
@@ -16,7 +16,7 @@
 #   추출된 값 (없으면 빈 문자열)
 #
 # 예시:
-#   NUM_LAYERS=$(yaml_get "configs/model/baseline_24L.yaml" "model.num_layers")
+#   NUM_LAYERS=$(yaml_get "configs/model/baseline_48L.yaml" "model.num_layers")
 #   echo "Layers: ${NUM_LAYERS}"
 yaml_get() {
     local file=$1
@@ -144,7 +144,7 @@ if [ "${BASH_SOURCE[0]}" -eq "${0}" ]; then
 
     # 테스트 1: 단순 값 읽기
     echo -e "\n[테스트 1] 모델 레이어 수 읽기"
-    NUM_LAYERS=$(yaml_get "${CONFIG_DIR}/model/baseline_24L.yaml" "model.num_layers")
+    NUM_LAYERS=$(yaml_get "${CONFIG_DIR}/model/baseline_48L.yaml" "model.num_layers")
     echo "  model.num_layers = ${NUM_LAYERS}"
 
     # 테스트 2: 배열 읽기
@@ -159,13 +159,13 @@ if [ "${BASH_SOURCE[0]}" -eq "${0}" ]; then
 
     # 테스트 4: 키 존재 확인
     echo -e "\n[테스트 4] 키 존재 여부"
-    if yaml_exists "${CONFIG_DIR}/model/baseline_24L.yaml" "model.num_layers"; then
+    if yaml_exists "${CONFIG_DIR}/model/baseline_48L.yaml" "model.num_layers"; then
         echo "  ✓ model.num_layers 존재"
     else
         echo "  ✗ model.num_layers 없음"
     fi
 
-    if yaml_exists "${CONFIG_DIR}/model/baseline_24L.yaml" "model.nonexistent_key"; then
+    if yaml_exists "${CONFIG_DIR}/model/baseline_48L.yaml" "model.nonexistent_key"; then
         echo "  ✓ model.nonexistent_key 존재"
     else
         echo "  ✗ model.nonexistent_key 없음 (정상)"

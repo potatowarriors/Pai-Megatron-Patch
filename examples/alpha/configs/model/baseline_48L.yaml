@@ -69,10 +69,11 @@ model:
   # Tokenizer & Vocab
   untie_embeddings_and_output_weights: true
   padded_vocab_size: 151936
-  tokenizer_type: "Qwen3Tokenizer"
+  # Use Megatron-LM standard tokenizer (HuggingFaceTokenizer)
+  tokenizer_type: "HuggingFaceTokenizer"
   # 토크나이저는 examples/alpha/tokenizer/ 에 고정 위치
   # (symlink to models/Qwen3-Next-tokenizer)
-  tokenizer_path: "tokenizer"
+  tokenizer_model: "tokenizer"
 
 # 48L vs 24L 비교:
 # - Depth: 48 layers (24L의 2배)

@@ -13,7 +13,7 @@ This script does NOT require GPU - it calculates parameters based on model confi
 
 Usage:
     python count_model_params.py
-    python count_model_params.py --config configs/model/baseline_24L.yaml
+    python count_model_params.py --config configs/model/baseline_48L.yaml
 """
 
 import argparse
@@ -377,7 +377,7 @@ def main():
     parser.add_argument(
         '--config',
         type=str,
-        default='configs/model/baseline_24L.yaml',
+        default='configs/model/baseline_48L.yaml',
         help='Path to model config YAML file'
     )
 

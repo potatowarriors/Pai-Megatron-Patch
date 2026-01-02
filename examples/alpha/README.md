@@ -11,7 +11,7 @@ Alpha는 Qwen3-Next-80B-A3B 아키텍처를 기반으로 한 독립적인 연구
 ### 주요 특징
 
 - **Hybrid Architecture**: Mamba SSM + Multi-Head Attention 조합
-- **Mixture-of-Experts**: 256 experts with 8 active per token
+- **Mixture-of-Experts**: 128 experts with 8 active per token
 - **YAML 기반 설정**: 모듈화되고 읽기 쉬운 설정 관리
 - **실험 추적**: 체계적인 실험 기록 및 재현성
 - **H100 최적화**: 8-GPU 환경 최적화 설정
@@ -42,7 +42,7 @@ bash train.sh
 ```
 
 기본 설정으로 학습이 시작됩니다:
-- 모델: `baseline_24L`
+- 모델: `baseline_48L`
 - 학습: `pretrain`
 - 인프라: `h100x8`
 - 데이터: `kormo_1pct`
@@ -53,7 +53,7 @@ bash train.sh
 bash train.sh [model] [training] [infra] [data]
 
 # 예시
-bash train.sh baseline_24L pretrain h100x8 kormo_1pct
+bash train.sh baseline_48L pretrain h100x8 kormo_1pct
 ```
 
 ---
@@ -68,7 +68,7 @@ examples/alpha/
 │
 ├── configs/                     # YAML 설정 파일
 │   ├── model/
-│   │   └── baseline_24L.yaml   # 모델 아키텍처 설정
+│   │   └── baseline_48L.yaml   # 모델 아키텍처 설정
 │   ├── training/
 │   │   ├── pretrain.yaml       # 학습 하이퍼파라미터
 │   │   └── h100x8.yaml         # H100 8-GPU 인프라 설정
@@ -82,7 +82,7 @@ examples/alpha/
 │   └── load_config.sh          # YAML 로드 헬퍼
 │
 ├── experiments/                 # 실험 기록
-│   └── 20250117_baseline_24L/
+│   └── 20250117_baseline_48L/
 │       ├── run_original.sh     # 원본 테스트 스크립트
 │       ├── config_snapshot.yaml # 설정 스냅샷
 │       └── notes.md            # 실험 노트
@@ -98,7 +98,7 @@ examples/alpha/
 │   └── SETUP.md                # 환경 세팅 가이드
 │
 └── outputs/                     # 학습 결과 (자동 생성)
-    └── alpha_baseline_24L_*/
+    └── alpha_baseline_48L_*/
         ├── checkpoints/
         ├── tensorboard/
         └── logs/
@@ -157,10 +157,10 @@ bash scripts/load_config.sh
 bash calc_params.sh
 
 # 상세 분석
-bash calc_params.sh configs/model/baseline_24L.yaml --detailed
+bash calc_params.sh configs/model/baseline_48L.yaml --detailed
 
 # 또는 직접 실행
-python calculate_parameters.py --config configs/model/baseline_24L.yaml --detailed
+python calculate_parameters.py --config configs/model/baseline_48L.yaml --detailed
 ```
 
 ### 학습 시작
@@ -188,31 +188,26 @@ tensorboard --logdir outputs/alpha_*/tensorboard --port 6006
 
 ---
 
-## Baseline 24L 모델
+## Baseline 48L 모델
 
-최초 실험 모델 설정:
+기본 실험 모델 설정:
 
 | 항목 | 값 |
 |------|-----|
-| **레이어 수** | 24 |
+| **레이어 수** | 48 |
 | **Hidden Size** | 2048 |
+| **FFN Hidden Size** | 8192 |
 | **Attention Heads** | 32 |
 | **Query Groups** | 2 (GQA) |
-| **Experts** | 256 |
+| **Experts** | 128 |
 | **Router TopK** | 8 |
-| **Hybrid Ratio** | 12.5% (3/24 layers) |
-| **전체 파라미터** | 15.31B |
-| **활성화 파라미터** | 1.27B (8.3%) |
+| **Hybrid Ratio** | 12.5% (6/48 layers) |
 
-**메모리 절약 전략**:
-- 레이어 75% 감소 (96 → 24)
-- Expert 50% 감소 (512 → 256), 크기 증가로 보상
-- Attention head_dim 4배 감소 (256 → 64)
-
-**파라미터 구성**:
-- MoE가 전체 파라미터의 95.1% 차지
-- Top-8 expert 선택으로 실제 활성화는 8.3%만 사용
-- 추론 시 효율성: 15.31B 모델을 1.27B처럼 동작
+**아키텍처 특징**:
+- 48 Megatron layers → 24 HuggingFace layers (2:1 mapping)
+- Mamba (GatedDeltaNet) + Attention Hybrid
+- MoE + Shared Expert 구조
+- Top-8 expert 선택으로 효율적인 활성화
 
 ---
 
@@ -257,11 +252,11 @@ huggingface-cli login
 ```bash
 # 기본 벤치마크 세트 (추천)
 bash scripts/run_benchmarks.sh \
-  outputs/alpha_baseline_24L_*/hfmodel \
+  outputs/alpha_baseline_48L_*/hfmodel \
   "mmlu,hellaswag,arc_easy,arc_challenge,winogrande"
 
 # 한 줄로 실행
-bash scripts/run_benchmarks.sh outputs/alpha_baseline_24L_*/hfmodel
+bash scripts/run_benchmarks.sh outputs/alpha_baseline_48L_*/hfmodel
 ```
 
 **지원 벤치마크 태스크**:
@@ -327,7 +322,7 @@ bash scripts/run_benchmarks.sh MODEL_PATH \
 cd /home/work/vidsearch/repos/project_s/Pai-Megatron-Patch/toolkits/distributed_checkpoints_convertor
 
 bash scripts/alpha/run_8xH20.sh \
-  baseline_24L \
+  baseline_48L \
   ../../examples/alpha/outputs/alpha_*/checkpoints/iter_0010000 \
   ../../examples/alpha/outputs/alpha_*/hfmodel \
   true true bf16
@@ -338,7 +333,7 @@ bash scripts/alpha/run_8xH20.sh \
 cd /home/work/vidsearch/repos/project_s/Pai-Megatron-Patch/examples/alpha
 
 bash scripts/run_benchmarks.sh \
-  outputs/alpha_baseline_24L_*/hfmodel \
+  outputs/alpha_baseline_48L_*/hfmodel \
   "mmlu,hellaswag"
 ```
 
@@ -394,7 +389,7 @@ accelerate launch --multi_gpu --num_processes=4 -m lm_eval ...
 #### 설정 오류
 ```bash
 # YAML 문법 확인
-python3 -c "import yaml; yaml.safe_load(open('configs/model/baseline_24L.yaml'))"
+python3 -c "import yaml; yaml.safe_load(open('configs/model/baseline_48L.yaml'))"
 
 # 환경 검증
 bash scripts/validate_environment.sh

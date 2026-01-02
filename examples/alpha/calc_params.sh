@@ -4,7 +4,7 @@
 SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
 
 # Default config
-CONFIG="${1:-configs/model/baseline_24L.yaml}"
+CONFIG="${1:-configs/model/baseline_48L.yaml}"
 DETAILED="${2:-}"
 
 # Run calculator

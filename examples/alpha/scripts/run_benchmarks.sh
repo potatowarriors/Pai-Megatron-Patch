@@ -19,8 +19,12 @@ fi
 #==============================================================================
 MODEL_PATH=$1
 
-# Default benchmark suite for consistent evaluation
-DEFAULT_TASKS="mmlu,hellaswag,arc_easy,arc_challenge,winogrande,boolq,piqa,gsm8k,kmmlu"
+# Default benchmark suite with standard n-shot settings
+# Following Qwen paper style:
+#   5-shot: mmlu, hellaswag, arc_easy, arc_challenge, winogrande, boolq, piqa, kmmlu
+#   8-shot: gsm8k (with chain-of-thought)
+#
+DEFAULT_TASKS="standard"
 TASKS=${2:-$DEFAULT_TASKS}
 
 # Replace 'siqa' with 'social_iqa' as expected by lm-eval
@@ -33,8 +37,18 @@ WANDB_PROJECT=${WANDB_PROJECT:-"alpha-evals"}
 WANDB_ENABLED=${WANDB_ENABLED:-true}
 
 if [ -z "$MODEL_PATH" ]; then
-    echo "Usage: $0 <MODEL_PATH> [TASKS] [BATCH_SIZE] [DEVICE]"
-    echo "Example: $0 outputs/alpha_baseline_24L_*/hf_converted hellaswag auto cuda:0"
+    echo "Usage: $0 <MODEL_PATH> [TASKS|standard] [BATCH_SIZE] [DEVICE]"
+    echo ""
+    echo "Examples:"
+    echo "  # Run standard benchmark suite (recommended)"
+    echo "  $0 outputs/alpha_baseline_48L_*/hfmodel_0050000 standard"
+    echo ""
+    echo "  # Run specific tasks (all 0-shot)"
+    echo "  $0 outputs/alpha_baseline_48L_*/hfmodel_0050000 mmlu,hellaswag"
+    echo ""
+    echo "Standard benchmark suite (Qwen style n-shot):"
+    echo "  5-shot: mmlu, hellaswag, arc_easy, arc_challenge, winogrande, boolq, piqa, kmmlu"
+    echo "  8-shot: gsm8k"
     echo ""
     echo "Environment variables:"
     echo "  WANDB_PROJECT  - WandB project name (default: alpha-evals)"
@@ -43,10 +57,17 @@ if [ -z "$MODEL_PATH" ]; then
 fi
 
 # Extract run name from model path
-# e.g., outputs/alpha_baseline_24L_20251129_231218/hf_converted -> alpha_baseline_24L_20251129_231218
+# e.g., outputs/alpha_baseline_48L_20251129_231218/hfmodel_0050000 -> alpha_baseline_48L_20251129_231218
 RUN_NAME=$(basename $(dirname $MODEL_PATH))
 if [ "$RUN_NAME" == "." ] || [ -z "$RUN_NAME" ] || [ "$RUN_NAME" == "outputs" ]; then
     RUN_NAME=$(basename $MODEL_PATH)
+fi
+
+# Extract iteration from hfmodel_XXXXXX pattern (e.g., hfmodel_0050000 -> 0050000)
+MODEL_BASENAME=$(basename $MODEL_PATH)
+if [[ "$MODEL_BASENAME" =~ ^hfmodel_([0-9]+)$ ]]; then
+    ITERATION="${BASH_REMATCH[1]}"
+    RUN_NAME="${RUN_NAME}_iter${ITERATION}"
 fi
 
 echo "================================================================"
@@ -96,16 +117,65 @@ echo "================================================================"
 # - job_type: eval
 WANDB_ARGS=""
 if [ "$WANDB_ENABLED" == "true" ]; then
+    # Multi-GPU에서 중복 run 방지
+    export WANDB_START_METHOD=thread
     WANDB_ARGS="--wandb_args project=$WANDB_PROJECT,name=${RUN_NAME},job_type=eval"
     echo "📊 WandB logging enabled (project: $WANDB_PROJECT)"
 fi
 
-# Use accelerate for multi-GPU evaluation
-# Note: --log_samples 제거됨 (최종 결과만 저장, 개별 샘플 로그 불필요)
-accelerate launch --multi_gpu --num_processes=8 -m lm_eval \
-    --model hf \
-    --model_args pretrained=$MODEL_PATH,trust_remote_code=True,dtype=bfloat16 \
-    --tasks $TASKS \
-    --batch_size $BATCH_SIZE \
-    --output_path $OUTPUT_DIR \
-    $WANDB_ARGS
+# Function to run evaluation with specific n-shot
+run_eval() {
+    local tasks=$1
+    local num_fewshot=$2
+    local desc=$3
+
+    echo ""
+    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+    echo "🔄 Running: $desc"
+    echo "   Tasks: $tasks"
+    echo "   N-shot: $num_fewshot"
+    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+
+    accelerate launch --multi_gpu --num_processes=8 --main_process_port 29501 -m lm_eval \
+        --model hf \
+        --model_args pretrained=$MODEL_PATH,trust_remote_code=True,dtype=bfloat16 \
+        --tasks $tasks \
+        --num_fewshot $num_fewshot \
+        --batch_size $BATCH_SIZE \
+        --output_path $OUTPUT_DIR \
+        $WANDB_ARGS
+}
+
+# Run benchmarks
+if [ "$TASKS" == "standard" ]; then
+    echo ""
+    echo "================================================================"
+    echo "🚀 Running STANDARD benchmark suite (Qwen style n-shot)"
+    echo "================================================================"
+
+    # 5-shot: all benchmarks except gsm8k
+    run_eval "mmlu,hellaswag,arc_easy,arc_challenge,winogrande,boolq,piqa,kmmlu" 5 \
+        "5-shot benchmarks (MMLU, HellaSwag, ARC, Winogrande, BoolQ, PIQA, KMMLU)"
+
+    # 8-shot: gsm8k (chain-of-thought)
+    run_eval "gsm8k" 8 "8-shot benchmark (GSM8K)"
+
+    echo ""
+    echo "================================================================"
+    echo "✅ Standard benchmark suite completed!"
+    echo "================================================================"
+else
+    # Custom tasks: run with 0-shot (legacy behavior)
+    echo ""
+    echo "================================================================"
+    echo "🔄 Running custom tasks with 0-shot (specify n-shot manually if needed)"
+    echo "================================================================"
+
+    accelerate launch --multi_gpu --num_processes=8 --main_process_port 29501 -m lm_eval \
+        --model hf \
+        --model_args pretrained=$MODEL_PATH,trust_remote_code=True,dtype=bfloat16 \
+        --tasks $TASKS \
+        --batch_size $BATCH_SIZE \
+        --output_path $OUTPUT_DIR \
+        $WANDB_ARGS
+fi

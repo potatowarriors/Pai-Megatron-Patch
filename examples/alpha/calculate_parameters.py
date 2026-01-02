@@ -10,8 +10,8 @@ Alpha Model Parameter Calculator
 MoE 모델의 전체 파라미터와 활성화 파라미터를 계산합니다.
 
 Usage:
-    python calculate_parameters.py --config configs/model/baseline_24L.yaml
-    python calculate_parameters.py --config configs/model/baseline_24L.yaml --detailed
+    python calculate_parameters.py --config configs/model/baseline_48L.yaml
+    python calculate_parameters.py --config configs/model/baseline_48L.yaml --detailed
 """
 
 import argparse
@@ -390,7 +390,7 @@ def main():
     parser.add_argument(
         '--config',
         type=str,
-        default='configs/model/baseline_24L.yaml',
+        default='configs/model/baseline_48L.yaml',
         help='Path to model config YAML file'
     )
     parser.add_argument(

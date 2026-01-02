@@ -1,35 +1,50 @@
 #!/bin/bash
-# Alpha Model Chat Script
-# =======================
-# Interactive chat with Megatron checkpoint directly.
+# Alpha Model MG ↔ HF Weight Validation Script
+# ==============================================
+#
+# Validates that Megatron checkpoint weights match HuggingFace model weights.
+# NOTE: MG GatedDeltaNet does NOT support inference, so we compare weights directly.
 #
 # Usage:
-#   bash chat.sh <CHECKPOINT_PATH> [CONFIG_NAME]
+#   bash validate.sh <MG_CHECKPOINT> <HF_MODEL> [CONFIG_NAME] [--verbose]
 #
 # Example:
-#   bash chat.sh /path/to/checkpoint baseline_48L
+#   bash validate.sh /path/to/mg/checkpoint /path/to/hf/model baseline_48L
+#   bash validate.sh /path/to/mg/checkpoint /path/to/hf/model baseline_48L --verbose
+#
+# Arguments:
+#   MG_CHECKPOINT: Path to Megatron checkpoint directory
+#   HF_MODEL:      Path to HuggingFace model directory
+#   CONFIG_NAME:   Config name (default: baseline_48L)
+#   --verbose:     Print detailed comparison for all weights
 
 set -e
 
 # Arguments
-CHECKPOINT_PATH=${1:-""}
-CONFIG_NAME=${2:-"baseline_48L"}
+MG_CHECKPOINT=${1:-""}
+HF_MODEL=${2:-""}
+CONFIG_NAME=${3:-"baseline_48L"}
+VERBOSE_FLAG=""
+
+# Check for --verbose in any position
+for arg in "$@"; do
+    if [ "$arg" == "--verbose" ]; then
+        VERBOSE_FLAG="--verbose"
+    fi
+done
 
 # Validate arguments
-if [ -z "$CHECKPOINT_PATH" ]; then
-    echo "Usage: bash chat.sh <CHECKPOINT_PATH> [CONFIG_NAME]"
+if [ -z "$MG_CHECKPOINT" ] || [ -z "$HF_MODEL" ]; then
+    echo "Usage: bash validate.sh <MG_CHECKPOINT> <HF_MODEL> [CONFIG_NAME] [--verbose]"
+    echo ""
+    echo "Validates that Megatron checkpoint weights match HuggingFace model weights."
+    echo "NOTE: MG GatedDeltaNet does NOT support inference, so we compare weights directly."
     echo ""
     echo "Arguments:"
-    echo "  CHECKPOINT_PATH: Path to Megatron checkpoint directory"
-    echo "  CONFIG_NAME:     Config name (default: baseline_48L)"
-    echo ""
-    echo "Example:"
-    echo "  bash chat.sh /data/checkpoints/alpha_48L baseline_48L"
-    exit 1
-fi
-
-if [ ! -d "$CHECKPOINT_PATH" ]; then
-    echo "Error: Checkpoint path '$CHECKPOINT_PATH' does not exist"
+    echo "  MG_CHECKPOINT: Path to Megatron checkpoint directory"
+    echo "  HF_MODEL:      Path to HuggingFace model directory"
+    echo "  CONFIG_NAME:   Config name (default: baseline_48L)"
+    echo "  --verbose:     Print detailed comparison for all weights"
     exit 1
 fi
 
@@ -43,10 +58,12 @@ export PYTHONPATH="$ROOT_DIR:$MEGATRON_PATH:$PYTHONPATH"
 export CUDA_DEVICE_MAX_CONNECTIONS=1
 
 echo "=============================================================="
-echo "Alpha Chat - Megatron Checkpoint"
+echo "Alpha Model MG ↔ HF Weight Validation"
 echo "=============================================================="
-echo "Checkpoint: $CHECKPOINT_PATH"
-echo "Config:     $CONFIG_NAME"
+echo "MG Checkpoint: $MG_CHECKPOINT"
+echo "HF Model:      $HF_MODEL"
+echo "Config:        $CONFIG_NAME"
+echo "Verbose:       ${VERBOSE_FLAG:-no}"
 echo "=============================================================="
 
 # Load config
@@ -114,13 +131,14 @@ echo "  Layers: $NUM_LAYERS"
 echo "  Hidden: $HIDDEN_SIZE"
 echo "  Heads:  $NUM_ATTENTION_HEADS"
 echo "  Experts: $NUM_EXPERTS"
-echo "  Pattern: $OVERRIDE_PATTERN"
+echo "  Pattern: ${OVERRIDE_PATTERN:0:50}..."
 echo ""
 
-# Run chat with torchrun (single GPU)
+# Run validation with torchrun (single GPU for validation)
 torchrun --nproc_per_node=1 \
-    "$SCRIPT_DIR/chat_megatron.py" \
-    --mg-checkpoint "$CHECKPOINT_PATH" \
+    "$SCRIPT_DIR/validate_mg_hf_full.py" \
+    --mg-checkpoint "$MG_CHECKPOINT" \
+    --hf-model "$HF_MODEL" \
     --tensor-model-parallel-size 1 \
     --pipeline-model-parallel-size 1 \
     --num-layers "$NUM_LAYERS" \
@@ -165,7 +183,9 @@ torchrun --nproc_per_node=1 \
     --micro-batch-size 1 \
     --no-load-optim \
     --no-load-rng \
-    --temperature 0.7 \
-    --top-p 0.9 \
-    --top-k 50 \
-    --max-new-tokens 256
+    --ckpt-format torch_dist \
+    --threshold 0.01 \
+    $VERBOSE_FLAG
+
+echo ""
+echo "Validation completed."

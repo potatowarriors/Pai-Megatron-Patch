@@ -77,7 +77,7 @@ echo -e "\n[2] 설정 파일"
 
 CONFIG_DIR="${ALPHA_DIR}/configs"
 CONFIG_FILES=(
-    "model/baseline_24L.yaml"
+    "model/baseline_48L.yaml"
     "training/pretrain.yaml"
     "training/h100x8.yaml"
     "data/kormo_1pct.yaml"
@@ -129,7 +129,7 @@ echo -e "\n[4] 토크나이저"
 
 TOKENIZER_PATH=$(python3 -c "
 import yaml
-with open('${CONFIG_DIR}/model/baseline_24L.yaml', 'r') as f:
+with open('${CONFIG_DIR}/model/baseline_48L.yaml', 'r') as f:
     data = yaml.safe_load(f)
 print(data['model']['tokenizer_path'])
 " 2>/dev/null)

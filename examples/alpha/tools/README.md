@@ -10,21 +10,21 @@
 
 | 파일 | 용도 | 수정 필요 시점 |
 |------|------|---------------|
-| `configs/model/baseline_24L.yaml` | 학습 설정 | 모델 구조 변경 시 |
-| `toolkits/.../configs/baseline_24L.sh` | 변환 설정 | 모델 구조 변경 시 |
+| `configs/model/baseline_48L.yaml` | 학습 설정 | 모델 구조 변경 시 |
+| `toolkits/.../configs/baseline_48L.sh` | 변환 설정 | 모델 구조 변경 시 |
 | `hfmodel/config.json` | HF 모델 설정 | 모델 구조 변경 시 |
 
 ### 해결책 (통합 Config)
 
 ```
-examples/alpha/configs/model/baseline_24L.yaml  (Single Source of Truth)
+examples/alpha/configs/model/baseline_48L.yaml  (Single Source of Truth)
                     ↓
-           python alpha_config.py sync baseline_24L
+           python alpha_config.py sync baseline_48L
                     ↓
     ┌───────────────┴───────────────┐
     ↓                               ↓
 변환 설정 자동 생성           HF config 자동 생성
-(baseline_24L.sh)            (config.json)
+(baseline_48L.sh)            (config.json)
 ```
 
 ## 사용법
@@ -32,45 +32,45 @@ examples/alpha/configs/model/baseline_24L.yaml  (Single Source of Truth)
 ### 1. 설정 검증
 
 ```bash
-python tools/alpha_config.py validate baseline_24L
+python tools/alpha_config.py validate baseline_48L
 ```
 
 출력:
 ```
-✅ Validation PASSED for baseline_24L
+✅ Validation PASSED for baseline_48L
 
 📊 Model Summary:
-  - Megatron layers: 24
-  - HuggingFace layers: 12
-  - Pattern: M-M-M-*-M-M-M-*-M-M-M-*-
-  - Mamba layers: 9 (37.5%)
-  - Attention layers: 3 (12.5%)
-  - MLP layers: 12 (50.0%)
-  - Experts: 256 (top-8)
+  - Megatron layers: 48
+  - HuggingFace layers: 24
+  - Pattern: MDM-M-*-M-M-M-*-M-M-M-*-M-M-M-*-M-M-M-*-M-M-M-*-
+  - Mamba layers: 18 (37.5%)
+  - Attention layers: 6 (12.5%)
+  - MLP layers: 24 (50.0%)
+  - Experts: 128 (top-8)
 ```
 
 ### 2. 변환 설정 동기화
 
 ```bash
-python tools/alpha_config.py sync baseline_24L
+python tools/alpha_config.py sync baseline_48L
 ```
 
-이 명령은 `configs/model/baseline_24L.yaml`에서 읽어 `toolkits/.../configs/baseline_24L.sh`를 자동 생성합니다.
+이 명령은 `configs/model/baseline_48L.yaml`에서 읽어 `toolkits/.../configs/baseline_48L.sh`를 자동 생성합니다.
 
 ### 3. HF config.json 생성
 
 ```bash
 # 표준 출력
-python tools/alpha_config.py generate-hf-config baseline_24L
+python tools/alpha_config.py generate-hf-config baseline_48L
 
 # 파일로 저장
-python tools/alpha_config.py generate-hf-config baseline_24L --output /path/to/config.json
+python tools/alpha_config.py generate-hf-config baseline_48L --output /path/to/config.json
 ```
 
 ### 4. 학습 인자 생성
 
 ```bash
-python tools/alpha_config.py generate-train-args baseline_24L
+python tools/alpha_config.py generate-train-args baseline_48L
 ```
 
 ## 새 모델 크기 추가하기
