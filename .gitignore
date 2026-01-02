@@ -9,6 +9,7 @@ datasets
 logs/
 models/
 outputs/qwen3next_h100x8_20251112_182410/logs
+examples/alpha/configs/data/.cache
 
 # Temporary and intermediate files
 *.tmp
@@ -45,3 +46,8 @@ __pycache__/
 .vscode/
 .idea/
 *.sublime-*
+
+# Internal documentation (not for public GitHub)
+CLAUDE.md
+examples/alpha/docs/
+toolkits/distributed_checkpoints_convertor/scripts/alpha/docs/
