@@ -18,6 +18,13 @@ import argparse
 import inspect
 from typing import Union
 
+# Monkey patch: Replace Megatron's mamba_hybrid_layer_allocation with patched version
+# IMPORTANT: This must be done BEFORE any Megatron imports that instantiate MambaStack
+# The patched version (megatron_patch/ssm/) supports Dense MLP ('D') symbol
+import sys
+import megatron_patch.ssm.mamba_hybrid_layer_allocation as patched_mamba_allocation
+sys.modules['megatron.core.ssm.mamba_hybrid_layer_allocation'] = patched_mamba_allocation
+
 from importlib import import_module
 from functools import partial
 
@@ -95,7 +102,7 @@ def add_args(parser):
     group.add_argument('--hf-dir', type=str, help='pretrained huggingface checkpoint directory')
 
     patch_if_not_exist(group, '--padded-vocab-size', type=int, default=None)
-    group.add_argument('--target-ckpt-format', default='torch_dist', choices=['torch_dist'], help='Checkpoint format to use.')
+    group.add_argument('--target-ckpt-format', default='torch_dist', choices=['torch_dist', 'torch'], help='Checkpoint format to use.')
     group.add_argument('--use-gpu', action='store_true')
     group.add_argument('--mcore2hf', action='store_true')
     group.add_argument('--debug', action='store_true', help='enable debug mode to check the integrity of conversion, could be slow for large models')
@@ -116,7 +123,7 @@ if __name__ == '__main__':
         args.num_hf_saver = actual_world_size
     print(f"WORLD_SIZE: {actual_world_size}, RANK: {actual_rank}, LOCAL_RANK: {args.local_rank}")
 
-    if args.target_ckpt_format == 'torch_dist':
+    if args.target_ckpt_format in ['torch_dist', 'torch']:
         convert(
             args.synchronizer,
             args.pretrain_script,
@@ -126,7 +133,7 @@ if __name__ == '__main__':
             mcore2hf=args.mcore2hf
         )
     else:
-        raise NotImplementedError()
+        raise NotImplementedError(f"Unsupported checkpoint format: {args.target_ckpt_format}")
 
     torch.distributed.barrier()
     end_time = time.time()

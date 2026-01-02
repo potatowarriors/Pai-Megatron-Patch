@@ -6,9 +6,9 @@ Alpha 모델의 HuggingFace ↔ Megatron 체크포인트 변환 도구입니다.
 
 Alpha는 Qwen3-Next Mamba Hybrid 아키텍처 기반의 모델입니다:
 
-- **24 Megatron layers → 12 HF layers** (2:1 mapping)
-- **256 experts** with Top-8 routing
-- **Hybrid pattern**: `M-M-M-*-` (3 Mamba + 1 Full Attention, repeating)
+- **48 Megatron layers → 24 HF layers** (2:1 mapping)
+- **128 experts** with Top-8 routing
+- **Hybrid pattern**: GatedDeltaNet + Full Attention
 - **TP=1 constraint**: Mamba layers require Tensor Parallelism = 1
 
 > **상세 가이드**: 아키텍처 변경, 트러블슈팅, 내부 동작 원리는 [examples/alpha/docs/CONVERSION.md](../../../../examples/alpha/docs/CONVERSION.md) 참조
@@ -31,7 +31,7 @@ export TORCH_FORCE_NO_WEIGHTS_ONLY_LOAD=true
 cd /path/to/Pai-Megatron-Patch/toolkits/distributed_checkpoints_convertor
 
 bash scripts/alpha/run_8xH20.sh \
-  baseline_24L \
+  baseline_48L \
   /path/to/alpha-hf-checkpoint \
   /path/to/alpha-mcore-output \
   false \
@@ -43,7 +43,7 @@ bash scripts/alpha/run_8xH20.sh \
 
 ```bash
 bash scripts/alpha/run_8xH20.sh \
-  baseline_24L \
+  baseline_48L \
   /path/to/alpha-mcore-checkpoint \
   /path/to/alpha-hf-output \
   true \
@@ -58,7 +58,7 @@ bash scripts/alpha/run_8xH20.sh \
 
 | 위치 | 인자 | 설명 | 예시 |
 |------|------|------|------|
-| 1 | `MODEL_SIZE` | 모델 설정 | `baseline_24L`, `baseline_32L` |
+| 1 | `MODEL_SIZE` | 모델 설정 | `baseline_48L`, `baseline_32L` |
 | 2 | `LOAD_DIR` | 입력 체크포인트 경로 | `/data/ckpts/alpha-hf` |
 | 3 | `SAVE_DIR` | 출력 경로 | `/data/ckpts/alpha-mcore` |
 | 4 | `MG2HF` | 변환 방향 | `true` (MG→HF), `false` (HF→MG) |
@@ -70,24 +70,25 @@ bash scripts/alpha/run_8xH20.sh \
 
 ## Model Configurations
 
-### baseline_24L (현재 지원)
+### baseline_48L (현재 지원)
 
 ```yaml
 # Architecture
-num_layers: 24 (MG) → 12 (HF)
+num_layers: 48 (MG) → 24 (HF)
 hidden_size: 2048
+ffn_hidden_size: 8192
 num_attention_heads: 32
 num_query_groups: 2
 
 # MoE
-num_experts: 256
+num_experts: 128
 router_topk: 8
 moe_ffn_hidden_size: 768
 
 # Hybrid Pattern
-hybrid_attention_ratio: 0.125    # 12.5% (24 layers 중 3개)
-hybrid_mlp_ratio: 0.5            # 50% (24 layers 중 12개)
-hybrid_override_pattern: "M-M-M-*-M-M-M-*-M-M-M-*-M-M-M-*-M-M-M-*-M-M-M-*-"
+hybrid_attention_ratio: 0.125    # 12.5% (48 layers 중 6개)
+hybrid_mlp_ratio: 0.5            # 50% (48 layers 중 24개)
+hybrid_override_pattern: "MDM-M-*-M-M-M-*-M-M-M-*-M-M-M-*-M-M-M-*-M-M-M-*-"
 
 # Parallelism
 TP: 1 (필수), PP: 1, EP: 8, DP: 1
@@ -112,7 +113,7 @@ from transformers import AutoModelForCausalLM
 model = AutoModelForCausalLM.from_pretrained('/path/to/alpha-hf-output', device_map='auto')
 print(f'✓ Loaded {len(model.model.layers)} layers')
 "
-# Expected: 12 layers (HF format)
+# Expected: 24 layers (HF format)
 ```
 
 ### 변환 설정 검증
@@ -121,10 +122,10 @@ print(f'✓ Loaded {len(model.model.layers)} layers')
 
 ```
 ✓ Alpha arguments validation passed
-✓ Pattern length matches num_layers: 24
-✓ Valid pattern characters: M, *, -
-✓ Attention ratio: 3/24 = 0.125 (matches config)
-✓ MG Layers: 24 → HF Layers: 12 (2:1 mapping)
+✓ Pattern length matches num_layers: 48
+✓ Valid pattern characters: M, *, -, D
+✓ Attention ratio: 6/48 = 0.125 (matches config)
+✓ MG Layers: 48 → HF Layers: 24 (2:1 mapping)
 ```
 
 ---
@@ -152,7 +153,7 @@ print(f'✓ Loaded {len(model.model.layers)} layers')
 ```bash
 for iter in 1000 5000 10000; do
   bash scripts/alpha/run_8xH20.sh \
-    baseline_24L \
+    baseline_48L \
     outputs/alpha_*/checkpoints/iter_$(printf "%07d" $iter) \
     hf_models/alpha_iter${iter} \
     true true bf16 /path/to/hf-reference
@@ -162,10 +163,10 @@ done
 ### Custom Expert Parallelism
 
 ```bash
-# EP=4로 변환 (256 experts / 4 = 64 per GPU)
+# EP=4로 변환 (128 experts / 4 = 32 per GPU)
 # run_8xH20.sh에서 EXPERT_PARALLEL_SIZE 수정 또는:
 export EXPERT_PARALLEL_SIZE=4
-bash scripts/alpha/run_8xH20.sh baseline_24L /load /save true true bf16 /hf-ref
+bash scripts/alpha/run_8xH20.sh baseline_48L /load /save true true bf16 /hf-ref
 ```
 
 ---
@@ -184,7 +185,7 @@ bash scripts/alpha/run_8xH20.sh baseline_24L /load /save true true bf16 /hf-ref
   - FAQ 및 성능 최적화
 
 - **관련 파일**:
-  - 모델 설정: [examples/alpha/configs/model/baseline_24L.yaml](../../../../examples/alpha/configs/model/baseline_24L.yaml)
+  - 모델 설정: [examples/alpha/configs/model/baseline_48L.yaml](../../../../examples/alpha/configs/model/baseline_48L.yaml)
   - 변환 구현: [toolkits/.../impl/alpha/m2h_synchronizer.py](../../impl/alpha/m2h_synchronizer.py)
   - 모델 정의: [toolkits/.../impl/alpha/model_provider.py](../../impl/alpha/model_provider.py)
 
