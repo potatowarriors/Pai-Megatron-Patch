@@ -1,0 +1,14 @@
+# Credentials (NEVER commit!)
+.env
+
+# State files (local only)
+state/backup_state.json
+state/backup.lock
+state/backup.pid
+
+# Log files
+logs/*.log
+
+# Keep directory structure
+!state/.gitkeep
+!logs/.gitkeep

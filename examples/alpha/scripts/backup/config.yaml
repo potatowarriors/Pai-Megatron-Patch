@@ -1,0 +1,58 @@
+# Alpha Checkpoint Backup Configuration
+# =====================================
+# Automatic backup of Megatron distributed checkpoints to MinIO
+
+backup:
+  # Source settings
+  source:
+    # Base path for experiment outputs
+    base_path: "/home/work/vidsearch/repos/project_s/Pai-Megatron-Patch/examples/alpha/outputs"
+    # Glob pattern for experiment directories (only Alpha experiments)
+    experiment_pattern: "alpha_baseline_*"
+    # Subdirectory containing checkpoints
+    checkpoint_dir: "checkpoints"
+    # File that indicates checkpoint completion (contains latest iteration number)
+    completion_indicator: "latest_checkpointed_iteration.txt"
+
+  # MinIO/S3 destination settings
+  # Credentials are read from environment variables:
+  #   - MINIO_ENDPOINT (e.g., "http://minio.example.com:9000")
+  #   - MINIO_ACCESS_KEY
+  #   - MINIO_SECRET_KEY
+  #   - MINIO_SECURE (optional, default: false)
+  #   - MINIO_REGION (optional, default: us-east-1)
+  destination:
+    bucket: "vc-data"
+    prefix: "Opensource-data/Text/LLM/pretraining/alpha-checkpoints"
+
+  # Upload settings for large checkpoint files (~29GB total, ~2GB per shard)
+  upload:
+    # Use multipart upload for files larger than this (bytes)
+    multipart_threshold: 104857600      # 100MB
+    # Chunk size for multipart uploads (bytes)
+    multipart_chunksize: 104857600      # 100MB
+    # Number of parallel threads per file upload
+    max_concurrency: 8
+    # Number of files to upload simultaneously
+    max_parallel_files: 4
+    # Retry configuration
+    retry_attempts: 3
+    retry_delay: 5                      # seconds
+
+  # State tracking to avoid re-uploading
+  state:
+    state_file: "state/backup_state.json"
+    lock_file: "state/backup.lock"
+    lock_timeout: 7200                  # 2 hours (for large uploads)
+
+  # Integrity verification
+  verification:
+    enabled: true
+    # Verify file size after upload (S3 ETag for multipart is not simple MD5)
+    verify_after_upload: true
+
+  # Logging configuration
+  logging:
+    log_dir: "logs"
+    log_level: "INFO"                   # DEBUG, INFO, WARNING, ERROR
+    max_log_files: 30                   # Days to keep logs
