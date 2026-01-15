@@ -118,6 +118,29 @@ if [[ "${SAVE_DIR}" == "auto"* ]]; then
     fi
 fi
 
+# ============================================================================
+# Checkpoint Path Fix for Megatron Distributed Checkpoints
+# ============================================================================
+# Megatron's load_checkpoint() looks for latest_checkpointed_iteration.txt
+# in the --load-dir path. When iter_NNNNNN is passed directly, it fails.
+#
+# Fix: Extract iteration from path and use parent directory with --ckpt-step
+# ============================================================================
+CKPT_STEP=""
+if [[ "${LOAD_DIR}" =~ iter_([0-9]+) ]]; then
+    ITERATION="${BASH_REMATCH[1]}"
+    PARENT_DIR=$(dirname "${LOAD_DIR}")
+
+    # Check if parent directory has latest_checkpointed_iteration.txt
+    if [ -f "${PARENT_DIR}/latest_checkpointed_iteration.txt" ]; then
+        echo "📍 Detected iter_${ITERATION} path, adjusting for Megatron checkpoint loading:"
+        echo "   Original: ${LOAD_DIR}"
+        echo "   Adjusted: ${PARENT_DIR} with --ckpt-step ${ITERATION}"
+        LOAD_DIR="${PARENT_DIR}"
+        CKPT_STEP="${ITERATION}"
+    fi
+fi
+
 # Alpha config tool path
 ALPHA_DIR="${MEGATRON_PATCH_PATH}/examples/alpha"
 ALPHA_CONFIG_TOOL="${ALPHA_DIR}/tools/alpha_config.py"
@@ -284,6 +307,11 @@ CONVERT_ARGS=(
     --auto-detect-ckpt-format    # Support both torch and torch_dist checkpoint formats
     # --debug  # Disabled for Alpha EP-only conversion
 )
+
+# Add --ckpt-step if detected from iter_NNNNNN path
+if [ -n "${CKPT_STEP}" ]; then
+    CONVERT_ARGS+=(--ckpt-step ${CKPT_STEP})
+fi
 
 # Change to CONVERTOR_DIR to use relative path impl/convert.py
 cd ${CONVERTOR_DIR}

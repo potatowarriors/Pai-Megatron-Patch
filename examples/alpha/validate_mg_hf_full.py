@@ -1146,9 +1146,34 @@ def main():
     # Load checkpoint
     if checkpoint_path:
         original_load = args.load
-        args.load = checkpoint_path
+        original_ckpt_step = getattr(args, 'ckpt_step', None)
+
+        # Extract iteration from path (e.g., iter_0050000 -> 50000)
+        # Megatron's load_checkpoint looks for latest_checkpointed_iteration.txt
+        # in args.load directory. For specific iteration dirs, we need to:
+        # 1. Set args.load to parent directory (checkpoints/)
+        # 2. Set args.ckpt_step to the iteration number
+        import re
+        match = re.search(r'iter_(\d+)', checkpoint_path)
+        if match:
+            ckpt_step = int(match.group(1))
+            parent_dir = os.path.dirname(checkpoint_path)
+            args.load = parent_dir
+            args.ckpt_step = ckpt_step
+            print_rank_0(f"  Checkpoint path: {parent_dir}")
+            print_rank_0(f"  Checkpoint step: {ckpt_step}")
+        else:
+            # Fallback: assume checkpoint_path is the checkpoints/ directory
+            args.load = checkpoint_path
+
         iteration, _ = load_checkpoint(model, None, None)
+
+        # Restore original values
         args.load = original_load
+        if original_ckpt_step is not None:
+            args.ckpt_step = original_ckpt_step
+        elif hasattr(args, 'ckpt_step'):
+            args.ckpt_step = None
 
         if iteration is not None and iteration > 0:
             print_rank_0(f"  ✓ Checkpoint loaded! Iteration: {iteration}")

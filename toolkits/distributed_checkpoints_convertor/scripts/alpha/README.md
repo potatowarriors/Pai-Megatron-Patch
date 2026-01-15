@@ -181,6 +181,41 @@ print(f'✓ Loaded {len(model.model.layers)} layers')
 
 > **상세 트러블슈팅**: [CONVERSION.md](../../../../examples/alpha/docs/CONVERSION.md#트러블슈팅) 참조
 
+### Checkpoint Path Handling (중요)
+
+Megatron의 distributed checkpoint 로딩은 `latest_checkpointed_iteration.txt` 파일을 요구합니다:
+
+```
+checkpoints/
+├── latest_checkpointed_iteration.txt  ← 필수! (예: "100000")
+├── iter_0050000/
+│   ├── .metadata
+│   └── __0_0.distcp, ...
+└── iter_0100000/
+    └── ...
+```
+
+**문제**: `iter_0100000` 경로를 직접 전달하면 `latest_checkpointed_iteration.txt`가 없어 checkpoint 로딩 실패
+
+```
+WARNING: could not find the metadata file .../iter_0100000/latest_checkpointed_iteration.txt
+    will not load any checkpoints and will start from random
+```
+
+**해결책 (v2025.01 이후 자동 적용)**:
+
+스크립트가 `iter_NNNNNN` 패턴을 감지하면 자동으로:
+1. 상위 `checkpoints/` 디렉토리를 `--load-dir`로 설정
+2. `--ckpt-step NNNNNN` 옵션 추가
+
+```
+📍 Detected iter_0100000 path, adjusting for Megatron checkpoint loading:
+   Original: .../checkpoints/iter_0100000
+   Adjusted: .../checkpoints with --ckpt-step 100000
+```
+
+> **참고**: 이 수정은 `run_8xH20.sh`와 `validate.sh` 모두에 적용되었습니다.
+
 ---
 
 ## Advanced Usage
