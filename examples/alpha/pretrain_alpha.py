@@ -135,6 +135,72 @@ if __name__ == "__main__":
     _training_mod.clip_qk = _hybrid_clip_qk
     # ─────────────────────────────────────────────────────────────────────
 
+    # ── LayerNorm WD: apply_wd_to_all_layernorm ────────────────────────
+    # Upstream get_no_weight_decay_cond only supports 'apply_wd_to_qk_layernorm'
+    # (q/k_layernorm only). For Stage 2+ ablation we want WD on ALL standard
+    # LayerNorms (input, post_attention, q/k, final) to keep zero-centered
+    # gamma close to identity (raw w → 0 ⇔ effective γ = 1+w → 1).
+    #
+    # Mamba's linear_attn.norm uses RMSNormGated (init=ones, NOT zero-centered)
+    # so standard WD would push γ → 0 and destroy normalization. Excluded
+    # explicitly. See plan: floofy-noodling-coral.md
+    _orig_get_no_weight_decay_cond = _training_mod.get_no_weight_decay_cond
+
+    def _patched_get_no_weight_decay_cond(
+        no_weight_decay_cond_type, default_skip_embedding_weight_decay
+    ):
+        if no_weight_decay_cond_type != "apply_wd_to_all_layernorm":
+            return _orig_get_no_weight_decay_cond(
+                no_weight_decay_cond_type, default_skip_embedding_weight_decay
+            )
+
+        def apply_wd_to_all_layernorm_fn(name, param):
+            lname = name.lower()
+            # === EXCLUSIONS (Mamba RMSNormGated — NOT zero-centered) ===
+            # Order matters: must check exclusions BEFORE the .norm.weight
+            # inclusion below, since mixer.norm.weight would match both.
+            if "mixer.norm" in lname:
+                return True
+            if "linear_attn" in lname and "norm" in lname:
+                return True
+
+            # === INCLUSIONS (zero-centered LayerNorms — apply WD) ===
+            # 1. Standard Megatron names: input_layernorm, pre_mlp_layernorm,
+            #    post_attention_layernorm, q_layernorm, k_layernorm, final_layernorm.
+            if "layernorm" in lname or "layer_norm" in lname:
+                return False
+            # 2. Mamba pre-mixer norm: decoder.layers.X.norm.weight
+            #    (functionally equivalent to input_layernorm; zero-centered via 1p).
+            if lname.endswith(".norm.weight"):
+                return False
+
+            # === DEFAULT Megatron exclusions ===
+            return (
+                name.endswith(".bias")
+                or len(param.shape) == 1
+                or (default_skip_embedding_weight_decay and "embedding" in name)
+            )
+
+        return apply_wd_to_all_layernorm_fn
+
+    _training_mod.get_no_weight_decay_cond = _patched_get_no_weight_decay_cond
+
+    # Extend --no-weight-decay-cond-type argparse choices to accept the new value.
+    # Upstream restricts choices=['apply_wd_to_qk_layernorm']; without this wrapper,
+    # passing 'apply_wd_to_all_layernorm' would fail at argparse.
+    import argparse as _argparse
+
+    def _alpha_extra_args_provider(parser):
+        get_patch_args(parser)
+        for action in parser._actions:
+            if isinstance(action, _argparse._StoreAction) and (
+                "--no-weight-decay-cond-type" in action.option_strings
+            ):
+                if "apply_wd_to_all_layernorm" not in action.choices:
+                    action.choices.append("apply_wd_to_all_layernorm")
+                break
+    # ─────────────────────────────────────────────────────────────────────
+
     # 분산 데이터 로딩 활성화
     train_valid_test_datasets_provider.is_distributed = True
 
@@ -144,5 +210,5 @@ if __name__ == "__main__":
         model_provider,
         ModelType.encoder_or_decoder,
         forward_step,
-        extra_args_provider=get_patch_args,
+        extra_args_provider=_alpha_extra_args_provider,
     )

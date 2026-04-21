@@ -1,0 +1,87 @@
+# Alpha Stage 2 Ablation — LayerNorm Weight Decay
+#
+# Stage 2-2 base setup + apply weight decay to ALL standard LayerNorms
+# (input, post_attention, q/k, final) instead of QK-only.
+#
+# Hypothesis: Adam-managed LayerNorm gamma is unbounded (no Muon spectral
+# limit), drifts as a "shortcut", causing loss/grad spikes. Standard WD
+# on raw w (init=0) is equivalent to pulling effective γ = 1+w toward 1
+# because Alpha uses apply_layernorm_1p=true (zero-centered gamma).
+#
+# linear_attn.norm (Mamba RMSNormGated, init=ones) is EXCLUDED from WD
+# in the patched cond function (see pretrain_alpha.py).
+#
+# 사용법:
+#   bash train_stage2_2.sh baseline_48L stage2_ablation_layernorm_wd h100x8 stage2_2
+#   (data config은 stage2_2 그대로 — consumed_samples 이어서)
+#
+# 변경점 vs stage2_2.yaml:
+#   - no_weight_decay_cond_type: apply_wd_to_qk_layernorm → apply_wd_to_all_layernorm
+#   - resume.load_checkpoint_path: stage2-2 진행 중인 run 경로로 갱신 필요
+#   - wandb.notes: ablation 명시
+
+training:
+  # Resume 설정
+  resume:
+    enabled: true
+    load_checkpoint_path: "/home/work/vidsearch/repos/project_s/Pai-Megatron-Patch/examples/alpha/outputs/alpha_baseline_48L_stage2_20260301_015403/checkpoints"
+    finetune: false             # consumed_samples 유지 (같은 dataset 이어서)
+    no_load_optim: true         # optimizer/scheduler 리셋 (새 cosine schedule)
+
+  # Iteration 설정 (200k resume → 400k 종료)
+  train_iters: 400000           # 총 iteration (200k에서 resume)
+  lr_warmup_iters: 500          # 빠른 warmup
+  lr_decay_iters: 200000        # cosine이 200k iteration에 걸쳐 완료
+
+  # LR Schedule — Cosine (warmup + cosine decay)
+  lr: 1.0e-4
+  min_lr: 1.0e-5
+  lr_decay_style: "cosine"
+
+  # QK-Clip (stage2_2와 동일)
+  qk_clip: true
+  qk_clip_alpha: 0.5
+  qk_clip_threshold: 100
+
+  # *** ABLATION CHANGE *** — WD를 모든 표준 LayerNorm에 적용
+  # apply_wd_to_qk_layernorm (기존, q/k만) → apply_wd_to_all_layernorm
+  # patched in examples/alpha/pretrain_alpha.py
+  no_weight_decay_cond_type: apply_wd_to_all_layernorm
+
+  # Optimizer (stage2_2와 동일)
+  optimizer: "dist_muon"
+  weight_decay: 0.01
+  adam_beta1: 0.9
+  adam_beta2: 0.95
+  muon_momentum: 0.95
+  muon_use_nesterov: true
+  muon_num_ns_steps: 5
+  muon_scale_mode: "spectral"
+  muon_fp32_matmul_prec: "medium"
+  muon_tp_mode: "blockwise"
+  muon_extra_scale_factor: 0.2
+  init_method_std: 0.008
+  clip_grad: 1.0
+
+  # Checkpoint
+  save_interval: 25000
+  save_optim: false             # optimizer 리셋 후 warmup으로 충분
+  ckpt_format: "torch_dist"
+  precision: "bf16"
+
+  # 평가
+  eval_iters: 8
+  eval_interval: 25000
+
+  # 기타 (stage2_2와 동일)
+  distributed_timeout_minutes: 60
+  manual_gc_interval: 5
+  log_interval: 1
+
+  # Weights & Biases
+  wandb:
+    enabled: true
+    project: "alpha-pretraining"
+    entity: ""
+    save_dir: ""
+    notes: "Stage 2 ablation: WD on ALL LayerNorm (apply_wd_to_all_layernorm), linear_attn.norm excluded"
