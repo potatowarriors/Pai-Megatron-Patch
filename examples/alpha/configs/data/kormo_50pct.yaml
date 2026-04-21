@@ -6,8 +6,8 @@ data:
   # Blended dataset (가중치 생략 시 데이터 크기 비례로 자동 혼합)
   # DCLM 1.9TB (~90%), korean_web 208GB (~10%)
   blend:
-    - path: "/home/work/vidsearch/repos/project_s/Pai-Megatron-Patch/datasets/processed/qwen3_50pct/dclm/dclm_content_document"
-    - path: "/home/work/vidsearch/repos/project_s/Pai-Megatron-Patch/datasets/processed/qwen3_50pct/korean_web/korean_web_content_document"
+    - path: "/home/work/vidsearch/repos/project_s/Pai-Megatron-Patch/datasets/processed/stage1_50pct/dclm/dclm_content_document"
+    - path: "/home/work/vidsearch/repos/project_s/Pai-Megatron-Patch/datasets/processed/stage1_50pct/korean_web/korean_web_content_document"
 
   # 데이터셋 타입
   dataset_impl: "MMAP"

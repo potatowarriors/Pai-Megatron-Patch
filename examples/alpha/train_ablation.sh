@@ -1,20 +1,24 @@
 #!/bin/bash
 #
-# Alpha 프로젝트 통합 학습 스크립트
-# YAML 기반 설정으로 Qwen3-Next Mamba 모델 학습
+# Alpha 프로젝트 Ablation 학습 스크립트
+# train_cooldown.sh 기반, Stage 2 패치(QK-Clip + QK LN WD) ablation 전용
+#
+# 목적:
+#   Stage 2 초반 anomaly (낮은 초기 loss + grad norm spike) 원인 분석
+#   기존 cooldown 설정을 완전히 재현하되 stage2 패치만 추가
+#   → 유일한 변수: QK-Clip + QK LayerNorm Weight Decay
+#
+# train_cooldown.sh 대비 변경사항:
+#   - no_weight_decay_cond_type 지원 추가 (QK LN WD)
+#   - --attention-backend auto (QK-Clip은 flash 미지원, auto 필요)
+#   - NVTE_FLASH_ATTN / NVTE_FUSED_ATTN 미설정 (--attention-backend가 관리)
+#   - 텍스트/경로: cooldown → ablation
 #
 # 사용법:
-#   bash train.sh [model_config] [training_config] [infra_config] [data_config]
+#   bash train_ablation.sh [model_config] [training_config] [infra_config] [data_config]
 #
 # 예시:
-#   bash train.sh  # 기본 설정 사용
-#   bash train.sh baseline_48L pretrain h100x8 kormo_1pct
-#
-# 설정 파일 위치:
-#   configs/model/*.yaml
-#   configs/training/*.yaml
-#   configs/data/*.yaml
-#   configs/env.yaml
+#   bash train_ablation.sh baseline_48L stage2_ablation_s1data h100x8 kormo_50pct
 
 set -e
 
@@ -37,14 +41,14 @@ fi
 MEGATRON_PATCH_PATH=$( dirname $( dirname ${CURRENT_DIR}))
 CONFIG_DIR="${CURRENT_DIR}/configs"
 
-# 설정 파일 인자 (기본값)
+# 설정 파일 인자 (기본값 — ablation defaults)
 MODEL_CONFIG=${1:-"baseline_48L"}
-TRAINING_CONFIG=${2:-"pretrain"}
+TRAINING_CONFIG=${2:-"stage2_ablation_s1data"}
 INFRA_CONFIG=${3:-"h100x8"}
-DATA_CONFIG=${4:-"kormo_1pct"}
+DATA_CONFIG=${4:-"kormo_50pct"}
 
 echo "=============================================="
-echo "Alpha 프로젝트 학습 설정"
+echo "Alpha 프로젝트 Ablation 학습 설정"
 echo "=============================================="
 echo "모델 설정: ${MODEL_CONFIG}"
 echo "학습 설정: ${TRAINING_CONFIG}"
@@ -108,8 +112,8 @@ if [ -f "$ENV_CONFIG" ]; then
     export NVTE_NORM_FWD_USE_CUDNN=$(yaml_get $ENV_CONFIG "environment.transformer_engine.norm_fwd_use_cudnn")
     export NVTE_NORM_BWD_USE_CUDNN=$(yaml_get $ENV_CONFIG "environment.transformer_engine.norm_bwd_use_cudnn")
     export NVTE_ALLOW_NONDETERMINISTIC_ALGO=$(yaml_get $ENV_CONFIG "environment.transformer_engine.allow_nondeterministic_algo")
-    export NVTE_FLASH_ATTN=$(yaml_get $ENV_CONFIG "environment.transformer_engine.flash_attn")
-    export NVTE_FUSED_ATTN=$(yaml_get $ENV_CONFIG "environment.transformer_engine.fused_attn")
+    # NVTE_FLASH_ATTN / NVTE_FUSED_ATTN: --attention-backend가 관리
+    # 수동 export 시 Megatron _set_attention_backend() assert 충돌 발생
 
     # NCCL
     export NCCL_DEBUG=$(yaml_get $ENV_CONFIG "environment.nccl.debug")
@@ -162,7 +166,7 @@ DISTRIBUTED_ARGS=(
 )
 
 #==============================================================================
-# 인프라 설정 로드 (h100x8.yaml)
+# 인프라 설정 로드
 #==============================================================================
 
 INFRA_CONFIG_FILE="${CONFIG_DIR}/training/${INFRA_CONFIG}.yaml"
@@ -193,7 +197,7 @@ echo "  - 배치: MBS=${MBS}, GBS=${GBS}, SEQ=${SEQ_LEN}"
 echo ""
 
 #==============================================================================
-# 학습 설정 로드 (pretrain.yaml)
+# 학습 설정 로드 (ablation YAML에서 직접 iteration 읽기)
 #==============================================================================
 
 TRAINING_CONFIG_FILE="${CONFIG_DIR}/training/${TRAINING_CONFIG}.yaml"
@@ -205,47 +209,29 @@ fi
 
 echo "학습 설정 로드 중: ${TRAINING_CONFIG}.yaml"
 
-# 토큰 및 Iteration 계산
-# train_samples가 지정되면 samples 기반, 아니면 tokens 기반으로 계산
-TRAIN_SAMPLES=$(yaml_get $TRAINING_CONFIG_FILE "training.train_samples" 2>/dev/null || echo "")
-if [ -n "${TRAIN_SAMPLES}" ] && [ "${TRAIN_SAMPLES}" != "null" ]; then
-    # 새 방식: 실제 데이터셋 샘플 수 기반 (정확한 1 epoch)
-    TRAIN_ITERS=$(( ${TRAIN_SAMPLES} / ${GBS} ))
-    echo "📊 Train iterations 계산: ${TRAIN_SAMPLES} samples / ${GBS} GBS = ${TRAIN_ITERS} iters"
-else
-    # 기존 방식: train_tokens 기반 계산 (fallback)
-    TRAIN_TOKENS=$(yaml_get $TRAINING_CONFIG_FILE "training.train_tokens")
-    TRAIN_ITERS=$(( ${TRAIN_TOKENS} / ${GBS} / ${SEQ_LEN} ))
-    echo "📊 Train iterations 계산: ${TRAIN_TOKENS} tokens / ${GBS} GBS / ${SEQ_LEN} seq_len = ${TRAIN_ITERS} iters"
+# Iteration (YAML에서 직접 읽기 — token 변환 없음)
+TRAIN_ITERS=$(yaml_get $TRAINING_CONFIG_FILE "training.train_iters")
+LR_WARMUP_ITERS=$(yaml_get $TRAINING_CONFIG_FILE "training.lr_warmup_iters")
+LR_DECAY_ITERS=$(yaml_get $TRAINING_CONFIG_FILE "training.lr_decay_iters")
+
+if [ -z "$TRAIN_ITERS" ] || [ "$TRAIN_ITERS" = "" ]; then
+    echo "❌ train_iters가 YAML에 정의되지 않았습니다."
+    echo "   Ablation config에는 train_iters, lr_warmup_iters, lr_decay_iters가 필요합니다."
+    exit 1
 fi
 
-# Warmup 계산: lr_warmup_fraction이 있으면 fraction 기반, 아니면 tokens 기반
-LR_WARMUP_FRACTION=$(yaml_get $TRAINING_CONFIG_FILE "training.lr_warmup_fraction" 2>/dev/null || echo "")
-if [ -n "${LR_WARMUP_FRACTION}" ] && [ "${LR_WARMUP_FRACTION}" != "null" ]; then
-    # fraction 기반 warmup (iteration과 독립적)
-    LR_WARMUP_ITERS=$(echo "${TRAIN_ITERS} * ${LR_WARMUP_FRACTION}" | bc | cut -d. -f1)
-    echo "📊 Warmup iterations 계산: ${TRAIN_ITERS} * ${LR_WARMUP_FRACTION} = ${LR_WARMUP_ITERS} iters"
-else
-    # 기존 방식: warmup_tokens 기반
-    WARMUP_TOKENS=$(yaml_get $TRAINING_CONFIG_FILE "training.warmup_tokens")
-    LR_WARMUP_ITERS=$(( ${WARMUP_TOKENS} / ${GBS} / ${SEQ_LEN} ))
-fi
-
-LR_DECAY_ITERS=${TRAIN_ITERS}
+echo "📊 Ablation iterations: train=${TRAIN_ITERS}, warmup=${LR_WARMUP_ITERS}, decay=${LR_DECAY_ITERS}"
 
 # Learning Rate
 LR=$(yaml_get $TRAINING_CONFIG_FILE "training.lr")
 MIN_LR=$(yaml_get $TRAINING_CONFIG_FILE "training.min_lr")
 LR_DECAY_STYLE=$(yaml_get $TRAINING_CONFIG_FILE "training.lr_decay_style")
 
-# WSD Scheduler (when lr_decay_style is "WSD")
-LR_WSD_DECAY_STYLE=$(yaml_get $TRAINING_CONFIG_FILE "training.lr_wsd_decay_style")
-LR_WSD_DECAY_TOKENS=$(yaml_get $TRAINING_CONFIG_FILE "training.lr_wsd_decay_tokens")
-
-# QK-Clip (Muon training stabilization, requires TE >= 2.9.0)
+# QK-Clip
 QK_CLIP=$(yaml_get $TRAINING_CONFIG_FILE "training.qk_clip")
 QK_CLIP_ALPHA=$(yaml_get $TRAINING_CONFIG_FILE "training.qk_clip_alpha")
 QK_CLIP_THRESHOLD=$(yaml_get $TRAINING_CONFIG_FILE "training.qk_clip_threshold")
+NO_WEIGHT_DECAY_COND_TYPE=$(yaml_get $TRAINING_CONFIG_FILE "training.no_weight_decay_cond_type")
 
 # Optimizer
 OPTIMIZER=$(yaml_get $TRAINING_CONFIG_FILE "training.optimizer")
@@ -255,7 +241,7 @@ ADAM_BETA2=$(yaml_get $TRAINING_CONFIG_FILE "training.adam_beta2")
 INIT_STD=$(yaml_get $TRAINING_CONFIG_FILE "training.init_method_std")
 CLIP_GRAD=$(yaml_get $TRAINING_CONFIG_FILE "training.clip_grad")
 
-# Muon hyperparameters (when using muon/dist_muon)
+# Muon hyperparameters
 MUON_MOMENTUM=$(yaml_get $TRAINING_CONFIG_FILE "training.muon_momentum")
 MUON_USE_NESTEROV=$(yaml_get $TRAINING_CONFIG_FILE "training.muon_use_nesterov")
 MUON_NUM_NS_STEPS=$(yaml_get $TRAINING_CONFIG_FILE "training.muon_num_ns_steps")
@@ -272,9 +258,43 @@ LOG_INTERVAL=$(yaml_get $TRAINING_CONFIG_FILE "training.log_interval")
 DIST_TIMEOUT=$(yaml_get $TRAINING_CONFIG_FILE "training.distributed_timeout_minutes")
 MANUAL_GC_INTERVAL=$(yaml_get $TRAINING_CONFIG_FILE "training.manual_gc_interval")
 
+#==============================================================================
+# Resume 설정 로드 및 검증
+#==============================================================================
+
+RESUME_ENABLED=$(yaml_get $TRAINING_CONFIG_FILE "training.resume.enabled")
+LOAD_CHECKPOINT_PATH=$(yaml_get $TRAINING_CONFIG_FILE "training.resume.load_checkpoint_path")
+NO_LOAD_OPTIM=$(yaml_get $TRAINING_CONFIG_FILE "training.resume.no_load_optim")
+
+if [ "$RESUME_ENABLED" != "true" ] && [ "$RESUME_ENABLED" != "True" ]; then
+    echo "❌ resume.enabled가 true가 아닙니다."
+    echo "   Ablation 스크립트는 resume 설정이 필수입니다."
+    exit 1
+fi
+
+if [ -z "$LOAD_CHECKPOINT_PATH" ] || [ "$LOAD_CHECKPOINT_PATH" = "" ] || [[ "$LOAD_CHECKPOINT_PATH" == *"<"* ]]; then
+    echo "❌ resume.load_checkpoint_path가 설정되지 않았거나 placeholder입니다."
+    echo "   현재 값: ${LOAD_CHECKPOINT_PATH}"
+    echo "   Stage1 체크포인트 절대 경로를 설정하세요."
+    exit 1
+fi
+
+if [ ! -d "$LOAD_CHECKPOINT_PATH" ]; then
+    echo "❌ 체크포인트 경로가 존재하지 않습니다: ${LOAD_CHECKPOINT_PATH}"
+    exit 1
+fi
+
+echo ""
+echo "=============================================="
+echo "Resume 설정"
+echo "=============================================="
+echo "체크포인트 경로: ${LOAD_CHECKPOINT_PATH}"
+echo "Optimizer 로드 안함: ${NO_LOAD_OPTIM}"
+echo "=============================================="
+
 echo "✅ 학습 설정 완료"
-echo "  - 학습 토큰: ${TRAIN_TOKENS}, Iterations: ${TRAIN_ITERS}"
-echo "  - Learning Rate: ${LR} → ${MIN_LR}"
+echo "  - Iterations: ${TRAIN_ITERS} (warmup=${LR_WARMUP_ITERS}, decay=${LR_DECAY_ITERS})"
+echo "  - Learning Rate: ${LR} → ${MIN_LR} (${LR_DECAY_STYLE})"
 echo ""
 
 #==============================================================================
@@ -296,8 +316,8 @@ if [ "$WANDB_ENABLED" = "True" ] || [ "$WANDB_ENABLED" = "true" ]; then
     WANDB_ENTITY=$(yaml_get $TRAINING_CONFIG_FILE "training.wandb.entity")
     WANDB_SAVE_DIR=$(yaml_get $TRAINING_CONFIG_FILE "training.wandb.save_dir")
 
-    # Experiment name: 자동 생성 (모델_데이터_시간)
-    WANDB_EXP_NAME="${MODEL_CONFIG}_${DATA_CONFIG}_${TIMESTAMP}"
+    # Experiment name: ablation 표시
+    WANDB_EXP_NAME="${MODEL_CONFIG}_${DATA_CONFIG}_ablation_${TIMESTAMP}"
 
     # API 키 확인
     if [ -z "$WANDB_API_KEY" ]; then
@@ -319,7 +339,7 @@ fi
 echo ""
 
 #==============================================================================
-# 데이터 설정 로드 (kormo_1pct.yaml)
+# 데이터 설정 로드
 #==============================================================================
 
 DATA_CONFIG_FILE="${CONFIG_DIR}/data/${DATA_CONFIG}.yaml"
@@ -365,10 +385,6 @@ else
         echo "❌ 오류: 데이터셋 파일을 찾을 수 없습니다!"
         echo "   필요: ${DATA_PATH}.bin"
         echo "   필요: ${DATA_PATH}.idx"
-        echo ""
-        echo "데이터 전처리를 먼저 실행하세요:"
-        echo "  cd toolkits/pretrain_data_preprocessing/"
-        echo "  bash preprocess_kormo_subset.sh 1"
         exit 1
     fi
     echo "  - 경로: ${DATA_PATH}"
@@ -439,10 +455,10 @@ echo "  - Hybrid: ${HYBRID_ATTN_RATIO} attention ratio, pattern: ${HYBRID_PATTER
 echo ""
 
 #==============================================================================
-# 출력 디렉토리 설정
+# 출력 디렉토리 설정 (ablation 표시)
 #==============================================================================
 
-OUTPUT_DIR=${CURRENT_DIR}/outputs/alpha_${MODEL_CONFIG}_${TIMESTAMP}
+OUTPUT_DIR=${CURRENT_DIR}/outputs/alpha_${MODEL_CONFIG}_ablation_${TIMESTAMP}
 TENSORBOARD_DIR=${OUTPUT_DIR}/tensorboard
 CHECKPOINT_DIR=${OUTPUT_DIR}/checkpoints
 LOG_DIR=${OUTPUT_DIR}/logs
@@ -544,8 +560,8 @@ TRAINING_ARGS=(
     --global-batch-size ${GBS}
     --train-iters ${TRAIN_ITERS}
 
-    # NOTE: --load is for checkpoint loading, not tokenizer
-    # Tokenizer is loaded via --tokenizer-model in MODEL_ARGS
+    # Resume: 체크포인트 로드
+    --load ${LOAD_CHECKPOINT_PATH}
 
     # Optimizer
     --optimizer ${OPTIMIZER}
@@ -555,14 +571,12 @@ TRAINING_ARGS=(
     --init-method-std ${INIT_STD}
     --clip-grad ${CLIP_GRAD}
 
-    # Learning Rate
+    # Learning Rate (cosine decay for cooldown)
     --lr ${LR}
     --lr-decay-style ${LR_DECAY_STYLE}
     --min-lr ${MIN_LR}
     --lr-decay-iters ${LR_DECAY_ITERS}
     --lr-warmup-iters ${LR_WARMUP_ITERS}
-
-    # WSD Scheduler (추가 인자는 조건부로 뒤에서 추가)
 
     # Precision
     --bf16
@@ -571,7 +585,7 @@ TRAINING_ARGS=(
     --save ${CHECKPOINT_DIR}
     --save-interval ${SAVE_INTERVAL}
     --no-save-optim
-    --ckpt-format torch_dist  # Muon supports both torch and torch_dist (Megatron-LM-251125+)
+    --ckpt-format torch_dist
 
     # 평가
     --eval-iters ${EVAL_ITERS}
@@ -591,6 +605,12 @@ TRAINING_ARGS=(
     --manual-gc
     --manual-gc-interval ${MANUAL_GC_INTERVAL}
 )
+
+# Resume: --no-load-optim 추가 (조건부)
+if [ "$NO_LOAD_OPTIM" = "true" ] || [ "$NO_LOAD_OPTIM" = "True" ]; then
+    TRAINING_ARGS+=(--no-load-optim)
+    echo "📌 --no-load-optim 활성화 (새 optimizer/scheduler로 시작)"
+fi
 
 #==============================================================================
 # WANDB Arguments (조건부 추가)
@@ -616,23 +636,6 @@ if [ "$WANDB_ENABLED" = "True" ] || [ "$WANDB_ENABLED" = "true" ]; then
     echo "  ✅ WANDB 인자 추가 완료"
 fi
 
-# WSD Scheduler Arguments (조건부 추가)
-if [[ "${LR_DECAY_STYLE}" == "WSD" ]]; then
-    echo "📈 WSD scheduler 인자 추가 중..."
-
-    # tokens → iters 변환
-    LR_WSD_DECAY_ITERS=$(( ${LR_WSD_DECAY_TOKENS} / ${GBS} / ${SEQ_LEN} ))
-
-    TRAINING_ARGS+=(
-        --lr-wsd-decay-style ${LR_WSD_DECAY_STYLE}
-        --lr-wsd-decay-iters ${LR_WSD_DECAY_ITERS}
-    )
-
-    echo "  - WSD Decay Style: ${LR_WSD_DECAY_STYLE}"
-    echo "  - WSD Decay Iters: ${LR_WSD_DECAY_ITERS} (from ${LR_WSD_DECAY_TOKENS} tokens)"
-    echo "  ✅ WSD 인자 추가 완료"
-fi
-
 # QK-Clip Arguments (조건부 추가, TE >= 2.9.0 필요)
 if [[ "${QK_CLIP}" == "true" || "${QK_CLIP}" == "True" ]]; then
     echo "🔒 QK-Clip 인자 추가 중..."
@@ -645,8 +648,17 @@ if [[ "${QK_CLIP}" == "true" || "${QK_CLIP}" == "True" ]]; then
 
     echo "  - QK-Clip Alpha: ${QK_CLIP_ALPHA}"
     echo "  - QK-Clip Threshold: ${QK_CLIP_THRESHOLD}"
-    echo "  ⚠️  주의: TE >= 2.9.0 필요 (현재 환경 확인 필요)"
     echo "  ✅ QK-Clip 인자 추가 완료"
+fi
+
+# No Weight Decay Cond Type (QK LayerNorm에 weight decay 적용)
+if [ ! -z "$NO_WEIGHT_DECAY_COND_TYPE" ] && [ "$NO_WEIGHT_DECAY_COND_TYPE" != "" ]; then
+    echo "⚖️  No Weight Decay Cond Type 인자 추가 중..."
+    TRAINING_ARGS+=(
+        --no-weight-decay-cond-type ${NO_WEIGHT_DECAY_COND_TYPE}
+    )
+    echo "  - Type: ${NO_WEIGHT_DECAY_COND_TYPE}"
+    echo "  ✅ No Weight Decay Cond Type 인자 추가 완료"
 fi
 
 # Muon Optimizer Arguments (조건부 추가)
@@ -696,8 +708,9 @@ INFRA_ARGS=(
     --overlap-grad-reduce
     # --overlap-param-gather  # Requires distributed optimizer (disabled for Muon)
 
-    # Attention Backend (Flash Attention for H100)
-    --attention-backend flash
+    # Attention Backend: auto → TE가 최적 백엔드 자동 선택
+    # QK-Clip(return_max_logit=True) 시 flash 자동 비활성화, fused 우선, unfused fallback
+    --attention-backend auto
 
     # Loss Fusion
     --cross-entropy-loss-fusion
@@ -816,7 +829,7 @@ fi
 #==============================================================================
 
 echo "=============================================="
-echo "🚀 Alpha 프로젝트 학습 시작!"
+echo "🚀 Alpha 프로젝트 Ablation 학습 시작!"
 echo "=============================================="
 echo ""
 
@@ -835,9 +848,18 @@ echo ""
 CONFIG_SNAPSHOT="${LOG_DIR}/config_snapshot_${TIMESTAMP}.txt"
 cat > ${CONFIG_SNAPSHOT} <<EOF
 ============================================
-Alpha 프로젝트 학습 설정 스냅샷
+Alpha 프로젝트 Ablation 학습 설정 스냅샷
 생성 시각: $(date)
 ============================================
+
+[Ablation 목적]
+- Stage 2 초반 anomaly 원인 분석
+- 기존 cooldown 설정 재현 + stage2 패치만 추가
+- 유일한 변수: QK-Clip + QK LayerNorm Weight Decay
+
+[Resume]
+- Checkpoint: ${LOAD_CHECKPOINT_PATH}
+- No Load Optim: ${NO_LOAD_OPTIM}
 
 [설정 파일]
 - 모델: ${MODEL_CONFIG}.yaml
@@ -863,13 +885,18 @@ Alpha 프로젝트 학습 설정 스냅샷
 - Router TopK: ${ROUTER_TOPK}
 - Hybrid Pattern: ${HYBRID_PATTERN}
 
-[학습 설정]
+[학습 설정 (Ablation)]
 - Global Batch Size: ${GBS}
 - Micro Batch Size: ${MBS}
 - Sequence Length: ${SEQ_LEN}
 - Total Iterations: ${TRAIN_ITERS}
+- Warmup Iterations: ${LR_WARMUP_ITERS}
+- Decay Iterations: ${LR_DECAY_ITERS}
 - Learning Rate: ${LR} → ${MIN_LR}
+- LR Decay Style: ${LR_DECAY_STYLE}
 - Optimizer: ${OPTIMIZER}
+- QK-Clip: ${QK_CLIP} (alpha=${QK_CLIP_ALPHA}, threshold=${QK_CLIP_THRESHOLD})
+- No Weight Decay Cond Type: ${NO_WEIGHT_DECAY_COND_TYPE}
 - MoE Dispatcher: ${MOE_DISPATCHER_TYPE}
 
 [데이터]
@@ -896,7 +923,7 @@ EXIT_CODE=${PIPESTATUS[0]}
 if [ $EXIT_CODE -eq 0 ]; then
     echo ""
     echo "=============================================="
-    echo "✅ 학습 완료!"
+    echo "✅ Ablation 학습 완료!"
     echo "=============================================="
     echo "체크포인트: ${CHECKPOINT_DIR}"
     echo "TensorBoard: ${TENSORBOARD_DIR}"
@@ -907,7 +934,7 @@ if [ $EXIT_CODE -eq 0 ]; then
 else
     echo ""
     echo "=============================================="
-    echo "❌ 학습 실패 (Exit Code: ${EXIT_CODE})"
+    echo "❌ Ablation 학습 실패 (Exit Code: ${EXIT_CODE})"
     echo "=============================================="
     echo "로그 확인: ${LOG_DIR}/train.log"
 fi

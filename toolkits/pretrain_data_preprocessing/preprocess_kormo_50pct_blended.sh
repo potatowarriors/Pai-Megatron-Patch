@@ -25,7 +25,7 @@ START_TIME=$SECONDS
 # Paths
 MEGATRON_PATCH_PATH="/home/work/vidsearch/repos/project_s/Pai-Megatron-Patch"
 MEGATRON_PATH="${MEGATRON_PATCH_PATH}/backends/megatron/Megatron-LM-250624"
-TOKENIZER_PATH="${MEGATRON_PATCH_PATH}/models/Qwen3-Next-tokenizer"
+TOKENIZER_PATH="${MEGATRON_PATCH_PATH}/examples/alpha/tokenizer"
 
 # Data paths
 DATA_BASE="/home/work/Datasets/KORMo_processed"

@@ -12,11 +12,9 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-import atexit
 import math
 import sys
 import time
-from datetime import timedelta
 
 import torch
 from megatron import (get_args, get_num_microbatches, get_signal_handler,
@@ -32,6 +30,7 @@ from megatron.training import (build_train_valid_test_data_iterators,
                                get_optimizer_param_scheduler,
                                setup_model_and_optimizer,
                                print_datetime)
+from megatron.training.training import get_no_weight_decay_cond
 from megatron.utils import (calc_params_l2_norm,
                             check_adlr_autoresume_termination, report_memory,
                             unwrap_model)
@@ -48,17 +47,6 @@ from megatron.checkpointing import load_checkpoint, save_checkpoint
 
 # The earliest we can measure the start time.
 _TRAIN_START_TIME = time.time()
-
-
-def cleanup_distributed():
-    """Clean up distributed resources before exit."""
-    if torch.distributed.is_initialized():
-        try:
-            # Use a longer timeout to prevent premature cleanup failures
-            torch.distributed.barrier(timeout=timedelta(minutes=10))
-            torch.distributed.destroy_process_group()
-        except Exception as e:
-            print(f"Warning: Error during distributed cleanup: {e}")
 
 
 def pretrain(train_valid_test_dataset_provider,
@@ -103,9 +91,6 @@ def pretrain(train_valid_test_dataset_provider,
     initialize_megatron(extra_args_provider=extra_args_provider,
                         args_defaults=args_defaults)
 
-    # Register cleanup handler for graceful shutdown
-    atexit.register(cleanup_distributed)
-
     # Set pytorch JIT layer fusion options and warmup JIT functions.
     set_jit_fusion_options()
 
@@ -126,8 +111,13 @@ def pretrain(train_valid_test_dataset_provider,
 
     # Model, optimizer, and learning rate.
     timers('model-and-optimizer-setup', log_level=0).start(barrier=True)
+    no_weight_decay_cond = get_no_weight_decay_cond(
+        args.no_weight_decay_cond_type,
+        default_skip_embedding_weight_decay=args.embedding_init_method_std is not None,
+    )
     model, optimizer, opt_param_scheduler = setup_model_and_optimizer(
-        model_provider, model_type)
+        model_provider, model_type,
+        no_weight_decay_cond=no_weight_decay_cond)
     timers('model-and-optimizer-setup').stop()
     print_datetime('after model, optimizer, and learning rate '
                    'scheduler are built')
@@ -360,6 +350,13 @@ def train_step(forward_step_func, data_iterator,
     update_successful, grad_norm, num_zeros_in_grad = optimizer.step(args, timers)
     timers('optimizer').stop()
 
+    # --- QK-Clip: get max attention logit and clip weights ---
+    import megatron.training.training as _upstream_training
+    log_max_attention_logit = 0
+    if args.qk_clip or getattr(args, 'log_max_attention_logit', False):
+        log_max_attention_logit = _upstream_training.clip_qk(
+            model, log_max_only=not args.qk_clip)
+
     try:
         if update_successful:
             optimizer.gather_model_params(args, timers)
@@ -391,13 +388,14 @@ def train_step(forward_step_func, data_iterator,
         for key in losses_reduced[0]:
             losses_reduced_for_key = [x[key] for x in losses_reduced]
             loss_reduced[key] = sum(losses_reduced_for_key) / len(losses_reduced_for_key)
-        return loss_reduced, skipped_iter, grad_norm, num_zeros_in_grad
-    return {}, skipped_iter, grad_norm, num_zeros_in_grad
+        return loss_reduced, skipped_iter, grad_norm, num_zeros_in_grad, log_max_attention_logit
+    return {}, skipped_iter, grad_norm, num_zeros_in_grad, log_max_attention_logit
 
 
 def training_log(loss_dict, total_loss_dict, learning_rate, iteration,
                  loss_scale, report_memory_flag, skipped_iter,
-                 grad_norm, params_norm, num_zeros_in_grad):
+                 grad_norm, params_norm, num_zeros_in_grad,
+                 max_attention_logit=0):
     """Log training information such as losses, timing, ...."""
     args = get_args()
     timers = get_timers()
@@ -522,6 +520,8 @@ def training_log(loss_dict, total_loss_dict, learning_rate, iteration,
                 mem_stats["allocation.all.current"],
                 iteration,
             )
+        if max_attention_logit > 0:
+            writer.add_scalar('max_attention_logit', max_attention_logit, iteration)
 
     if iteration % args.log_interval == 0:
         elapsed_time = timers('interval-time').elapsed(barrier=True)
@@ -553,6 +553,8 @@ def training_log(loss_dict, total_loss_dict, learning_rate, iteration,
             log_string += ' num zeros: {:.1f} |'.format(num_zeros_in_grad)
         if params_norm is not None:
             log_string += ' params norm: {:.3f} |'.format(params_norm)
+        if max_attention_logit > 0:
+            log_string += ' max attn logit: {:.3f} |'.format(max_attention_logit)
         log_string += ' number of skipped iterations: {:3d} |'.format(
             total_loss_dict[skipped_iters_key])
         log_string += ' number of nan iterations: {:3d} |'.format(
@@ -628,7 +630,7 @@ def train(forward_step_func, model, optimizer, opt_param_scheduler,
 
         update_num_microbatches(args.consumed_train_samples)
         args.curr_iteration = iteration
-        loss_dict, skipped_iter, grad_norm, num_zeros_in_grad = \
+        loss_dict, skipped_iter, grad_norm, num_zeros_in_grad, max_attention_logit = \
             train_step(forward_step_func,
                        train_data_iterator,
                        model,
@@ -649,7 +651,8 @@ def train(forward_step_func, model, optimizer, opt_param_scheduler,
                                           optimizer.param_groups[0]['lr'],
                                           iteration, loss_scale,
                                           report_memory_flag, skipped_iter,
-                                          grad_norm, params_norm, num_zeros_in_grad)
+                                          grad_norm, params_norm, num_zeros_in_grad,
+                                          max_attention_logit)
 
         # Autoresume
         if args.adlr_autoresume and \

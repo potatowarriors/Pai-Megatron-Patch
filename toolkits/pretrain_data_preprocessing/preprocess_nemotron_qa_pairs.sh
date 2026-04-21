@@ -1,16 +1,22 @@
 #!/bin/bash
 #
-# KORMo Subset Preprocessing Script
-# Converts JSONL subsets to Megatron binary format (.bin/.idx)
+# Nemotron-CC-HQ-diverse_qa_pairs Preprocessing Script
+# Converts zstd-compressed JSONL files to Megatron binary format (.bin/.idx)
+#
+# Dataset Info:
+#   - Files: 2,564 .jsonl.zstd files
+#   - Size: ~814 GB compressed (~2.3 TB uncompressed)
+#   - JSON field: "text"
 #
 # Usage:
-#   bash preprocess_kormo_subset.sh <subset_percent> [workers]
+#   bash preprocess_nemotron_qa_pairs.sh [workers]
 #
 # Examples:
-#   bash preprocess_kormo_subset.sh 1     # Process 1% subset with 64 workers
-#   bash preprocess_kormo_subset.sh 10    # Process 10% subset with 64 workers
-#   bash preprocess_kormo_subset.sh 1 32  # Process 1% subset with 32 workers
+#   bash preprocess_nemotron_qa_pairs.sh          # Default: 64 workers
+#   bash preprocess_nemotron_qa_pairs.sh 32       # 32 workers
 #
+# Note: Uses preprocess_data.py with lm_dataformat which natively supports
+#       .jsonl.zstd files (streaming decompression)
 
 set -e  # Exit on error
 
@@ -23,64 +29,57 @@ MEGATRON_PATCH_PATH="/home/work/vidsearch/repos/project_s/Pai-Megatron-Patch"
 MEGATRON_PATH="${MEGATRON_PATCH_PATH}/backends/megatron/Megatron-LM-250624"
 TOKENIZER_PATH="${MEGATRON_PATCH_PATH}/examples/alpha/tokenizer"
 
-# Data paths
-DATA_BASE="/home/work/Datasets/KORMo_processed"
-INPUT_BASE="${DATA_BASE}/intermediate"
-OUTPUT_BASE="${DATA_BASE}/mmap"
+# Input/Output paths
+INPUT_DIR="/home/work/vidsearch/repos/project_s/Pai-Megatron-Patch/datasets/raw/KORMo/pretraining/stage2/eng/Nemotron-CC-HQ-diverse_qa_pairs"
+OUTPUT_DIR="/home/work/Datasets/KORMo_processed/mmap/nemotron_cc_hq/qa_pairs"
+OUTPUT_PREFIX="${OUTPUT_DIR}/nemotron_qa_pairs"
 
 # Parameters
-SUBSET_PCT=${1:-1}  # Default: 1%
-WORKERS=${2:-64}    # Default: 64 workers
-
-# Derived paths
-SUBSET_NAME="subset_${SUBSET_PCT}pct"
-INPUT_DIR="${INPUT_BASE}/${SUBSET_NAME}"
-OUTPUT_DIR="${OUTPUT_BASE}/qwen3_${SUBSET_PCT}pct"
-OUTPUT_PREFIX="${OUTPUT_DIR}/kormo"
+WORKERS=${1:-64}      # Default: 64 workers
 
 # ==================== Validation ====================
 
 echo "================================================================================"
-echo "KORMo Subset Preprocessing"
+echo "Nemotron-CC-HQ-diverse_qa_pairs Preprocessing"
 echo "================================================================================"
-echo "Subset: ${SUBSET_PCT}%"
 echo "Input directory: ${INPUT_DIR}"
 echo "Output directory: ${OUTPUT_DIR}"
 echo "Output prefix: ${OUTPUT_PREFIX}"
 echo "Tokenizer: ${TOKENIZER_PATH}"
 echo "Workers: ${WORKERS}"
 echo "Megatron version: Megatron-LM-250624"
+echo "Preprocessing script: preprocess_data.py (lm_dataformat)"
+echo "Input format: .jsonl.zstd (zstd compressed, native support)"
 echo "================================================================================"
 echo
 
 # Check if input directory exists
 if [ ! -d "${INPUT_DIR}" ]; then
-    echo "❌ Error: Input directory not found: ${INPUT_DIR}"
-    echo "Please run subset generation first."
+    echo "Error: Input directory not found: ${INPUT_DIR}"
     exit 1
 fi
 
 # Check if tokenizer exists
 if [ ! -d "${TOKENIZER_PATH}" ]; then
-    echo "❌ Error: Tokenizer not found: ${TOKENIZER_PATH}"
-    echo "Please run: python3 download_qwen3_tokenizer.py"
+    echo "Error: Tokenizer not found: ${TOKENIZER_PATH}"
     exit 1
 fi
 
 # Check if Megatron path exists
 if [ ! -d "${MEGATRON_PATH}" ]; then
-    echo "❌ Error: Megatron path not found: ${MEGATRON_PATH}"
+    echo "Error: Megatron path not found: ${MEGATRON_PATH}"
     exit 1
 fi
 
-# Count input files
-INPUT_FILE_COUNT=$(find "${INPUT_DIR}" -name "*.jsonl" -type f | wc -l)
+# Count input files (support both .jsonl.zstd and .jsonl.zst)
+INPUT_FILE_COUNT=$(find "${INPUT_DIR}" \( -name "*.jsonl.zstd" -o -name "*.jsonl.zst" \) -type f 2>/dev/null | wc -l)
 if [ ${INPUT_FILE_COUNT} -eq 0 ]; then
-    echo "❌ Error: No JSONL files found in ${INPUT_DIR}"
+    echo "Error: No zstd-compressed JSONL files found in ${INPUT_DIR}"
+    echo "Expected: *.jsonl.zstd or *.jsonl.zst files"
     exit 1
 fi
 
-echo "✓ Found ${INPUT_FILE_COUNT} JSONL files in input directory"
+echo "Found ${INPUT_FILE_COUNT} zstd-compressed JSONL files in input directory"
 echo
 
 # Create output directory
@@ -88,7 +87,7 @@ mkdir -p "${OUTPUT_DIR}"
 
 # Check if output already exists
 if [ -f "${OUTPUT_PREFIX}_text_document.bin" ] && [ -f "${OUTPUT_PREFIX}_text_document.idx" ]; then
-    echo "⚠️  Warning: Output files already exist:"
+    echo "Warning: Output files already exist:"
     echo "  - ${OUTPUT_PREFIX}_text_document.bin"
     echo "  - ${OUTPUT_PREFIX}_text_document.idx"
     echo
@@ -108,6 +107,8 @@ fi
 echo
 echo "================================================================================"
 echo "Starting preprocessing..."
+echo "Start time: $(date)"
+echo "Note: zstd files will be decompressed on-the-fly (streaming)"
 echo "================================================================================"
 echo
 
@@ -120,27 +121,23 @@ export NUMEXPR_MAX_THREADS=${WORKERS}
 # Change to preprocessing directory
 cd "${MEGATRON_PATCH_PATH}/toolkits/pretrain_data_preprocessing"
 
-# Show input files for verification
-echo "Input directory: ${INPUT_DIR}"
-echo "Input files in directory:"
-find "${INPUT_DIR}" -name "*.jsonl" -type f | sort | head -5
+# Show sample input files
+echo "Sample input files:"
+find "${INPUT_DIR}" \( -name "*.jsonl.zstd" -o -name "*.jsonl.zst" \) -type f | sort | head -5
 if [ ${INPUT_FILE_COUNT} -gt 5 ]; then
     echo "... and $(($INPUT_FILE_COUNT - 5)) more files"
 fi
 echo
 
-# Run preprocessing
-# Note: preprocess_data.py expects a DIRECTORY path, not individual files
-# It will automatically read all JSONL files from the directory
-# --extra-vocab-size 0: Use base vocabulary only (no padding needed for preprocessing)
-# Padding to 151936 will be applied during training for GPU optimization
+# Run preprocessing with lm_dataformat (native zstd support, document-level parallelism)
 python preprocess_data.py \
   --input "${INPUT_DIR}" \
-  --output-prefix ${OUTPUT_PREFIX} \
+  --output-prefix "${OUTPUT_PREFIX}" \
   --dataset-impl mmap \
   --patch-tokenizer-type Qwen2Tokenizer \
-  --load ${TOKENIZER_PATH} \
+  --load "${TOKENIZER_PATH}" \
   --workers ${WORKERS} \
+  --jsonl-keys text \
   --append-eod \
   --log-interval 10000 \
   --extra-vocab-size 0
@@ -151,23 +148,24 @@ ELAPSED_TIME=$(($SECONDS - $START_TIME))
 
 echo
 echo "================================================================================"
-echo "✅ Preprocessing Complete!"
+echo "Preprocessing Complete!"
 echo "================================================================================"
-echo "Time elapsed: $(($ELAPSED_TIME/60)) min $(($ELAPSED_TIME%60)) sec"
+echo "End time: $(date)"
+echo "Time elapsed: $(($ELAPSED_TIME/3600))h $(($ELAPSED_TIME%3600/60))m $(($ELAPSED_TIME%60))s"
 echo
 echo "Output files:"
-if [ -f "${OUTPUT_PREFIX}_content_document.bin" ]; then
-    BIN_SIZE=$(du -h "${OUTPUT_PREFIX}_content_document.bin" | cut -f1)
-    echo "  ✓ ${OUTPUT_PREFIX}_content_document.bin (${BIN_SIZE})"
+if [ -f "${OUTPUT_PREFIX}_text_document.bin" ]; then
+    BIN_SIZE=$(du -h "${OUTPUT_PREFIX}_text_document.bin" | cut -f1)
+    echo "  ${OUTPUT_PREFIX}_text_document.bin (${BIN_SIZE})"
 else
-    echo "  ❌ ${OUTPUT_PREFIX}_content_document.bin (NOT FOUND)"
+    echo "  ${OUTPUT_PREFIX}_text_document.bin (NOT FOUND)"
 fi
 
-if [ -f "${OUTPUT_PREFIX}_content_document.idx" ]; then
-    IDX_SIZE=$(du -h "${OUTPUT_PREFIX}_content_document.idx" | cut -f1)
-    echo "  ✓ ${OUTPUT_PREFIX}_content_document.idx (${IDX_SIZE})"
+if [ -f "${OUTPUT_PREFIX}_text_document.idx" ]; then
+    IDX_SIZE=$(du -h "${OUTPUT_PREFIX}_text_document.idx" | cut -f1)
+    echo "  ${OUTPUT_PREFIX}_text_document.idx (${IDX_SIZE})"
 else
-    echo "  ❌ ${OUTPUT_PREFIX}_content_document.idx (NOT FOUND)"
+    echo "  ${OUTPUT_PREFIX}_text_document.idx (NOT FOUND)"
 fi
 echo "================================================================================"
 echo

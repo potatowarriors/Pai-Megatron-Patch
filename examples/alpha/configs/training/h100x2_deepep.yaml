@@ -1,0 +1,59 @@
+# H100 2-GPU 테스트 환경 설정 (EP=2 + DeepEP)
+# DeepEP throughput 비교용 설정
+
+infrastructure:
+  # 병렬화 전략 (2 GPU 테스트용)
+  # Data Parallel = 2 / (TP * PP * EP * CP) = 2 / (1 * 1 * 2 * 1) = 1
+  parallelism:
+    tensor_parallel: 1          # TP 최소화 (Mamba 제약)
+    pipeline_parallel: 1        # PP=1 (테스트용)
+    expert_parallel: 2          # 2 GPU → EP=2
+    expert_tensor_parallel: 1
+    context_parallel: 1
+    # Data Parallel: 자동 계산 = 1
+
+  # 배치 설정 (테스트용 소규모)
+  batch:
+    micro_batch_size: 1         # 메모리 절약
+    global_batch_size: 16       # 테스트용 작은 배치
+    seq_length: 4096
+    max_position_embeddings: 262144
+
+  # Activation Checkpointing
+  activation_checkpointing:
+    granularity: "selective"
+    recompute_modules:
+      - "layernorm"
+      - "moe_act"
+      - "shared_experts"
+
+  # 최적화 기법 (DeepEP 활성화)
+  optimizations:
+    use_distributed_optimizer: false  # Muon optimizer 호환
+    sequence_parallel: true
+    overlap_grad_reduce: true
+    overlap_param_gather: false
+    attention_backend: "auto"
+    cross_entropy_loss_fusion: true
+    cross_entropy_fusion_impl: "te"
+
+    # DeepEP 설정 (핵심!)
+    moe_token_dispatcher_type: "flex"      # alltoall → flex
+    moe_flex_dispatcher_backend: "deepep"  # DeepEP 백엔드
+    moe_deepep_num_sms: 20                 # 튜닝 가능: 16-24
+
+    overlap_moe_expert_parallel_comm: false
+    fine_grained_activation_offloading: false
+    offload_modules: "expert_fc1, moe_act, mlp_norm"
+    optimizer_cpu_offload: false
+    optimizer_offload_fraction: 1.0
+    use_precision_aware_optimizer: false
+
+  virtual_pipeline: null
+
+# 노트:
+# - EP=2: 테스트용 (2 GPU에 experts 분산)
+# - moe_token_dispatcher_type: "flex" + moe_flex_dispatcher_backend: "deepep"
+# - moe_deepep_num_sms: SM 개수 (H100: 132 SMs 중 20개 사용)
+#   - 값이 클수록 통신 대역폭 증가, 계산 SM 감소
+#   - 테스트 후 16-24 범위에서 튜닝 권장

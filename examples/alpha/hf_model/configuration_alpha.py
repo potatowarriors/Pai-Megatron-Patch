@@ -213,7 +213,15 @@ class AlphaConfig(PretrainedConfig):
                 "linear_attention" if bool((i + 1) % interval_pattern) else "full_attention"
                 for i in range(self.num_hidden_layers)
             ]
-        layer_type_validation(self.layer_types, self.num_hidden_layers)
+        # layer_type_validation signature changed between transformers versions:
+        #   4.57.0+: layer_type_validation(layer_types, num_hidden_layers)
+        #   4.56.x:  layer_type_validation(layer_types)
+        import inspect
+        sig = inspect.signature(layer_type_validation)
+        if len(sig.parameters) >= 2:
+            layer_type_validation(self.layer_types, self.num_hidden_layers)
+        else:
+            layer_type_validation(self.layer_types)
 
         # linear attention part
         self.linear_conv_kernel_dim = linear_conv_kernel_dim
@@ -232,6 +240,84 @@ class AlphaConfig(PretrainedConfig):
         self.output_router_logits = output_router_logits
         self.router_aux_loss_coef = router_aux_loss_coef
         self.mlp_only_layers = mlp_only_layers
+
+    # ── SGLang compatibility properties ──────────────────────────
+    # These are required by SGLang's model_runner.py for hybrid GDN models.
+    # They mirror Qwen3NextConfig's properties from sglang.srt.configs.qwen3_next.
+
+    @property
+    def full_attention_interval(self):
+        """Derive interval from layer_types or stored value."""
+        if hasattr(self, "_full_attention_interval"):
+            return self._full_attention_interval
+        if hasattr(self, "layer_types") and self.layer_types:
+            attn_ids = [i for i, lt in enumerate(self.layer_types) if lt == "full_attention"]
+            if len(attn_ids) >= 2:
+                return attn_ids[1] - attn_ids[0]
+            elif len(attn_ids) == 1:
+                return attn_ids[0] + 1
+        return 4
+
+    @full_attention_interval.setter
+    def full_attention_interval(self, value):
+        self._full_attention_interval = value
+
+    @property
+    def layers_block_type(self):
+        interval = self.full_attention_interval
+        return [
+            "attention" if (i + 1) % interval == 0 else "linear_attention"
+            for i in range(self.num_hidden_layers)
+        ]
+
+    @property
+    def full_attention_layer_ids(self):
+        return [i for i, t in enumerate(self.layers_block_type) if t == "attention"]
+
+    @property
+    def linear_layer_ids(self):
+        return [i for i, t in enumerate(self.layers_block_type) if t == "linear_attention"]
+
+    @property
+    def hybrid_gdn_params(self):
+        """GatedDeltaNet state shapes for hybrid memory pool allocation."""
+        try:
+            from sglang.srt.distributed import get_attention_tp_size
+            world_size = get_attention_tp_size()
+        except (ImportError, RuntimeError):
+            world_size = 1
+
+        def _divide(a, b):
+            assert a % b == 0, f"{a} not divisible by {b}"
+            return a // b
+
+        import torch, os
+        conv_dim = (
+            self.linear_key_head_dim * self.linear_num_key_heads * 2
+            + self.linear_value_head_dim * self.linear_num_value_heads
+        )
+        conv_state_shape = (_divide(conv_dim, world_size), self.linear_conv_kernel_dim - 1)
+        temporal_state_shape = (
+            _divide(self.linear_num_value_heads, world_size),
+            self.linear_key_head_dim,
+            self.linear_value_head_dim,
+        )
+        conv_dtype = torch.bfloat16
+        dtype_map = {"float32": torch.float32, "bfloat16": torch.bfloat16}
+        ssm_dtype = dtype_map.get(os.environ.get("SGLANG_MAMBA_SSM_DTYPE", "float32"), torch.float32)
+        return conv_state_shape, temporal_state_shape, conv_dtype, ssm_dtype, self.linear_layer_ids
+
+    @property
+    def mamba_cache_per_req(self):
+        """Memory per request for Mamba state pool sizing."""
+        import numpy as np
+        conv_state_shape, temporal_state_shape, conv_dtype, ssm_dtype, mamba_layers = (
+            self.hybrid_gdn_params
+        )
+        return (
+            int(np.prod(conv_state_shape)) * conv_dtype.itemsize
+            + int(np.prod(temporal_state_shape)) * ssm_dtype.itemsize
+        ) * len(mamba_layers)
 
 
 __all__ = ["AlphaConfig"]

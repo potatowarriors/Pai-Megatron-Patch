@@ -15,6 +15,9 @@ export WANDB_API_KEY="ffbe195db0033ed7b92ba142cfd01ca70b29974d"
 # WANDB 모드 설정 (online/offline/disabled)
 export WANDB_MODE="online"
 
+# HuggingFace Hub 토큰 (데이터셋 다운로드 rate limit 방지)
+export HF_TOKEN="${HF_TOKEN:-}"
+
 # WANDB 디렉토리 설정 (선택사항)
 # export WANDB_DIR="/path/to/wandb/logs"
 

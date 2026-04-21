@@ -25,6 +25,11 @@ from megatron.core.utils import (
     nvtx_range_pop,
     nvtx_range_push,
 )
+from megatron.core.pipeline_parallel.fine_grained_activation_offload import (
+    fine_grained_offloading_group_commit,
+    fine_grained_offloading_group_start,
+    get_fine_grained_offloading_context,
+)
 from megatron.core.transformer.attention import Attention, SelfAttentionSubmodules
 from megatron.core.transformer.enums import AttnMaskType
 from megatron.core.transformer.transformer_config import TransformerConfig
@@ -188,6 +193,140 @@ class GatedSoftmaxAttention(Attention):
                 ["q_w", "q_b", "k_w", "k_b"],
                 "TP",
             )
+
+    def clip_qk(self):
+        """
+        QK Clipping for GatedSoftmaxAttention.
+
+        Same algorithm as SelfAttention.clip_qk() but operates on linear_qgkv
+        (Q-Gate-K-V packed weights) instead of linear_qkv (Q-K-V packed weights).
+        Gate and Value weights are left unchanged; only Q and K are scaled.
+        """
+        if not self.config.qk_clip:
+            raise ValueError("qk_clip option needs to be enabled")
+
+        if self.core_attention.current_max_attn_logits is None:
+            raise ValueError("current_max_attn_logits is None")
+
+        assert self.core_attention.current_max_attn_logits.shape == (
+            self.num_attention_heads_per_partition,
+        ), (
+            f"current_max_attn_logits shape is not ({self.num_attention_heads_per_partition}, ) "
+            f"but {self.core_attention.current_max_attn_logits.shape}"
+        )
+
+        grouped_max_attn_logits = torch.max(
+            self.core_attention.current_max_attn_logits.view(
+                self.num_query_groups_per_partition, -1
+            ),
+            dim=1,
+        ).values
+
+        # only update the weight if any head has
+        # current_max_attn_logits > qk_clip_threshold
+        if torch.any(grouped_max_attn_logits > self.config.qk_clip_threshold):
+            # qk_clip_balancing_eta (g, 1, 1)
+            assert grouped_max_attn_logits.shape == (
+                self.num_query_groups_per_partition,
+            ), (
+                f"current_max_attn_logits shape is not "
+                f"({self.num_query_groups_per_partition},) "
+                f"but {grouped_max_attn_logits.shape}"
+            )
+            self.qk_clip_balancing_eta = torch.clamp(
+                self.config.qk_clip_threshold / grouped_max_attn_logits, max=1.0
+            ).view(self.num_query_groups_per_partition, 1, 1)
+            assert torch.all(self.qk_clip_balancing_eta <= 1.0)
+
+            # Handle different weight access patterns (main_param vs direct access)
+            if hasattr(self.linear_qgkv.weight, 'main_param'):
+                self.linear_qgkv.weight.main_param.data.copy_(
+                    self._clip_linear_qgkv(self.linear_qgkv.weight.main_param.data)
+                )
+
+            self.linear_qgkv.weight.data.copy_(
+                self._clip_linear_qgkv(self.linear_qgkv.weight.data)
+            )
+
+            # --- LayerNorm gamma scaling (MuonCLIP Algorithm 1) ---
+            # LayerNorm is shared across all heads → use min eta (worst-case head)
+            eta_scalar = torch.min(self.qk_clip_balancing_eta)
+
+            if self.q_layernorm is not None:
+                if hasattr(self.q_layernorm.weight, 'main_param'):
+                    self._clip_layernorm_gamma(
+                        self.q_layernorm.weight.main_param.data,
+                        eta_scalar, self.config.qk_clip_alpha)
+                self._clip_layernorm_gamma(
+                    self.q_layernorm.weight.data,
+                    eta_scalar, self.config.qk_clip_alpha)
+
+            if self.k_layernorm is not None:
+                if hasattr(self.k_layernorm.weight, 'main_param'):
+                    self._clip_layernorm_gamma(
+                        self.k_layernorm.weight.main_param.data,
+                        eta_scalar, 1 - self.config.qk_clip_alpha)
+                self._clip_layernorm_gamma(
+                    self.k_layernorm.weight.data,
+                    eta_scalar, 1 - self.config.qk_clip_alpha)
+
+        # reset current_max_attn_logits
+        self.core_attention.current_max_attn_logits = None
+
+    def _clip_linear_qgkv(self, weight):
+        """Apply qkclip to linear_qgkv layer.
+
+        Weight layout per query-group: [Q, Gate, K, V]
+          Q:    query_projection_size // num_query_groups_per_partition
+          Gate: query_projection_size // num_query_groups_per_partition
+          K:    kv_projection_size // num_query_groups_per_partition
+          V:    kv_projection_size // num_query_groups_per_partition
+        """
+        ng = self.num_query_groups_per_partition
+        qp_per_group = self.query_projection_size // ng
+        kvp_per_group = self.kv_projection_size // ng
+
+        # Reshape to (ng, 2*(qp/ng + kvp/ng), hidden)
+        weight_reshaped = weight.view(
+            ng,
+            2 * (self.query_projection_size + self.kv_projection_size) // ng,
+            -1,
+        )
+
+        # Split: Q, Gate, K, V
+        weight_q = weight_reshaped[:, :qp_per_group, :]
+        weight_gate = weight_reshaped[:, qp_per_group:2 * qp_per_group, :]
+        weight_k = weight_reshaped[:, 2 * qp_per_group:2 * qp_per_group + kvp_per_group, :]
+        weight_v = weight_reshaped[:, 2 * qp_per_group + kvp_per_group:, :]
+
+        # Extend eta to match Q weight shape for broadcasting
+        qk_clip_balancing_eta_extended = self.qk_clip_balancing_eta.repeat(
+            1, weight_q.size(1), 1
+        )
+
+        # Clipping: scale Q and K only (Gate and V unchanged)
+        weight_q.mul_(torch.pow(qk_clip_balancing_eta_extended, self.config.qk_clip_alpha))
+        weight_k.mul_(torch.pow(self.qk_clip_balancing_eta, 1 - self.config.qk_clip_alpha))
+
+        # Concatenate back and reshape to original shape
+        weight_updated = torch.cat([weight_q, weight_gate, weight_k, weight_v], dim=1)
+        weight_updated = weight_updated.view(
+            2 * (self.query_projection_size + self.kv_projection_size), -1
+        )
+
+        return weight_updated
+
+    def _clip_layernorm_gamma(self, layernorm_weight_data, eta_scalar, exponent):
+        """Apply QK-Clip scaling to layernorm gamma (MuonCLIP Algorithm 1 W_qr).
+
+        Handles zero-centered gamma (1p layernorm) where effective gamma = (1 + weight).
+        """
+        scale = torch.pow(eta_scalar, exponent)
+        if self.config.layernorm_zero_centered_gamma:
+            # effective_gamma = (1 + w), scale and convert back: w_new = (1+w)*scale - 1
+            layernorm_weight_data.add_(1.0).mul_(scale).sub_(1.0)
+        else:
+            layernorm_weight_data.mul_(scale)
 
     def get_query_key_value_tensors(self, hidden_states, key_value_states=None):
         """
@@ -447,17 +586,20 @@ class GatedSoftmaxAttention(Attention):
                 packed_seq_params=packed_seq_params,
             )
         else:
+            if self.offload_core_attention and self.training:
+                query = fine_grained_offloading_group_start(query, name="core_attn")
             if inference_context is None or inference_context.is_static_batching():
                 # Static batching attention kernel.
-                core_attn_out = self.core_attention(
-                    query,
-                    key,
-                    value,
-                    attention_mask,
-                    attn_mask_type=attn_mask_type,
-                    attention_bias=attention_bias,
-                    packed_seq_params=packed_seq_params,
-                )
+                with get_fine_grained_offloading_context(self.offload_core_attention):
+                    core_attn_out = self.core_attention(
+                        query,
+                        key,
+                        value,
+                        attention_mask,
+                        attn_mask_type=attn_mask_type,
+                        attention_bias=attention_bias,
+                        packed_seq_params=packed_seq_params,
+                    )
 
             else:
                 # Dynamic batching attention kernel.
@@ -477,6 +619,10 @@ class GatedSoftmaxAttention(Attention):
                     block_table,
                 )
                 core_attn_out = rearrange(core_attn_out, 's b h d -> s b (h d)')
+            if self.offload_core_attention and self.training:
+                (core_attn_out,) = fine_grained_offloading_group_commit(
+                    core_attn_out, name="core_attn", forced_released_tensors=[query, key, value]
+                )
 
         if packed_seq_params is not None and packed_seq_params.qkv_format == 'thd':
             # reshape to same output shape as unpacked case
@@ -494,7 +640,14 @@ class GatedSoftmaxAttention(Attention):
         nvtx_range_pop(suffix="sigmoid_gate")
 
         nvtx_range_push(suffix="linear_proj")
-        output, bias = self.linear_proj(core_attn_out)
+        if self.offload_attn_proj:
+            core_attn_out = fine_grained_offloading_group_start(core_attn_out, name="attn_proj")
+        with get_fine_grained_offloading_context(self.offload_attn_proj):
+            output, bias = self.linear_proj(core_attn_out)
+        if self.offload_attn_proj:
+            output, bias = fine_grained_offloading_group_commit(
+                output, bias, name="attn_proj", forced_released_tensors=[core_attn_out]
+            )
         nvtx_range_pop(suffix="linear_proj")
 
         return output, bias

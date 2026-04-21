@@ -1,0 +1,5 @@
+# Extraction outputs
+outputs/
+*.json
+*.txt
+!README.md

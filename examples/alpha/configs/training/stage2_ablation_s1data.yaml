@@ -1,0 +1,75 @@
+# Alpha Stage 2 Ablation: Stage 2 패치 on Stage 1 Cooldown 설정
+# 400k → 440k iteration (3k warmup + 37k cosine decay)
+#
+# 목적:
+#   Stage 2 초반 anomaly (낮은 초기 loss + grad norm spike) 원인 분석
+#   기존 cooldown 설정을 완전히 재현하되 stage2 패치만 추가
+#   → 유일한 변수: QK-Clip + QK LayerNorm Weight Decay
+#
+# 비교 대상: stage1_cooldown.yaml (패치 없음, 동일 데이터/스케줄)
+#
+# 사용법:
+#   bash train_stage2.sh baseline_48L stage2_ablation_s1data h100x8_deepep kormo_50pct
+#
+# 결과 해석:
+#   - 동일한 anomaly → 패치가 원인 → 개별 ablation 필요
+#   - Anomaly 없음 → 데이터 도메인 변경이 원인
+
+training:
+  # Resume 설정 (stage1_cooldown과 동일)
+  resume:
+    enabled: true
+    load_checkpoint_path: "/home/work/vidsearch/repos/project_s/Pai-Megatron-Patch/examples/alpha/outputs/alpha_baseline_48L_20251219_095156/checkpoints"
+    no_load_optim: true         # 필수 (--no-save-optim 체크포인트)
+
+  # Iteration (stage1_cooldown과 동일)
+  train_iters: 440000           # 절대값 (400k + 40k)
+  lr_warmup_iters: 3000         # 3k warmup
+  lr_decay_iters: 40000         # 전체 스케줄 범위 (warmup 3k + cosine 37k = 40k)
+
+  # LR Schedule (stage1_cooldown과 동일)
+  lr: 1.0e-4
+  min_lr: 1.0e-5
+  lr_decay_style: "cosine"
+
+  # === Stage 2 패치 (테스트 대상) ===
+  qk_clip: true
+  qk_clip_alpha: 0.5
+  qk_clip_threshold: 100
+  no_weight_decay_cond_type: apply_wd_to_qk_layernorm
+
+  # Optimizer (stage1_cooldown과 동일)
+  optimizer: "dist_muon"
+  weight_decay: 0.01
+  muon_momentum: 0.95
+  muon_use_nesterov: true
+  muon_num_ns_steps: 5
+  muon_scale_mode: "spectral"
+  muon_fp32_matmul_prec: "medium"
+  muon_tp_mode: "blockwise"
+  muon_extra_scale_factor: 1.0
+  adam_beta1: 0.9
+  adam_beta2: 0.95
+  init_method_std: 0.008
+  clip_grad: 1.0
+
+  # Checkpoint (stage1_cooldown과 동일)
+  save_interval: 10000
+  save_optim: false
+  eval_iters: 8
+  eval_interval: 10000
+  ckpt_format: "torch_dist"
+  precision: "bf16"
+
+  # 기타 (stage1_cooldown과 동일)
+  distributed_timeout_minutes: 60
+  manual_gc_interval: 5
+  log_interval: 1
+
+  # Weights & Biases
+  wandb:
+    enabled: true
+    project: "alpha-pretraining"
+    entity: ""
+    save_dir: ""
+    notes: "Stage 2 ablation: QK-Clip + QK LN WD patches on stage1 cooldown setup (same data/schedule, patch only)"

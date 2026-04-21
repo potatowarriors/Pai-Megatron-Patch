@@ -11,6 +11,8 @@ sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__),
 import time
 import gzip
 import glob
+import zstandard as zstd
+import io
 import torch
 import numpy as np
 #import ftfy
@@ -275,6 +277,7 @@ def get_args():
     args.make_vocab_size_divisible_by = 128
     args.tensor_model_parallel_size = 1
     args.vocab_extra_ids = 0
+    args.padded_vocab_size = 0
 
     return args
 
@@ -352,8 +355,13 @@ def main():
             index = 0
             if args.keep_sequential_samples: line_count = 0
             for in_file_name in in_file_names:
-                # support for gzip files
-                if in_file_name.endswith(".gz"):
+                # support for compressed files (zstd, gzip)
+                if in_file_name.endswith(".zstd") or in_file_name.endswith(".zst"):
+                    fh = open(in_file_name, 'rb')
+                    dctx = zstd.ZstdDecompressor()
+                    reader = dctx.stream_reader(fh)
+                    fin = io.TextIOWrapper(reader, encoding='utf-8')
+                elif in_file_name.endswith(".gz"):
                     fin = gzip.open(in_file_name, 'rt')
                 else:
                     fin = open(in_file_name, 'r', encoding='utf-8')

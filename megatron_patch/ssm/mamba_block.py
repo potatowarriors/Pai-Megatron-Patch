@@ -349,8 +349,29 @@ class MambaStack(MegatronModule):
         use_inner_fp8_context = self.config.fp8 and self.config.fp8_recipe != Fp8Recipe.delayed
         outer_fp8_context = get_fp8_context(self.config) if use_outer_fp8_context else nullcontext()
 
+        # Fine-grained activation offloading: initialize chunk handler once per forward pass.
+        # This mirrors GPTModel.preprocess_for_fine_grained_offloading() — the PipelineOffloadManager
+        # must be initialized before any TransformerLayer can use its offload hooks.
+        if self.config.fine_grained_activation_offloading:
+            from megatron.core.pipeline_parallel.fine_grained_activation_offload import (
+                fine_grained_offloading_init_chunk_handler,
+                fine_grained_offloading_set_last_layer,
+            )
+            fine_grained_offloading_init_chunk_handler(
+                vp_size=self.config.virtual_pipeline_model_parallel_size,
+                vp_stage=None,
+                min_offloaded_tensor_size=self.config.min_offloaded_tensor_size,
+            )
+
+        num_layers = len(self.layers)
         with outer_fp8_context:
-            for layer in self.layers:
+            for l_no, layer in enumerate(self.layers):
+                # Fine-grained activation offloading: sync layer index with the manager.
+                # This mirrors TransformerBlock's per-layer call so the manager knows
+                # when to finalize D2H/H2D transfers on the last layer.
+                if self.config.fine_grained_activation_offloading:
+                    fine_grained_offloading_set_last_layer(l_no == num_layers - 1)
+
                 inner_fp8_context = (
                     get_fp8_context(self.config, layer.layer_number - 1)
                     if use_inner_fp8_context

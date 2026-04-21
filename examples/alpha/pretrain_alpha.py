@@ -29,14 +29,13 @@ Architecture: Mamba + Hybrid Attention
 """
 
 from functools import partial
-import atexit
-from datetime import timedelta
 from typing import Optional
 import torch
 import torch._dynamo
 from torch import Tensor
 
 from megatron.core.enums import ModelType
+from megatron.core import mpu
 from model_provider import model_provider as base_model_provider  # Megatron-LM-250908/model_provider.py
 
 from megatron.training.arguments import core_transformer_config_from_args
@@ -100,29 +99,44 @@ def mamba_builder(args, pre_process, post_process, vp_stage=None, config=None):
 model_provider = partial(base_model_provider, mamba_builder)
 
 
-def cleanup_distributed():
-    """
-    분산 학습 리소스 정리
-
-    학습 종료 또는 크래시 시 분산 프로세스 그룹을 안전하게 정리합니다.
-    이를 통해 좀비 프로세스 생성을 방지합니다.
-    """
-    if torch.distributed.is_initialized():
-        try:
-            torch.distributed.barrier(timeout=timedelta(seconds=30))
-            torch.distributed.destroy_process_group()
-        except Exception as e:
-            print(f"Warning: Error during distributed cleanup: {e}")
-
-
 if __name__ == "__main__":
     from megatron_patch.template.helper import forward_step
 
+    # ── QK-Clip hybrid fix ──────────────────────────────────────────────
+    # Upstream clip_qk() assumes all decoder layers have self_attention
+    # (TransformerLayer). In hybrid models, MambaLayer has no self_attention
+    # attribute → AttributeError. Fix: skip layers that lack self_attention.
+    import megatron.training.training as _training_mod
+
+    def _hybrid_clip_qk(model, log_max_only=False):
+        """clip_qk patched for hybrid Mamba+Attention models."""
+        with torch.no_grad():
+            log_max_attention_logit = 0
+            for model_chunk in model:
+                for layer in model_chunk.module.module.decoder.layers:
+                    if not hasattr(layer, 'self_attention'):
+                        continue
+                    if hasattr(layer.self_attention, 'clip_qk'):
+                        torch.distributed.all_reduce(
+                            layer.self_attention.core_attention.current_max_attn_logits,
+                            op=torch.distributed.ReduceOp.MAX,
+                            group=mpu.get_data_parallel_group(with_context_parallel=True),
+                        )
+                        log_max_attention_logit = max(
+                            log_max_attention_logit,
+                            torch.max(
+                                layer.self_attention.core_attention.current_max_attn_logits
+                            ).item(),
+                        )
+                        if not log_max_only:
+                            layer.self_attention.clip_qk()
+        return log_max_attention_logit
+
+    _training_mod.clip_qk = _hybrid_clip_qk
+    # ─────────────────────────────────────────────────────────────────────
+
     # 분산 데이터 로딩 활성화
     train_valid_test_datasets_provider.is_distributed = True
-
-    # 종료 시 자동 정리 핸들러 등록
-    atexit.register(cleanup_distributed)
 
     # Megatron pretrain 실행
     pretrain(

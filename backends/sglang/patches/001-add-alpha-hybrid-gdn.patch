@@ -1,0 +1,10 @@
+--- a/python/sglang/srt/model_executor/model_runner.py
++++ b/python/sglang/srt/model_executor/model_runner.py
+@@ -1135,6 +1135,7 @@ class ModelRunner(
+     def is_hybrid_gdn(self):
+         return self.model_config.hf_config.architectures[0] in [
+             "Qwen3NextForCausalLM",
+             "Qwen3NextForCausalLMMTP",
++            "AlphaForCausalLM",
+         ]
+

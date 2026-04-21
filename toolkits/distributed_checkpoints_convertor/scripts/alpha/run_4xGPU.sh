@@ -2,12 +2,17 @@
 # Copyright (c) 2025 Alibaba PAI and Nvidia Megatron-LM Team.
 # Copyright (c) 2025 Alpha Project Team.
 #
-# Alpha Model Checkpoint Conversion Script
-# =========================================
-# HuggingFace ↔ Megatron checkpoint conversion for Alpha model
+# Alpha Model Checkpoint Conversion Script (4-GPU variant)
+# =========================================================
+# Converts EP8 (8-GPU trained) checkpoints to HuggingFace format using 4 GPUs.
+# Uses Megatron's native torch_dist resharding to load EP8 checkpoints with EP=4.
+#
+# This script is identical to run_8xH20.sh except:
+#   - Default GPUS_PER_NODE=4 (instead of 8)
+#   - Default expert-model-parallel-size=4 (instead of 8)
 #
 # Usage:
-#   bash run_8xH20.sh <MODEL_SIZE> <LOAD_DIR> <SAVE_DIR> <MG2HF> <USE_CUDA> <PRECISION> [HF_DIR]
+#   bash run_4xGPU.sh <MODEL_SIZE> <LOAD_DIR> <SAVE_DIR> <MG2HF> <USE_CUDA> <PRECISION> [HF_DIR]
 #
 # Arguments:
 #   MODEL_SIZE  : Model configuration (baseline_48L)
@@ -22,20 +27,18 @@
 #                 If not provided, config.json will be auto-generated from unified config
 #
 # Examples:
-#   # HF → Megatron
-#   bash run_8xH20.sh baseline_48L /path/to/hf /path/to/mcore false true bf16
-#
-#   # Megatron → HF (with existing HF reference)
-#   bash run_8xH20.sh baseline_48L /path/to/mcore /path/to/hf true true bf16 /path/to/hf-orig
-#
-#   # Megatron → HF (auto-generate HF config from unified config)
-#   bash run_8xH20.sh baseline_48L /path/to/mcore /path/to/hf true true bf16
-#
-#   # Megatron → HF (AUTO MODE - latest checkpoint)
-#   bash run_8xH20.sh baseline_48L /path/to/outputs auto true true bf16
+#   # Megatron → HF (AUTO MODE - latest checkpoint, 4 GPUs)
+#   bash run_4xGPU.sh baseline_48L /path/to/outputs auto true true bf16
 #
 #   # Megatron → HF (AUTO MODE - specific iteration)
-#   bash run_8xH20.sh baseline_48L /path/to/outputs auto:50000 true true bf16
+#   bash run_4xGPU.sh baseline_48L /path/to/outputs auto:50000 true true bf16
+#
+#   # Megatron → HF (explicit paths)
+#   bash run_4xGPU.sh baseline_48L /path/to/mcore /path/to/hf true true bf16
+#
+# Note: Megatron's distributed checkpoint system automatically reshards
+# expert weights from EP=8 (saved) to EP=4 (loading) via
+# dist_checkpointing/strategies/resharding.py
 
 set -e
 CURRENT_DIR="$( cd "$( dirname "$0" )" && pwd )"
@@ -48,7 +51,7 @@ export TORCH_FORCE_NO_WEIGHTS_ONLY_LOAD=true # for PyTorch >= 2.6
 
 NUM_NODES=${WORLD_SIZE:-1}
 NODE_RANK=${RANK:-0}
-GPUS_PER_NODE=${KUBERNETES_CONTAINER_RESOURCE_GPU:-8}
+GPUS_PER_NODE=${KUBERNETES_CONTAINER_RESOURCE_GPU:-4}
 MASTER_ADDR=${MASTER_ADDR:-localhost}
 MASTER_PORT=${MASTER_PORT:-6000}
 
@@ -68,15 +71,15 @@ HF_DIR=$7
 #   - "auto:50000" : Use specific iteration
 #
 # Example:
-#   bash run_8xH20.sh baseline_48L /path/to/outputs auto true true bf16
-#   bash run_8xH20.sh baseline_48L /path/to/outputs auto:50000 true true bf16
+#   bash run_4xGPU.sh baseline_48L /path/to/outputs auto true true bf16
+#   bash run_4xGPU.sh baseline_48L /path/to/outputs auto:50000 true true bf16
 # ============================================================================
 if [[ "${SAVE_DIR}" == "auto"* ]]; then
     OUTPUT_DIR="${LOAD_DIR}"
 
     # Check if this is a training output directory
     if [ ! -d "${OUTPUT_DIR}/checkpoints" ]; then
-        echo "❌ Error: ${OUTPUT_DIR}/checkpoints not found"
+        echo "Error: ${OUTPUT_DIR}/checkpoints not found"
         echo "   Auto mode requires training output directory with checkpoints/"
         exit 1
     fi
@@ -84,16 +87,16 @@ if [[ "${SAVE_DIR}" == "auto"* ]]; then
     # Parse iteration from "auto" or "auto:ITERATION"
     if [[ "${SAVE_DIR}" == "auto:"* ]]; then
         ITERATION="${SAVE_DIR#auto:}"
-        echo "📍 Using specified iteration: ${ITERATION}"
+        echo "Using specified iteration: ${ITERATION}"
     else
         # Read latest iteration
         LATEST_FILE="${OUTPUT_DIR}/checkpoints/latest_checkpointed_iteration.txt"
         if [ ! -f "${LATEST_FILE}" ]; then
-            echo "❌ Error: ${LATEST_FILE} not found"
+            echo "Error: ${LATEST_FILE} not found"
             exit 1
         fi
         ITERATION=$(cat "${LATEST_FILE}" | tr -d '[:space:]')
-        echo "📍 Using latest iteration: ${ITERATION}"
+        echo "Using latest iteration: ${ITERATION}"
     fi
 
     # Format iteration with leading zeros (7 digits)
@@ -105,14 +108,14 @@ if [[ "${SAVE_DIR}" == "auto"* ]]; then
     SAVE_DIR="${OUTPUT_DIR}/hfmodel_${ITERATION_PADDED}"
 
     echo ""
-    echo "🔄 Auto mode enabled:"
+    echo "Auto mode enabled (4-GPU, EP=4 resharding from EP=8):"
     echo "   Input:  ${LOAD_DIR}"
     echo "   Output: ${SAVE_DIR}"
     echo ""
 
     # Validate checkpoint exists
     if [ ! -d "${LOAD_DIR}" ]; then
-        echo "❌ Error: Checkpoint not found: ${LOAD_DIR}"
+        echo "Error: Checkpoint not found: ${LOAD_DIR}"
         echo "   Available checkpoints:"
         ls -1 "${OUTPUT_DIR}/checkpoints/" | grep "iter_" | sed 's/^/     /'
         exit 1
@@ -134,7 +137,7 @@ if [[ "${LOAD_DIR}" =~ iter_([0-9]+) ]]; then
 
     # Check if parent directory has latest_checkpointed_iteration.txt
     if [ -f "${PARENT_DIR}/latest_checkpointed_iteration.txt" ]; then
-        echo "📍 Detected iter_${ITERATION} path, adjusting for Megatron checkpoint loading:"
+        echo "Detected iter_${ITERATION} path, adjusting for Megatron checkpoint loading:"
         echo "   Original: ${LOAD_DIR}"
         echo "   Adjusted: ${PARENT_DIR} with --ckpt-step ${ITERATION}"
         LOAD_DIR="${PARENT_DIR}"
@@ -155,13 +158,13 @@ if [ ${MG2HF} = true ]; then
 
     if [ -z "${HF_DIR}" ] || [ ! -d "${HF_DIR}" ]; then
         # Auto-generate HF config from unified config
-        echo "🔧 Auto-generating HF config from unified config..."
+        echo "Auto-generating HF config from unified config..."
 
         # Generate config.json
         python3 ${ALPHA_CONFIG_TOOL} generate-hf-config ${MODEL_SIZE} --output ${SAVE_DIR}/config.json
 
         # Copy tokenizer files from fixed tokenizer path (exclude config.json to preserve generated one)
-        echo "📋 Copying tokenizer files from ${TOKENIZER_PATH}..."
+        echo "Copying tokenizer files from ${TOKENIZER_PATH}..."
         find -L ${TOKENIZER_PATH} -maxdepth 1 -type f -name "tokenizer*.json" -print0 2>/dev/null | xargs -0 -r cp -t ${SAVE_DIR} || true
         find -L ${TOKENIZER_PATH} -maxdepth 1 -type f -name "vocab.json" -print0 2>/dev/null | xargs -0 -r cp -t ${SAVE_DIR} || true
         find -L ${TOKENIZER_PATH} -maxdepth 1 -type f -name "*.txt" -print0 2>/dev/null | xargs -0 -r cp -t ${SAVE_DIR} || true
@@ -170,15 +173,15 @@ if [ ${MG2HF} = true ]; then
         # Copy Alpha HF modeling files (required for auto_map in config.json)
         ALPHA_HF_MODEL_DIR="${MEGATRON_PATCH_PATH}/examples/alpha/hf_model"
         if [ -d "${ALPHA_HF_MODEL_DIR}" ]; then
-            echo "📋 Copying Alpha HF modeling files..."
+            echo "Copying Alpha HF modeling files..."
             cp ${ALPHA_HF_MODEL_DIR}/*.py ${SAVE_DIR}/
         fi
 
         HF_DIR=${SAVE_DIR}
-        echo "✅ HF config auto-generated at ${SAVE_DIR}/config.json"
+        echo "HF config auto-generated at ${SAVE_DIR}/config.json"
     else
         # Use existing HF reference
-        echo "📋 Copying HF config from ${HF_DIR}..."
+        echo "Copying HF config from ${HF_DIR}..."
         find -L ${HF_DIR} -maxdepth 1 -type f -name "*.json" -print0 | xargs -0 cp -t ${SAVE_DIR}
         find -L ${HF_DIR} -maxdepth 1 -type f -name "merges.txt" -print0 2>/dev/null | xargs -0 -r cp -t ${SAVE_DIR} || true
     fi
@@ -267,6 +270,15 @@ if [ ! -f "${CONFIG_FILE}" ]; then
 fi
 
 echo "Loading configuration: ${CONFIG_FILE}"
+
+# Override MODEL_PARALLEL_ARGS for 4-GPU EP=4 resharding before sourcing config
+# This takes precedence over the default EP=8 in the config file
+export MODEL_PARALLEL_ARGS=(
+    --tensor-model-parallel-size 1
+    --pipeline-model-parallel-size 1
+    --expert-model-parallel-size 4
+)
+
 source "${CONFIG_FILE}"
 
 TRAINING_ARGS=(
@@ -331,8 +343,8 @@ eval $cmd
 # Post-conversion: Verify Alpha HF modeling files exist
 if [ ${MG2HF} = true ]; then
     if [ -f "${SAVE_DIR}/configuration_alpha.py" ] && [ -f "${SAVE_DIR}/modeling_alpha.py" ]; then
-        echo "✅ Alpha HF model conversion complete: ${SAVE_DIR}"
+        echo "Alpha HF model conversion complete: ${SAVE_DIR}"
     else
-        echo "⚠️ Warning: Alpha HF modeling files missing in ${SAVE_DIR}"
+        echo "Warning: Alpha HF modeling files missing in ${SAVE_DIR}"
     fi
 fi

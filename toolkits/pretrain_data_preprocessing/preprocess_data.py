@@ -30,6 +30,38 @@ from megatron_patch.tokenizer import build_tokenizer
 sys.path.append(
     os.path.abspath(os.path.join(os.path.dirname(__file__), os.path.pardir)))
 
+# ============================================================================
+# Monkey-patch lm_dataformat to support .jsonl.zstd extension
+# (lm_dataformat only supports .jsonl.zst by default)
+# ============================================================================
+if '.jsonl.zstd' not in lmd.VALID_EXTENSIONS:
+    lmd.VALID_EXTENSIONS.append('.jsonl.zstd')
+
+_original_stream_data = lmd.Reader._stream_data
+
+def _patched_stream_data(self, get_meta=False, jsonl_key='text'):
+    """Patched _stream_data that handles .jsonl.zstd files."""
+    self.f_name = ''
+    files = lmd.listdir_or_file(self.in_path)
+    if not files:
+        raise FileNotFoundError(f'No valid file(s) found in {self.in_path}')
+    for f in files:
+        self.f_name = f
+        # Handle .jsonl.zstd the same as .jsonl.zst
+        if f.endswith('.jsonl.zstd'):
+            yield from self.read_jsonl_zst(f, get_meta, key=jsonl_key)
+        elif f.endswith('.jsonl.zst'):
+            yield from self.read_jsonl_zst(f, get_meta, key=jsonl_key)
+        elif f.endswith('.jsonl'):
+            yield from self.read_jsonl(f, get_meta, key=jsonl_key)
+        else:
+            # Fallback to original for other file types
+            yield from _original_stream_data(self, get_meta, jsonl_key)
+            return
+
+lmd.Reader._stream_data = _patched_stream_data
+# ============================================================================
+
 class Encoder(object):
     def __init__(self, args):
         self.args = args

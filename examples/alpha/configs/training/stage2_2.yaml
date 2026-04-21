@@ -1,0 +1,80 @@
+# Alpha Stage 2-2 학습 설정
+# Stage 2 (200k) → Stage 2-2 (200k→400k, cosine decay)
+#
+# 전략:
+#   - --no-load-optim으로 optimizer/scheduler 리셋 (iteration, consumed_samples 유지)
+#   - Cosine decay 스케줄 200k 기준
+#   - save_optim: false → optimizer 저장 안 함 (warmup으로 복구)
+#   - Nesterov 버그 수정 (train_stage2_2.sh에서 --muon-use-nesterov 명시적 전달)
+#
+# 사용법:
+#   1. resume.load_checkpoint_path 확인 후 실행
+#   2. bash train_stage2_2.sh baseline_48L stage2_2 h100x8 stage2_2
+#
+# Cosine 스케줄 (200k 기준, iteration 200001~400000):
+#   - Warmup: step 0 → 500
+#   - Decay:  step 500 → 200,000 (cosine)
+#
+# 데이터셋: stage2 blend (~3.1T tokens) — stage2와 동일, consumed_samples 이어서
+
+training:
+  # Resume 설정
+  resume:
+    enabled: true
+    load_checkpoint_path: "/home/work/vidsearch/repos/project_s/Pai-Megatron-Patch/examples/alpha/outputs/alpha_baseline_48L_stage2_20260301_015403/checkpoints"
+    finetune: false             # consumed_samples 유지 (같은 dataset 이어서)
+    no_load_optim: true         # optimizer/scheduler 리셋 (새 cosine schedule)
+
+  # Iteration 설정 (200k resume → 400k 종료)
+  train_iters: 400000           # 총 iteration (200k에서 resume)
+  lr_warmup_iters: 500          # 빠른 warmup
+  lr_decay_iters: 200000        # cosine이 200k iteration에 걸쳐 완료
+
+  # LR Schedule — Cosine (warmup + cosine decay)
+  lr: 1.0e-4
+  min_lr: 1.0e-5
+  lr_decay_style: "cosine"
+
+  # QK-Clip (stage2와 동일)
+  qk_clip: true
+  qk_clip_alpha: 0.5
+  qk_clip_threshold: 100
+  no_weight_decay_cond_type: apply_wd_to_qk_layernorm
+
+  # Optimizer (stage2와 동일)
+  optimizer: "dist_muon"
+  weight_decay: 0.01
+  adam_beta1: 0.9
+  adam_beta2: 0.95
+  muon_momentum: 0.95
+  muon_use_nesterov: true
+  muon_num_ns_steps: 5
+  muon_scale_mode: "spectral"
+  muon_fp32_matmul_prec: "medium"
+  muon_tp_mode: "blockwise"
+  muon_extra_scale_factor: 0.2
+  init_method_std: 0.008
+  clip_grad: 1.0
+
+  # Checkpoint
+  save_interval: 25000
+  save_optim: false             # optimizer 리셋 후 warmup으로 충분 (Stage1 cooldown 검증 완료)
+  ckpt_format: "torch_dist"
+  precision: "bf16"
+
+  # 평가
+  eval_iters: 8
+  eval_interval: 25000
+
+  # 기타 (stage2와 동일)
+  distributed_timeout_minutes: 60
+  manual_gc_interval: 5
+  log_interval: 1
+
+  # Weights & Biases
+  wandb:
+    enabled: true
+    project: "alpha-pretraining"
+    entity: ""
+    save_dir: ""
+    notes: "Stage 2-2 (200k→400k, cosine, num_workers=8, nesterov fix)"
