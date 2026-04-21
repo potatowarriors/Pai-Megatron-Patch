@@ -1,0 +1,87 @@
+# Alpha Stage 2-3 학습 설정 (375k → 800k)
+#
+# Stage 2-2가 원래 목표 400k 직전 375k에서 중단됨. Stage 2-3는 학습을 425k iter
+# 더 이어가서 800k까지 진행.
+#
+# Stage 2-2 vs Stage 2-3 변경사항:
+#   - LR 상향: 1e-4 → 4e-4 (4× 증가, 다른 technical report 참조)
+#   - Min LR: 1e-5 → 4e-5 (10% of max)
+#   - Warmup: 500 → 2000 (1.34e-5 → 4e-4 ~30× jump 안정화)
+#   - LayerNorm WD 신기능 도입: apply_wd_to_qk_layernorm → apply_wd_to_all_layernorm
+#     (zero-centered 표준 LN 전부 WD 적용, Mamba RMSNormGated 제외 — 이번 세션 patch)
+#   - load_checkpoint_path 갱신: stage2_20260330_160918 (iter 375000)
+#
+# 사용법:
+#   bash train_stage2_3.sh baseline_48L stage2_3 h100x8 stage2_2
+#   (data config은 stage2_2 그대로 — consumed_samples 이어서)
+#
+# Cosine 스케줄 (스케줄러 fresh start 기준 기준):
+#   - num_steps 0 → 2000: warmup (init_lr=0 → 4e-4)
+#   - num_steps 2000 → 425,000: cosine decay (4e-4 → 4e-5)
+#   대응 global iter: 375000 → 377000 (warmup) → 800000 (decay 종료)
+
+training:
+  # Resume 설정
+  resume:
+    enabled: true
+    load_checkpoint_path: "/home/work/vidsearch/repos/project_s/Pai-Megatron-Patch/examples/alpha/outputs/alpha_baseline_48L_stage2_20260330_160918/checkpoints"
+    finetune: false             # consumed_samples 유지 (같은 dataset 이어서)
+    no_load_optim: true         # optimizer/scheduler 리셋 (새 cosine schedule)
+
+  # Iteration 설정 (375k resume → 800k 종료)
+  train_iters: 800000           # 총 iteration (global)
+  lr_warmup_iters: 2000         # 4e-4 jump 대응 (stage2_2의 500보다 길게)
+  lr_decay_iters: 425000        # scheduler step 기준 cosine 종료 = global iter 800k
+
+  # LR Schedule — Cosine
+  lr: 4.0e-4                    # ★ stage2_2의 1e-4 → 4× 상향
+  min_lr: 4.0e-5                # ★ 10% of max
+  lr_decay_style: "cosine"
+
+  # QK-Clip (stage2_2와 동일)
+  qk_clip: true
+  qk_clip_alpha: 0.5
+  qk_clip_threshold: 100
+
+  # ★ NEW: LayerNorm WD 적용 (이번 세션 monkey-patch 활용, pretrain_alpha.py)
+  # 모든 zero-centered LayerNorm (input/post_attn/q/k/final/Mamba pre-mixer norm)에 WD.
+  # Mamba RMSNormGated (linear_attn.norm, mixer.norm)는 NOT zero-centered → 자동 제외.
+  no_weight_decay_cond_type: apply_wd_to_all_layernorm
+
+  # Optimizer (stage2_2와 동일)
+  optimizer: "dist_muon"
+  weight_decay: 0.01
+  adam_beta1: 0.9
+  adam_beta2: 0.95
+  muon_momentum: 0.95
+  muon_use_nesterov: true
+  muon_num_ns_steps: 5
+  muon_scale_mode: "spectral"
+  muon_fp32_matmul_prec: "medium"
+  muon_tp_mode: "blockwise"
+  muon_extra_scale_factor: 0.2
+  init_method_std: 0.008
+  clip_grad: 1.0
+
+  # Checkpoint
+  save_interval: 25000
+  save_optim: false             # optimizer 리셋 후 warmup으로 복구
+  ckpt_format: "torch_dist"
+  precision: "bf16"
+
+  # 평가
+  eval_iters: 8
+  eval_interval: 25000
+
+  # 기타 (stage2_2와 동일)
+  distributed_timeout_minutes: 60
+  manual_gc_interval: 5
+  log_interval: 1
+
+  # Weights & Biases
+  wandb:
+    enabled: true
+    project: "alpha-pretraining"
+    entity: ""
+    save_dir: ""
+    notes: "Stage 2-3 (375k→800k, cosine, lr=4e-4, LayerNorm WD on)"
