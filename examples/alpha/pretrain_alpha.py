@@ -191,7 +191,7 @@ if __name__ == "__main__":
     import argparse as _argparse
 
     def _alpha_extra_args_provider(parser):
-        get_patch_args(parser)
+        parser = get_patch_args(parser)
         for action in parser._actions:
             if isinstance(action, _argparse._StoreAction) and (
                 "--no-weight-decay-cond-type" in action.option_strings
@@ -199,6 +199,7 @@ if __name__ == "__main__":
                 if "apply_wd_to_all_layernorm" not in action.choices:
                     action.choices.append("apply_wd_to_all_layernorm")
                 break
+        return parser
     # ─────────────────────────────────────────────────────────────────────
 
     # 분산 데이터 로딩 활성화
