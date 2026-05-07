@@ -136,10 +136,10 @@ class ModelConfig:
     rotary_base: int = 10000000
     rotary_percent: float = 0.25
 
-    # Tokenizer & Vocab
+    # Tokenizer & Vocab (alpha v5: 163,860 effective tokens padded to 128-multiple)
     untie_embeddings_and_output_weights: bool = True
-    padded_vocab_size: int = 151936
-    tokenizer_type: str = "Qwen3Tokenizer"
+    padded_vocab_size: int = 163968
+    tokenizer_type: str = "HuggingFaceTokenizer"
     tokenizer_path: str = ""
 
     # Cached pattern (computed lazily)
@@ -258,14 +258,67 @@ def parse_pattern(pattern: str) -> Tuple[int, int, int, int]:
 # ============================================================================
 
 
+def _flat_to_nested(flat: Dict) -> Dict:
+    """Re-shape a flat YAML (Megatron-flag-named keys) into the legacy nested
+    `{model: {moe: {...}, hybrid: {...}, ...}}` schema this loader was written
+    around. The flat schema is canonical (it's what train.sh expands directly
+    into argv); this adapter exists so the inspection/HF-config-export tooling
+    in alpha_config.py keeps working without a deep rewrite.
+    """
+    # MoE flags: drop the `moe-` / `moe-router-` prefix
+    moe_renames = {
+        'num-experts': 'num_experts',
+        'moe-ffn-hidden-size': 'moe_ffn_hidden_size',
+        'moe-router-topk': 'router_topk',
+        'moe-router-load-balancing-type': 'router_load_balancing_type',
+        'moe-aux-loss-coeff': 'aux_loss_coeff',
+        'moe-router-score-function': 'router_score_function',
+        'moe-router-dtype': 'router_dtype',
+        'moe-grouped-gemm': 'grouped_gemm',
+        'moe-permute-fusion': 'permute_fusion',
+        'moe-router-fusion': 'router_fusion',
+        'moe-shared-expert-intermediate-size': 'shared_expert_intermediate_size',
+    }
+    # Hybrid flags
+    hybrid_renames = {
+        'hybrid-attention-ratio': 'attention_ratio',
+        'hybrid-mlp-ratio': 'mlp_ratio',
+        'hybrid-override-pattern': 'override_pattern',
+        'mamba-state-dim': 'mamba_state_dim',
+        'mamba-head-dim': 'mamba_head_dim',
+        'mamba-num-groups': 'mamba_num_groups',
+        'mamba-num-heads': 'mamba_num_heads',
+    }
+
+    moe = {tgt: flat[src] for src, tgt in moe_renames.items() if src in flat}
+    hybrid = {tgt: flat[src] for src, tgt in hybrid_renames.items() if src in flat}
+    consumed = set(moe_renames) | set(hybrid_renames)
+
+    # Everything else stays top-level under model. Convert dashed keys to
+    # underscored to match the dataclass field names.
+    model = {'moe': moe, 'hybrid': hybrid}
+    for key, value in flat.items():
+        if key in consumed:
+            continue
+        model[key.replace('-', '_')] = value
+
+    return {'model': model}
+
+
 def load_config(config_name: str) -> ModelConfig:
-    """Load model config from YAML file."""
+    """Load model config from YAML file (flat or legacy nested schema)."""
     config_path = CONFIGS_DIR / f"{config_name}.yaml"
     if not config_path.exists():
         raise FileNotFoundError(f"Config not found: {config_path}")
 
     with open(config_path) as f:
-        data = yaml.safe_load(f)
+        data = yaml.safe_load(f) or {}
+
+    # Flat schema: top-level keys are Megatron CLI flag names (`num-layers: 48`)
+    # — no `model:` wrapper. Detect by absence of `model` and presence of any
+    # known flat-only key.
+    if 'model' not in data and ('num-layers' in data or 'hidden-size' in data):
+        data = _flat_to_nested(data)
 
     model_data = data.get("model", data)
 
@@ -333,8 +386,8 @@ def load_config(config_name: str) -> ModelConfig:
         untie_embeddings_and_output_weights=model_data.get(
             "untie_embeddings_and_output_weights", True
         ),
-        padded_vocab_size=model_data.get("padded_vocab_size", 151936),
-        tokenizer_type=model_data.get("tokenizer_type", "Qwen3Tokenizer"),
+        padded_vocab_size=model_data.get("padded_vocab_size", 163968),
+        tokenizer_type=model_data.get("tokenizer_type", "HuggingFaceTokenizer"),
         tokenizer_path=model_data.get("tokenizer_path", ""),
     )
 

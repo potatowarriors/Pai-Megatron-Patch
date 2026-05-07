@@ -27,7 +27,7 @@ START_TIME=$SECONDS
 # Paths
 MEGATRON_PATCH_PATH="/home/work/vidsearch/repos/project_s/Pai-Megatron-Patch"
 MEGATRON_PATH="${MEGATRON_PATCH_PATH}/backends/megatron/Megatron-LM-250624"
-TOKENIZER_PATH="${MEGATRON_PATCH_PATH}/examples/alpha/tokenizer"
+TOKENIZER_PATH="${MEGATRON_PATCH_PATH}/examples/alpha/tokenizer_v5"
 
 # Input/Output paths
 INPUT_BASE="/home/work/Datasets/KORMo/pretraining/stage2/math"

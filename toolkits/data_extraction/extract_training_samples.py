@@ -55,7 +55,7 @@ class ExtractionConfig:
     cache_dir: str = "/home/work/vidsearch/repos/project_s/Pai-Megatron-Patch/examples/alpha/configs/data/.cache/kormo_50pct"
     dclm_data_path: str = "/home/work/vidsearch/repos/project_s/Pai-Megatron-Patch/datasets/processed/qwen3_50pct/dclm/dclm_content_document"
     korean_data_path: str = "/home/work/vidsearch/repos/project_s/Pai-Megatron-Patch/datasets/processed/qwen3_50pct/korean_web/korean_web_content_document"
-    tokenizer_path: str = "/home/work/vidsearch/repos/project_s/Pai-Megatron-Patch/examples/alpha/tokenizer"
+    tokenizer_path: str = "/home/work/vidsearch/repos/project_s/Pai-Megatron-Patch/examples/alpha/tokenizer_v5"
 
     # Dataset info
     dataset_names: Tuple[str, ...] = ("DCLM", "Korean Web")

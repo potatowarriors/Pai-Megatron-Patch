@@ -1,0 +1,188 @@
+library: huggingface
+algorithm: bpe
+vocab_size: 163840
+output_dir: outputs/tokenizer/v5
+sample_lines: 30000000
+seed: 42
+pre_tokenizer: byte_level_o200k
+add_prefix_space: false
+special_tokens:
+- <|endoftext|>
+- <|pad|>
+- <|im_start|>
+- <|im_end|>
+- <|fim_prefix|>
+- <|fim_middle|>
+- <|fim_suffix|>
+- <|fim_pad|>
+- <|repo_name|>
+- <|file_sep|>
+- <tool_call>
+- </tool_call>
+- <tool_response>
+- </tool_response>
+- <think>
+- </think>
+reserved_special_tokens: 80
+whitespace_inject_tokens:
+- '  '
+- '   '
+- '       '
+- '           '
+- '    '
+- '        '
+- "\n    \n"
+- "\n        \n"
+- "\n            \n"
+- "    \n"
+- "        \n"
+- '
+
+
+  '
+- "\t"
+- "\t\t"
+- "\t\t\t"
+- '():
+
+  '
+- '};
+
+  '
+- '});
+
+  '
+- '}
+
+  '
+- ');
+
+  '
+roles:
+  eos_token: <|im_end|>
+  pad_token: <|pad|>
+megatron:
+  model_type: gpt
+  chat_template: null
+corpus:
+- name: en_fineweb_edu
+  paths:
+  - data/LL_datasets/midtraining/smollm-corpus/fineweb-edu-dedup/train-*.jsonl
+  text_field: text
+  weight: 60
+- name: code_stack_dedup
+  paths:
+  - data/LL_datasets/pretraining/stage2/code/stack-dedup-sampled/python.jsonl
+  - data/LL_datasets/pretraining/stage2/code/stack-dedup-sampled/javascript.jsonl
+  - data/LL_datasets/pretraining/stage2/code/stack-dedup-sampled/typescript.jsonl
+  - data/LL_datasets/pretraining/stage2/code/stack-dedup-sampled/java.jsonl
+  - data/LL_datasets/pretraining/stage2/code/stack-dedup-sampled/go.jsonl
+  - data/LL_datasets/pretraining/stage2/code/stack-dedup-sampled/cpp.jsonl
+  text_field: text
+  weight: 18
+- name: ko_web
+  paths:
+  - data/LL_datasets/pretraining/stage1/korean_web.jsonl
+  - data/LL_datasets/pretraining/stage1/korean_web_half2.jsonl
+  text_field: text
+  weight: 7
+- name: ml_arb_arab
+  paths:
+  - data/LL_datasets/FineWeb2-HQ/arb_Arab/*.parquet
+  text_field: text
+  weight: 0.75
+- name: ml_ces_latn
+  paths:
+  - data/LL_datasets/FineWeb2-HQ/ces_Latn/*.parquet
+  text_field: text
+  weight: 0.75
+- name: ml_cmn_hani
+  paths:
+  - data/LL_datasets/FineWeb2-HQ/cmn_Hani/*.parquet
+  text_field: text
+  weight: 0.75
+- name: ml_dan_latn
+  paths:
+  - data/LL_datasets/FineWeb2-HQ/dan_Latn/*.parquet
+  text_field: text
+  weight: 0.75
+- name: ml_deu_latn
+  paths:
+  - data/LL_datasets/FineWeb2-HQ/deu_Latn/*.parquet
+  text_field: text
+  weight: 0.75
+- name: ml_ell_grek
+  paths:
+  - data/LL_datasets/FineWeb2-HQ/ell_Grek/*.parquet
+  text_field: text
+  weight: 0.75
+- name: ml_fas_arab
+  paths:
+  - data/LL_datasets/FineWeb2-HQ/fas_Arab/*.parquet
+  text_field: text
+  weight: 0.75
+- name: ml_fra_latn
+  paths:
+  - data/LL_datasets/FineWeb2-HQ/fra_Latn/*.parquet
+  text_field: text
+  weight: 0.75
+- name: ml_hun_latn
+  paths:
+  - data/LL_datasets/FineWeb2-HQ/hun_Latn/*.parquet
+  text_field: text
+  weight: 0.75
+- name: ml_ind_latn
+  paths:
+  - data/LL_datasets/FineWeb2-HQ/ind_Latn/*.parquet
+  text_field: text
+  weight: 0.75
+- name: ml_ita_latn
+  paths:
+  - data/LL_datasets/FineWeb2-HQ/ita_Latn/*.parquet
+  text_field: text
+  weight: 0.75
+- name: ml_jpn_jpan
+  paths:
+  - data/LL_datasets/FineWeb2-HQ/jpn_Jpan/*.parquet
+  text_field: text
+  weight: 0.75
+- name: ml_nld_latn
+  paths:
+  - data/LL_datasets/FineWeb2-HQ/nld_Latn/*.parquet
+  text_field: text
+  weight: 0.75
+- name: ml_pol_latn
+  paths:
+  - data/LL_datasets/FineWeb2-HQ/pol_Latn/*.parquet
+  text_field: text
+  weight: 0.75
+- name: ml_por_latn
+  paths:
+  - data/LL_datasets/FineWeb2-HQ/por_Latn/*.parquet
+  text_field: text
+  weight: 0.75
+- name: ml_rus_cyrl
+  paths:
+  - data/LL_datasets/FineWeb2-HQ/rus_Cyrl/*.parquet
+  text_field: text
+  weight: 0.75
+- name: ml_spa_latn
+  paths:
+  - data/LL_datasets/FineWeb2-HQ/spa_Latn/*.parquet
+  text_field: text
+  weight: 0.75
+- name: ml_swe_latn
+  paths:
+  - data/LL_datasets/FineWeb2-HQ/swe_Latn/*.parquet
+  text_field: text
+  weight: 0.75
+- name: ml_tur_latn
+  paths:
+  - data/LL_datasets/FineWeb2-HQ/tur_Latn/*.parquet
+  text_field: text
+  weight: 0.75
+- name: ml_vie_latn
+  paths:
+  - data/LL_datasets/FineWeb2-HQ/vie_Latn/*.parquet
+  text_field: text
+  weight: 0.75

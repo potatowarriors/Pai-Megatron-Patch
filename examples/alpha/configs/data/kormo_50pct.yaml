@@ -1,32 +1,15 @@
-# KORMo 데이터셋 설정 (50% subset) - Blended Dataset
-# DCLM(영어) + korean_web(한글) 균일 혼합
-# 원본 ~2T tokens의 50% = ~1.13T tokens
+# KORMo 50% subset: DCLM (English, ~90%) + korean_web (Korean, ~10%).
+# Original ~2T tokens × 50% = ~1.13T tokens.
+# Weights omitted → size-proportional auto-mixing.
+#
+# num-workers: 32 → 8 in Stage 2-2 (swap memory saturation fix).
 
-data:
-  # Blended dataset (가중치 생략 시 데이터 크기 비례로 자동 혼합)
-  # DCLM 1.9TB (~90%), korean_web 208GB (~10%)
-  blend:
-    - path: "/home/work/vidsearch/repos/project_s/Pai-Megatron-Patch/datasets/processed/stage1_50pct/dclm/dclm_content_document"
-    - path: "/home/work/vidsearch/repos/project_s/Pai-Megatron-Patch/datasets/processed/stage1_50pct/korean_web/korean_web_content_document"
+data-path: "/home/work/vidsearch/repos/project_s/Pai-Megatron-Patch/datasets/processed/stage1_50pct/dclm/dclm_content_document /home/work/vidsearch/repos/project_s/Pai-Megatron-Patch/datasets/processed/stage1_50pct/korean_web/korean_web_content_document"
+split: "99,1,0"
+dataset: MMAP
+num-workers: 8
 
-  # 데이터셋 타입
-  dataset_impl: "MMAP"
-
-  # Train/Valid/Test split
-  split: [99, 1, 0]  # 99% train, 1% valid, 0% test
-
-  # 데이터 로더
-  num_workers: 32
-
-  # 데이터셋 정보
-  description: "KORMo corpus 50% blended (DCLM + korean_web)"
-  tokenizer: "Qwen3Tokenizer"
-
-  # 데이터셋 통계 (참고용)
-  # bin 파일 크기 / 2 bytes = 토큰 수
-  stats:
-    dclm_tokens: 1019935360766       # ~1.02T tokens
-    korean_web_tokens: 110176971194  # ~0.11T tokens
-    total_tokens: 1130112331960      # ~1.13T tokens
-    dclm_documents: 356607001
-    korean_web_documents: 40298038
+# Stats (informational):
+#   DCLM:       1.02T tokens, 356,607,001 docs
+#   korean_web: 0.11T tokens,  40,298,038 docs
+#   total:      1.13T tokens

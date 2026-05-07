@@ -1,80 +1,94 @@
-# Alpha Stage 2-2 학습 설정
-# Stage 2 (200k) → Stage 2-2 (200k→400k, cosine decay)
+# Stage 2-2 continuation: 200k → 400k with cosine decay.
 #
-# 전략:
-#   - --no-load-optim으로 optimizer/scheduler 리셋 (iteration, consumed_samples 유지)
-#   - Cosine decay 스케줄 200k 기준
-#   - save_optim: false → optimizer 저장 안 함 (warmup으로 복구)
-#   - Nesterov 버그 수정 (train_stage2_2.sh에서 --muon-use-nesterov 명시적 전달)
+# Resumes from stage2 200k checkpoint, keeps consumed_samples (same dataset),
+# resets optimizer/scheduler (--no-load-optim) for fresh cosine schedule.
 #
-# 사용법:
-#   1. resume.load_checkpoint_path 확인 후 실행
-#   2. bash train_stage2_2.sh baseline_48L stage2_2 h100x8 stage2_2
-#
-# Cosine 스케줄 (200k 기준, iteration 200001~400000):
-#   - Warmup: step 0 → 500
-#   - Decay:  step 500 → 200,000 (cosine)
-#
-# 데이터셋: stage2 blend (~3.1T tokens) — stage2와 동일, consumed_samples 이어서
+# Cosine schedule (scheduler-fresh-start basis, global iter 200001..400000):
+#   warmup: step 0 → 500
+#   decay:  step 500 → 200,000 (cosine, 1e-4 → 1e-5)
 
-training:
-  # Resume 설정
-  resume:
-    enabled: true
-    load_checkpoint_path: "/home/work/vidsearch/repos/project_s/Pai-Megatron-Patch/examples/alpha/outputs/alpha_baseline_48L_stage2_20260301_015403/checkpoints"
-    finetune: false             # consumed_samples 유지 (같은 dataset 이어서)
-    no_load_optim: true         # optimizer/scheduler 리셋 (새 cosine schedule)
+# ── Iteration schedule ─────────────────────────────────────────────────────
+train-iters: 400000           # global iter target
+lr-warmup-iters: 500
+lr-decay-iters: 200000        # cosine completes in 200k scheduler steps
 
-  # Iteration 설정 (200k resume → 400k 종료)
-  train_iters: 400000           # 총 iteration (200k에서 resume)
-  lr_warmup_iters: 500          # 빠른 warmup
-  lr_decay_iters: 200000        # cosine이 200k iteration에 걸쳐 완료
+# ── LR ──────────────────────────────────────────────────────────────────────
+lr: 1.0e-4
+min-lr: 1.0e-5
+lr-decay-style: cosine
 
-  # LR Schedule — Cosine (warmup + cosine decay)
-  lr: 1.0e-4
-  min_lr: 1.0e-5
-  lr_decay_style: "cosine"
+# ── Parallelism ────────────────────────────────────────────────────────────
+tensor-model-parallel-size: 1
+pipeline-model-parallel-size: 1
+expert-model-parallel-size: 8
+expert-tensor-parallel-size: 1
+context-parallel-size: 1
+micro-batch-size: 4
+global-batch-size: 256
 
-  # QK-Clip (stage2와 동일)
-  qk_clip: true
-  qk_clip_alpha: 0.5
-  qk_clip_threshold: 100
-  no_weight_decay_cond_type: apply_wd_to_qk_layernorm
+# ── Activation checkpointing ───────────────────────────────────────────────
+recompute-granularity: selective
+recompute-modules: "layernorm moe"
 
-  # Optimizer (stage2와 동일)
-  optimizer: "dist_muon"
-  weight_decay: 0.01
-  adam_beta1: 0.9
-  adam_beta2: 0.95
-  muon_momentum: 0.95
-  muon_use_nesterov: true
-  muon_num_ns_steps: 5
-  muon_scale_mode: "spectral"
-  muon_fp32_matmul_prec: "medium"
-  muon_tp_mode: "blockwise"
-  muon_extra_scale_factor: 0.2
-  init_method_std: 0.008
-  clip_grad: 1.0
+# ── MoE routing (DSV3-style: seq_aux_loss + sigmoid + expert bias) ────────
+# Switched from aux_loss/softmax to DSV3 best practice. baseline_48L.yaml
+# carries the static DSV3 flags (num-groups/group-topk/topk-scaling-factor).
+moe-router-load-balancing-type: seq_aux_loss
+moe-router-score-function: sigmoid
+moe-router-enable-expert-bias: true
+moe-router-bias-update-rate: 0.001
+moe-token-dispatcher-type: alltoall
 
-  # Checkpoint
-  save_interval: 25000
-  save_optim: false             # optimizer 리셋 후 warmup으로 충분 (Stage1 cooldown 검증 완료)
-  ckpt_format: "torch_dist"
-  precision: "bf16"
+# ── Optimizer (Muon) ───────────────────────────────────────────────────────
+optimizer: dist_muon
+weight-decay: 0.01
+adam-beta1: 0.9
+adam-beta2: 0.95
+muon-momentum: 0.95
+muon-use-nesterov: true
+muon-num-ns-steps: 5
+muon-scale-mode: spectral
+muon-fp32-matmul-prec: medium
+muon-tp-mode: blockwise
+muon-extra-scale-factor: 0.2
+init-method-std: 0.008
+clip-grad: 1.0
 
-  # 평가
-  eval_iters: 8
-  eval_interval: 25000
+# ── QK-Clip ────────────────────────────────────────────────────────────────
+qk-clip: true
+qk-clip-alpha: 0.5
+qk-clip-threshold: 100
+log-max-attention-logit: true
 
-  # 기타 (stage2와 동일)
-  distributed_timeout_minutes: 60
-  manual_gc_interval: 5
-  log_interval: 1
+# ── LayerNorm WD ───────────────────────────────────────────────────────────
+no-weight-decay-cond-type: apply_wd_to_qk_layernorm
 
-  # Weights & Biases
-  wandb:
-    enabled: true
-    project: "alpha-pretraining"
-    entity: ""
-    save_dir: ""
-    notes: "Stage 2-2 (200k→400k, cosine, num_workers=8, nesterov fix)"
+# ── Resume (Stage 2-N → 2-N+1: keep data position, reset optimizer) ───────
+load: /home/work/vidsearch/repos/project_s/Pai-Megatron-Patch/examples/alpha/outputs/alpha_baseline_48L_stage2_20260301_015403/checkpoints
+no-load-optim: true
+
+# ── Precision / checkpointing / eval / logging ────────────────────────────
+bf16: true
+save-interval: 25000
+no-save-optim: true
+ckpt-format: torch_dist
+eval-iters: 8
+eval-interval: 25000
+log-interval: 1
+log-timers-to-tensorboard: true
+log-memory-to-tensorboard: true
+log-validation-ppl-to-tensorboard: true
+log-throughput: true
+tensorboard-queue-size: 1
+distributed-timeout-minutes: 60
+manual-gc: true
+manual-gc-interval: 5
+
+# ── Performance knobs ──────────────────────────────────────────────────────
+overlap-grad-reduce: true
+attention-backend: auto
+cross-entropy-loss-fusion: true
+cross-entropy-fusion-impl: te
+
+# ── WANDB ──────────────────────────────────────────────────────────────────
+wandb-project: alpha-pretraining

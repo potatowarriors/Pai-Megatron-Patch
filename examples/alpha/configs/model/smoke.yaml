@@ -1,0 +1,53 @@
+# Smoke-test model: tiniest viable hybrid model (1 attention + 1 mamba layer).
+# Architecture is irrelevant — exists only to exercise the launch wiring.
+
+num-layers: 2
+hidden-size: 64
+ffn-hidden-size: 128
+num-attention-heads: 4
+kv-channels: 16
+group-query-attention: true
+num-query-groups: 2
+
+# Tiny MoE
+num-experts: 4
+moe-ffn-hidden-size: 32
+moe-router-topk: 1
+moe-aux-loss-coeff: 0.001
+moe-router-dtype: fp32
+moe-grouped-gemm: true
+
+# Tiny hybrid (1 mamba "M" + 1 attention "*")
+is-hybrid-model: true
+hybrid-attention-ratio: 0.5
+hybrid-mlp-ratio: 0.0
+hybrid-override-pattern: "M*"
+mamba-state-dim: 16
+mamba-head-dim: 16
+mamba-num-groups: 2
+mamba-num-heads: 4
+
+normalization: RMSNorm
+norm-epsilon: 1.0e-6
+qk-layernorm: true
+apply-layernorm-1p: true
+swiglu: true
+attention-dropout: 0.0
+hidden-dropout: 0.0
+disable-bias-linear: true
+
+position-embedding-type: rope
+use-rotary-position-embeddings: true
+rotary-base: 10000000
+rotary-percent: 0.25
+
+seq-length: 64
+max-position-embeddings: 64
+
+untie-embeddings-and-output-weights: true
+padded-vocab-size: 163968
+tokenizer-type: HuggingFaceTokenizer
+tokenizer-model: /home/work/vidsearch/repos/project_s/Pai-Megatron-Patch/examples/alpha/tokenizer_v5
+
+use-mcore-models: true
+transformer-impl: transformer_engine

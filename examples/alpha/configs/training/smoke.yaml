@@ -1,0 +1,44 @@
+# Smoke-test training preset: 2 iters on 1 GPU with mock data.
+#
+# Purpose: exercise the train.sh → yaml_to_flags → pretrain_alpha.py wiring
+# end-to-end in ~2 minutes. Pair with `model/smoke.yaml` and `data/mock.yaml`.
+
+train-iters: 2
+lr-warmup-iters: 0
+lr-decay-iters: 2
+lr: 1.0e-4
+min-lr: 1.0e-5
+lr-decay-style: cosine
+
+tensor-model-parallel-size: 1
+pipeline-model-parallel-size: 1
+expert-model-parallel-size: 1
+expert-tensor-parallel-size: 1
+context-parallel-size: 1
+micro-batch-size: 1
+global-batch-size: 1
+
+# Standard (non-auxfree) routing for smoke test
+moe-router-load-balancing-type: aux_loss
+moe-router-score-function: softmax
+moe-token-dispatcher-type: alltoall
+
+optimizer: adam              # Skip Muon to keep smoke fast / no QK-Clip
+weight-decay: 0.0
+adam-beta1: 0.9
+adam-beta2: 0.95
+init-method-std: 0.02
+clip-grad: 1.0
+
+bf16: true
+save-interval: 100000        # Effectively never; smoke runs only 2 iters
+no-save-optim: true
+ckpt-format: torch_dist
+eval-iters: 0
+eval-interval: 100000
+log-interval: 1
+distributed-timeout-minutes: 10
+
+attention-backend: auto
+cross-entropy-loss-fusion: true
+cross-entropy-fusion-impl: te

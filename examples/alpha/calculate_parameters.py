@@ -20,45 +20,75 @@ from pathlib import Path
 from typing import Dict, Tuple
 
 
+def _load_model_config(yaml_path: Path) -> Dict:
+    """Load a model YAML and return a flat dict with underscored keys.
+
+    Accepts both the new flat schema (`num-layers: 48`, top-level Megatron CLI
+    flag names — see `train.sh` / `yaml_to_flags`) and the legacy nested schema
+    (`model.moe.num_experts: ...`). The new schema is canonical; the legacy
+    branch is kept so older inspection scripts/tests don't break.
+    """
+    with open(yaml_path, 'r') as f:
+        raw = yaml.safe_load(f) or {}
+
+    if 'model' in raw and isinstance(raw['model'], dict):
+        # Legacy nested form: flatten model.* / model.moe.* / model.hybrid.*
+        m = raw['model']
+        flat = {k: v for k, v in m.items() if not isinstance(v, dict)}
+        for sub in ('moe', 'hybrid'):
+            if sub in m and isinstance(m[sub], dict):
+                # Hybrid keys named e.g. `attention_ratio` were not prefixed in
+                # the legacy schema; the calculator distinguishes them by name.
+                flat.update(m[sub])
+        return flat
+
+    # New flat form: dashed Megatron flag names. Convert to underscored so the
+    # downstream calculator can keep using `cfg['num_layers']`.
+    return {key.replace('-', '_'): value for key, value in raw.items()}
+
+
 class AlphaParameterCalculator:
     """Alpha MoE 모델 파라미터 계산기"""
 
     def __init__(self, config: Dict):
         """
         Args:
-            config: YAML 설정 딕셔너리
+            config: flat dict from _load_model_config (underscored keys)
         """
-        self.config = config['model']
-        self.moe = config['model']['moe']
-        self.hybrid = config['model']['hybrid']
+        self.config = config
 
         # 기본 파라미터
-        self.num_layers = self.config['num_layers']
-        self.hidden_size = self.config['hidden_size']
-        self.ffn_hidden_size = self.config['ffn_hidden_size']
-        self.vocab_size = self.config['padded_vocab_size']
+        self.num_layers = config['num_layers']
+        self.hidden_size = config['hidden_size']
+        self.ffn_hidden_size = config['ffn_hidden_size']
+        self.vocab_size = config['padded_vocab_size']
 
         # Attention 파라미터
-        self.num_attention_heads = self.config['num_attention_heads']
-        self.kv_channels = self.config['kv_channels']
-        self.num_query_groups = self.config['num_query_groups']
+        self.num_attention_heads = config['num_attention_heads']
+        self.kv_channels = config['kv_channels']
+        self.num_query_groups = config['num_query_groups']
 
-        # MoE 파라미터
-        self.num_experts = self.moe['num_experts']
-        self.moe_ffn_hidden_size = self.moe['moe_ffn_hidden_size']
-        self.router_topk = self.moe['router_topk']
-        self.shared_expert_size = self.moe['shared_expert_intermediate_size']
+        # MoE 파라미터 (flat YAML uses Megatron flag names directly)
+        self.num_experts = config['num_experts']
+        self.moe_ffn_hidden_size = config['moe_ffn_hidden_size']
+        # `router_topk` (legacy nested) vs `moe_router_topk` (new flat)
+        self.router_topk = config.get('router_topk', config.get('moe_router_topk'))
+        self.shared_expert_size = config.get(
+            'shared_expert_intermediate_size',
+            config.get('moe_shared_expert_intermediate_size'),
+        )
 
         # Hybrid 파라미터
-        self.attention_ratio = self.hybrid['attention_ratio']
-        self.mlp_ratio = self.hybrid['mlp_ratio']
-        self.mamba_state_dim = self.hybrid['mamba_state_dim']
-        self.mamba_head_dim = self.hybrid['mamba_head_dim']
-        self.mamba_num_groups = self.hybrid['mamba_num_groups']
-        self.mamba_num_heads = self.hybrid['mamba_num_heads']
+        # New flat: `hybrid_attention_ratio`; legacy nested under hybrid.*: `attention_ratio`
+        self.attention_ratio = config.get('hybrid_attention_ratio', config.get('attention_ratio'))
+        self.mlp_ratio = config.get('hybrid_mlp_ratio', config.get('mlp_ratio'))
+        self.mamba_state_dim = config['mamba_state_dim']
+        self.mamba_head_dim = config['mamba_head_dim']
+        self.mamba_num_groups = config['mamba_num_groups']
+        self.mamba_num_heads = config['mamba_num_heads']
 
-        # 패턴 파싱
-        self.pattern = self.hybrid['override_pattern']
+        # 패턴 파싱: `hybrid_override_pattern` (new flat) or `override_pattern` (legacy nested)
+        self.pattern = config.get('hybrid_override_pattern', config.get('override_pattern'))
         self.parse_pattern()
 
     def parse_pattern(self):
@@ -93,7 +123,7 @@ class AlphaParameterCalculator:
         input_embed = self.vocab_size * self.hidden_size
 
         # Output embedding (unshared)
-        if self.config['untie_embeddings_and_output_weights']:
+        if self.config.get('untie_embeddings_and_output_weights', False):
             output_embed = self.vocab_size * self.hidden_size
         else:
             output_embed = 0
@@ -307,7 +337,7 @@ class AlphaParameterCalculator:
     def print_summary(self, results: Dict[str, int], detailed: bool = False):
         """결과 출력"""
         print("\n" + "="*80)
-        print(f"Alpha Model Parameter Summary: {self.config['name']}")
+        print(f"Alpha Model Parameter Summary: {self.config.get('name', 'alpha-model')}")
         print("="*80)
 
         print(f"\nModel Configuration:")
@@ -407,16 +437,15 @@ def main():
         # Relative to examples/alpha/
         config_path = Path(__file__).parent / config_path
 
-    with open(config_path, 'r') as f:
-        config = yaml.safe_load(f)
+    config = _load_model_config(config_path)
 
     # Calculate
     calculator = AlphaParameterCalculator(config)
     results = calculator.calculate()
     calculator.print_summary(results, detailed=args.detailed)
 
-    # Save to file (optional)
-    output_file = config_path.parent.parent / 'outputs' / f"{config['model']['name']}_params.txt"
+    # Save to file. Flat YAML has no `name` field — use the config filename stem.
+    output_file = config_path.parent.parent / 'outputs' / f"{config_path.stem}_params.txt"
     output_file.parent.mkdir(exist_ok=True, parents=True)
 
     import sys

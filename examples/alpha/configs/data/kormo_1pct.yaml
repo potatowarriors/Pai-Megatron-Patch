@@ -1,31 +1,16 @@
-# KORMo 데이터셋 설정 (1% subset) - Blended Dataset
-# DCLM(영어) + korean_web(한글) 균일 혼합
+# KORMo 1% subset: DCLM (English, ~95%) + korean_web (Korean, ~5%).
+# Weights omitted → Megatron auto-mixes proportional to dataset size.
 
-data:
-  # Blended dataset (가중치 생략 시 데이터 크기 비례로 자동 혼합)
-  # DCLM 39GB (~95%), korean_web 2.1GB (~5%)
-  blend:
-    - path: "/home/work/vidsearch/repos/project_s/Pai-Megatron-Patch/datasets/processed/qwen3_1pct_blended/dclm_content_document"
-    - path: "/home/work/vidsearch/repos/project_s/Pai-Megatron-Patch/datasets/processed/qwen3_1pct_blended/korean_web_content_document"
+# Megatron --data-path accepts a space-separated list of "path path..." (no
+# weights → size-proportional) or "weight path weight path..." (explicit).
+# yaml_to_flags emits the value as a single argv token; argparse re-splits
+# because --data-path is nargs='*'.
+data-path: "/home/work/vidsearch/repos/project_s/Pai-Megatron-Patch/datasets/processed/qwen3_1pct_blended/dclm_content_document /home/work/vidsearch/repos/project_s/Pai-Megatron-Patch/datasets/processed/qwen3_1pct_blended/korean_web_content_document"
+split: "99,1,0"
+dataset: MMAP                  # megatron_patch dataset selector (data/__init__.py:116)
+num-workers: 32
 
-  # 데이터셋 타입
-  dataset_impl: "MMAP"
-
-  # Train/Valid/Test split
-  split: [99, 1, 0]  # 99% train, 1% valid, 0% test
-
-  # 데이터 로더
-  num_workers: 32
-
-  # 데이터셋 정보
-  description: "KORMo corpus 1% blended (DCLM + korean_web)"
-  tokenizer: "Qwen3Tokenizer"
-
-  # 데이터셋 통계 (참고용 - Megatron 로그에서 확인)
-  # 이 값들은 pretrain.yaml의 train_samples 계산에 사용됨
-  stats:
-    dclm_documents: 7134892
-    dclm_train_samples: 2466205      # 99% split 후
-    korean_web_documents: 403665
-    korean_web_train_samples: 132989  # 99% split 후
-    total_train_samples: 2599194      # = 2466205 + 132989
+# Stats (informational; no longer consumed by shell):
+#   DCLM:       7,134,892 docs / 2,466,205 train samples (post 99% split)
+#   korean_web:   403,665 docs /   132,989 train samples
+#   total train samples: 2,599,194

@@ -1,0 +1,15 @@
+# Stage 1 v5 — Korean web (single source, pre-tokenized with alpha v5 tokenizer).
+#
+# Vocab compatibility:
+#   - Tokenized with alpha v5 tokenizer (effective vocab 163,860,
+#     padded-vocab-size 163,968). Use only with baseline_48L.yaml that has
+#     the matching tokenizer-model and padded-vocab-size.
+#
+# Source: /home/work/Datasets/LL_preprocessed/v5/stage1/korean_web/
+#   data_text_document.bin   ~144 GB
+#   data_text_document.idx   ~806 MB
+
+data-path: "/home/work/Datasets/LL_preprocessed/v5/stage1/korean_web/data_text_document"
+split: "99,1,0"
+dataset: MMAP
+num-workers: 32

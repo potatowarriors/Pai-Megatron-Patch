@@ -25,7 +25,7 @@ START_TIME=$SECONDS
 # Paths
 MEGATRON_PATCH_PATH="/home/work/vidsearch/repos/project_s/Pai-Megatron-Patch"
 MEGATRON_PATH="${MEGATRON_PATCH_PATH}/backends/megatron/Megatron-LM-251125"
-TOKENIZER_PATH="${MEGATRON_PATCH_PATH}/examples/alpha/tokenizer"
+TOKENIZER_PATH="${MEGATRON_PATCH_PATH}/examples/alpha/tokenizer_v5"
 
 # Data paths
 INPUT_FILE="/home/work/Datasets/LL_datasets/pretraining/stage1/korean_web_half2.jsonl"

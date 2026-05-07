@@ -1,78 +1,13 @@
-# Stage 2 데이터셋 설정 - Blended Dataset
-# 4개 카테고리, 9개 데이터셋, ~3.1T tokens
-# 가중치 없음 → 데이터 크기 비례로 자동 혼합
+# Stage 2 blended dataset: 9 datasets across 4 categories, ~3.1T tokens.
+# Weights omitted → Megatron auto-mixes proportional to .bin sizes.
 #
-# 카테고리:
+# Categories:
 #   1. Korean Web Half     (1 dataset,  ~48.7B tokens)
 #   2. Math                (1 dataset, ~384.0B tokens)
 #   3. Nemotron CC-HQ      (2 datasets, ~1.9T tokens)
 #   4. Nemotron Code v2    (5 datasets, ~813.0B tokens)
 
-data:
-  # Blended dataset (가중치 생략 시 데이터 크기 비례로 자동 혼합)
-  blend:
-    # --- Korean Web (stage1 미소비 후반부 50%) ---
-    - path: "/home/work/vidsearch/repos/project_s/Pai-Megatron-Patch/datasets/processed/koreanweb_half/korean_web_half_text_document"
-
-    # --- Math ---
-    - path: "/home/work/vidsearch/repos/project_s/Pai-Megatron-Patch/datasets/processed/math/math_text_document"
-
-    # --- Nemotron CC-HQ (high-quality web corpus) ---
-    - path: "/home/work/vidsearch/repos/project_s/Pai-Megatron-Patch/datasets/processed/nemotron_cc_hq/actual/nemotron_actual_text_document"
-    - path: "/home/work/vidsearch/repos/project_s/Pai-Megatron-Patch/datasets/processed/nemotron_cc_hq/qa_pairs/nemotron_qa_pairs_text_document"
-
-    # --- Nemotron Pretraining Code v2 (synthetic code) ---
-    - path: "/home/work/vidsearch/repos/project_s/Pai-Megatron-Patch/datasets/processed/Nemotron-Pretraining-Code-v2/code_review/code_review_content_document"
-    - path: "/home/work/vidsearch/repos/project_s/Pai-Megatron-Patch/datasets/processed/Nemotron-Pretraining-Code-v2/question_answering/question_answering_content_document"
-    - path: "/home/work/vidsearch/repos/project_s/Pai-Megatron-Patch/datasets/processed/Nemotron-Pretraining-Code-v2/rewriting/rewriting_content_document"
-    - path: "/home/work/vidsearch/repos/project_s/Pai-Megatron-Patch/datasets/processed/Nemotron-Pretraining-Code-v2/student_teacher/student_teacher_content_document"
-    - path: "/home/work/vidsearch/repos/project_s/Pai-Megatron-Patch/datasets/processed/Nemotron-Pretraining-Code-v2/transpilation/transpilation_content_document"
-
-  # 데이터셋 타입
-  dataset_impl: "MMAP"
-
-  # Train/Valid/Test split
-  split: [99, 1, 0]
-
-  # 데이터 로더
-  num_workers: 32
-
-  # 데이터셋 정보
-  description: "Stage 2 blend: Korean Web half + Math + Nemotron CC-HQ + Nemotron Code v2"
-  tokenizer: "Qwen3Tokenizer"
-
-  # 데이터 통계 (참고용)
-  # 토큰 수 = .bin 크기 / 2 bytes (uint16 token IDs)
-  stats:
-    korean_web_half:
-      bin_size: "91 GB"
-      est_tokens: "~48.7B"
-    math:
-      bin_size: "768 GB"
-      est_tokens: "~384.0B"
-    nemotron_cc_hq:
-      actual:
-        bin_size: "2.0 TB"
-        est_tokens: "~1.0T"
-      qa_pairs:
-        bin_size: "1.8 TB"
-        est_tokens: "~900.0B"
-    nemotron_code_v2:
-      code_review:
-        bin_size: "279 GB"
-        est_tokens: "~139.0B"
-      question_answering:
-        bin_size: "875 GB"
-        est_tokens: "~437.0B"
-      rewriting:
-        bin_size: "277 GB"
-        est_tokens: "~138.0B"
-      student_teacher:
-        bin_size: "94 GB"
-        est_tokens: "~47.0B"
-      transpilation:
-        bin_size: "105 GB"
-        est_tokens: "~52.0B"
-    total:
-      datasets: 9
-      est_tokens: "~3.1T"
+data-path: "/home/work/vidsearch/repos/project_s/Pai-Megatron-Patch/datasets/processed/koreanweb_half/korean_web_half_text_document /home/work/vidsearch/repos/project_s/Pai-Megatron-Patch/datasets/processed/math/math_text_document /home/work/vidsearch/repos/project_s/Pai-Megatron-Patch/datasets/processed/nemotron_cc_hq/actual/nemotron_actual_text_document /home/work/vidsearch/repos/project_s/Pai-Megatron-Patch/datasets/processed/nemotron_cc_hq/qa_pairs/nemotron_qa_pairs_text_document /home/work/vidsearch/repos/project_s/Pai-Megatron-Patch/datasets/processed/Nemotron-Pretraining-Code-v2/code_review/code_review_content_document /home/work/vidsearch/repos/project_s/Pai-Megatron-Patch/datasets/processed/Nemotron-Pretraining-Code-v2/question_answering/question_answering_content_document /home/work/vidsearch/repos/project_s/Pai-Megatron-Patch/datasets/processed/Nemotron-Pretraining-Code-v2/rewriting/rewriting_content_document /home/work/vidsearch/repos/project_s/Pai-Megatron-Patch/datasets/processed/Nemotron-Pretraining-Code-v2/student_teacher/student_teacher_content_document /home/work/vidsearch/repos/project_s/Pai-Megatron-Patch/datasets/processed/Nemotron-Pretraining-Code-v2/transpilation/transpilation_content_document"
+split: "99,1,0"
+dataset: MMAP
+num-workers: 32

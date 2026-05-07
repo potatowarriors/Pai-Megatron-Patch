@@ -1,34 +1,8 @@
-# KORMo Code 데이터셋 설정 - Balanced Blended Dataset
-# 5개 subset을 균등 가중치(20%)로 혼합
-# QA 데이터(962GB)가 전체의 53%를 차지하므로, 균등 비율이 필요할 때 사용
-#
-# 전처리:
-#   cd toolkits/pretrain_data_preprocessing
-#   bash preprocess_kormo_code.sh 64
+# KORMo Code: 5 Nemotron-Pretraining-Code-v2 subsets at equal 20% weights.
+# Use this when you want balanced sampling instead of size-proportional
+# (QA alone is 962GB / ~53% of total; without explicit weights it dominates).
 
-data:
-  # Blended dataset (균등 가중치)
-  blend:
-    - weight: 0.20
-      path: "/home/work/vidsearch/repos/project_s/Pai-Megatron-Patch/datasets/processed/qwen3_code/code_review/code_review_content_document"
-    - weight: 0.20
-      path: "/home/work/vidsearch/repos/project_s/Pai-Megatron-Patch/datasets/processed/qwen3_code/question_answering/question_answering_content_document"
-    - weight: 0.20
-      path: "/home/work/vidsearch/repos/project_s/Pai-Megatron-Patch/datasets/processed/qwen3_code/rewriting/rewriting_content_document"
-    - weight: 0.20
-      path: "/home/work/vidsearch/repos/project_s/Pai-Megatron-Patch/datasets/processed/qwen3_code/student_teacher/student_teacher_content_document"
-    - weight: 0.20
-      path: "/home/work/vidsearch/repos/project_s/Pai-Megatron-Patch/datasets/processed/qwen3_code/transpilation/transpilation_content_document"
-
-  # 데이터셋 타입
-  dataset_impl: "MMAP"
-
-  # Train/Valid/Test split
-  split: [99, 1, 0]
-
-  # 데이터 로더
-  num_workers: 32
-
-  # 데이터셋 정보
-  description: "Nemotron-Pretraining-Code-v2 synthetic code (5 subsets, equal weight)"
-  tokenizer: "Qwen3Tokenizer"
+data-path: "0.20 /home/work/vidsearch/repos/project_s/Pai-Megatron-Patch/datasets/processed/qwen3_code/code_review/code_review_content_document 0.20 /home/work/vidsearch/repos/project_s/Pai-Megatron-Patch/datasets/processed/qwen3_code/question_answering/question_answering_content_document 0.20 /home/work/vidsearch/repos/project_s/Pai-Megatron-Patch/datasets/processed/qwen3_code/rewriting/rewriting_content_document 0.20 /home/work/vidsearch/repos/project_s/Pai-Megatron-Patch/datasets/processed/qwen3_code/student_teacher/student_teacher_content_document 0.20 /home/work/vidsearch/repos/project_s/Pai-Megatron-Patch/datasets/processed/qwen3_code/transpilation/transpilation_content_document"
+split: "99,1,0"
+dataset: MMAP
+num-workers: 32

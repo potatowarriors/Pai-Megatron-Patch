@@ -1,88 +1,102 @@
-# Alpha Baseline 48L 모델 설정
-# 24L 모델의 2배 depth 버전
-# Qwen3-Next-80B-A3B 기반, H100 8-GPU 최적화
+# Alpha baseline 48L model (Qwen3.5 dimensioning + DSV3 MoE recipe, hybrid).
 #
-# 주요 변경사항 (24L 대비):
-# - 48 layers (24 → 48, 2x depth)
-# - 동일한 256 experts, hidden_size 유지
-# - Attention 6개 (12.5% 비율 유지)
+# Each top-level key here is a Megatron CLI flag — `train.sh`'s yaml_to_flags
+# helper expands `num-layers: 48` into `--num-layers 48`. Booleans:
+#   key: true  -> emit --key (works for store_true and store_false-with-dest)
+#   key: false -> omit
+# So the file *is* the source-of-truth argv contribution for the model.
+#
+# Migration notes (Qwen3-Next → Qwen3.5 dimensioning + DSV3 MoE routing):
+#   - Q upcast adopted: head_dim 64 → 256, total Q dim 2048 → 4096 (Qwen3.5).
+#   - Expert FFN narrowed (768 → 512) and expert count grown (128 → 184) to
+#     keep total ~15B (verified 15.03B via calculate_parameters.py) while
+#     adopting Qwen3.5 expert dim (Qwen3.5 official is 256 × 512; alpha is
+#     184 × 512 to land at ~15B vs Qwen3.5 ~30B).
+#   - DSV3-style MoE routing flags added (group-limited, topk scaling).
 
-model:
-  name: "alpha-baseline-48L"
-  architecture: "qwen3_next_mamba_hybrid"
+# ── Architecture ───────────────────────────────────────────────────────────
+num-layers: 48
+hidden-size: 2048
+ffn-hidden-size: 8192
+num-attention-heads: 16
+kv-channels: 256
 
-  # 기본 아키텍처
-  num_layers: 48
-  hidden_size: 2048
-  ffn_hidden_size: 8192  # 4x ratio
+# Group Query Attention (head_dim=256 uniform; Q upcast: 16 heads × 256 = 4096)
+group-query-attention: true
+num-query-groups: 2
 
-  # Attention (Kimi-Linear 정렬)
-  num_attention_heads: 32      # Original: 16 → 많은 heads
-  kv_channels: 128              # head_dim: 64 (256 → 128 채널)
-  group_query_attention: true
-  num_query_groups: 2
+# ── MoE (DSV3-style routing on Qwen3.5 expert dim) ─────────────────────────
+num-experts: 184                  # 8-multiple round, lands at ~15.0B total at FFN=512
+moe-ffn-hidden-size: 512          # Qwen3.5 expert dim
+moe-router-topk: 8
+moe-aux-loss-coeff: 1.0e-4        # DSV3 best practice (was 0.001; 10× smaller)
+moe-router-dtype: fp32
+moe-grouped-gemm: true
+moe-permute-fusion: true
+moe-router-fusion: true
+moe-shared-expert-intermediate-size: 512   # Qwen3.5 shared expert dim
+moe-shared-expert-gate: true
 
-  # MoE 설정
-  moe:
-    num_experts: 128             # Original: 512
-    moe_ffn_hidden_size: 768     # Original: 512 (50% 증가로 보상)
-    router_topk: 8               # Original: 10
-    router_load_balancing_type: "aux_loss"
-    aux_loss_coeff: 0.001
-    router_score_function: "softmax"
-    router_dtype: "fp32"
-    grouped_gemm: true
-    permute_fusion: true
-    router_fusion: true
-    shared_expert_intermediate_size: 768   # Expert size와 동일
+# DSV3 group-limited routing: 8 groups × 23 experts/group, token sees top-4
+# groups (92 candidate experts). Reduces all-to-all communication ~50%.
+moe-router-num-groups: 8
+moe-router-group-topk: 4
+moe-router-topk-scaling-factor: 2.5   # DSV3: compensates sigmoid+topk geometric reduction
 
-  # Hybrid Model (Mamba + Attention)
-  hybrid:
-    attention_ratio: 0.125      # 12.5% (48 layers 중 6개)
-    mlp_ratio: 0.5
-    # 48 layers: M(18개) + D(1개) + -(23개) + *(6개) = 48
-    # M=GatedDeltaNet, D=Dense MLP, -=MoE, *=Attention
-    override_pattern: "MDM-M-*-M-M-M-*-M-M-M-*-M-M-M-*-M-M-M-*-M-M-M-*-"
-    mamba_state_dim: 128
-    mamba_head_dim: 128          # GatedDeltaNet head dimension
-    mamba_num_groups: 16
-    mamba_num_heads: 32
+# NOTE: moe-router-load-balancing-type / moe-router-score-function /
+# moe-router-enable-expert-bias / moe-router-bias-update-rate live in the
+# *training* preset, because Stage 1 (aux-loss-free, none + sigmoid + bias)
+# and Stage 2 (DSV3 seq_aux_loss + sigmoid + bias) differ on balancing-type.
 
-  # Normalization
-  normalization: "RMSNorm"
-  norm_epsilon: 1.0e-6
-  qk_layernorm: true
-  apply_layernorm_1p: true
+# ── Hybrid (Mamba + Attention) ─────────────────────────────────────────────
+is-hybrid-model: true
+hybrid-attention-ratio: 0.125
+hybrid-mlp-ratio: 0.5
+# 48 layers: M(18) + D(0) + -(24) + *(6) = 48. M=GatedDeltaNet, D=Dense MLP,
+# -=MoE, *=Attention. Currently 0 dense MLPs (D removed in latest baseline).
+hybrid-override-pattern: "M-M-M-*-M-M-M-*-M-M-M-*-M-M-M-*-M-M-M-*-M-M-M-*-"
+mamba-state-dim: 128
+mamba-head-dim: 128
+mamba-num-groups: 16
+mamba-num-heads: 32
 
-  # Activation & Dropout
-  activation: "swiglu"
-  attention_dropout: 0.0
-  hidden_dropout: 0.0
-  disable_bias_linear: true
+# ── Normalization & activation ─────────────────────────────────────────────
+# Standard RMSNorm with gamma=1 init (Qwen3.5 alignment). apply-layernorm-1p
+# (zero-centered gamma) was removed to match Qwen3.5 official RMSNorm. The
+# QK-Clip _clip_layernorm_gamma() in gated_attention.py auto-falls-through to
+# the non-1p branch (w * scale) when this flag is off — no code change needed.
+normalization: RMSNorm
+norm-epsilon: 1.0e-6
+qk-layernorm: true
+swiglu: true
+attention-dropout: 0.0
+hidden-dropout: 0.0
+disable-bias-linear: true
 
-  # Positional Encoding (RoPE)
-  position_embedding_type: "rope"
-  use_rotary_position_embeddings: true
-  rotary_base: 10000000
-  rotary_percent: 0.25
+# ── Positional encoding (RoPE) ─────────────────────────────────────────────
+position-embedding-type: rope
+use-rotary-position-embeddings: true
+rotary-base: 10000000
+rotary-percent: 0.25
 
-  # Tokenizer & Vocab
-  untie_embeddings_and_output_weights: true
-  padded_vocab_size: 151936
-  # Use Megatron-LM standard tokenizer (HuggingFaceTokenizer)
-  tokenizer_type: "HuggingFaceTokenizer"
-  # 토크나이저는 examples/alpha/tokenizer/ 에 고정 위치
-  # (symlink to models/Qwen3-Next-tokenizer)
-  tokenizer_model: "tokenizer"
+# ── Sequence length ────────────────────────────────────────────────────────
+# seq-length is the actual training context (4K). max-position-embeddings is
+# kept at 262144 (Qwen3-Next-80B's yarn-extended max) so that RoPE inverse
+# frequencies are computed for long-context inference compatibility.
+seq-length: 4096
+max-position-embeddings: 262144
 
-# 48L vs 24L 비교:
-# - Depth: 48 layers (24L의 2배)
-# - Experts: 128 (24L의 절반) → 총 expert capacity 유사
-# - MoE layers: 23개 (24L: 11개) → 2배 이상
-# - Attention: 6개 (24L: 3개) → 동일 비율 (12.5%)
-# - Dense MLP: 1개 (첫 번째 MLP만)
+# ── Tokenizer & vocab ──────────────────────────────────────────────────────
+# Alpha-specific tokenizer v5 (PreTrainedTokenizerFast, BBPE). Replaces
+# previous Qwen-compatible tokenizer. Effective len(tokenizer) = 163,860 (163,840
+# base + 80 reserved special tokens); padded to multiple of 128 → 163,968.
+# Special tokens: EOS=<|im_end|>, PAD=<|pad|>, BOS=None, plus <|im_start|>,
+# <|fim_*|>, <tool_call>, <think>, <|endoftext|>, and 80 reserved slots.
+untie-embeddings-and-output-weights: true
+padded-vocab-size: 163968
+tokenizer-type: HuggingFaceTokenizer
+tokenizer-model: /home/work/vidsearch/repos/project_s/Pai-Megatron-Patch/examples/alpha/tokenizer_v5
 
-# 실험 결과 (예정):
-# - OOM 여부:
-# - Throughput:
-# - Loss convergence:
+# ── Backend wiring ─────────────────────────────────────────────────────────
+use-mcore-models: true
+transformer-impl: transformer_engine

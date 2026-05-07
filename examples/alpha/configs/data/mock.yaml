@@ -1,0 +1,7 @@
+# Mock data preset for smoke tests. Megatron's --mock-data flag generates
+# synthetic GPT-style batches in-memory (no .bin/.idx required).
+
+mock-data: true
+dataset: MMAP                # megatron_patch dispatch (MMAP + mock-data → MockGPTDataset)
+split: "99,1,0"
+num-workers: 0
