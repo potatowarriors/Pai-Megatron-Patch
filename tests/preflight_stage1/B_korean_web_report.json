@@ -1,0 +1,326 @@
+{
+  "source": "korean_web",
+  "prefix": "/home/work/Datasets/LL_preprocessed/v5/stage1/korean_web/data_text_document",
+  "B1": {
+    "status": "pass",
+    "details": {
+      "magic_bytes": "4d4d49444944580000",
+      "magic_match": true,
+      "version": 1,
+      "dtype_code": 4,
+      "dtype_name": "int32",
+      "sequence_count": 15738376,
+      "document_count": 15738377,
+      "idx_file_size": 314767562,
+      "bin_file_size": 67856340576
+    }
+  },
+  "B2": {
+    "status": "pass",
+    "details": {
+      "sequence_count_via_idx": 15738376,
+      "document_count_via_idx_len": 15738377,
+      "sum_sequence_lengths": 16964085144,
+      "expected_bin_size_bytes": 67856340576,
+      "actual_bin_size_bytes": 67856340576,
+      "bin_size_match": true,
+      "last_seq_ptr_plus_size": 67856340576
+    }
+  },
+  "B3": {
+    "status": "pass",
+    "details": {
+      "chunks": 16,
+      "chunk_bytes_each": 104857600,
+      "total_tokens_sampled": 419430400,
+      "global_min": 0,
+      "global_max": 163859,
+      "max_under_effective_vocab": true,
+      "min_nonneg": true,
+      "top_50": [
+        {
+          "id": 109,
+          "count": 11998788
+        },
+        {
+          "id": 316,
+          "count": 8338104
+        },
+        {
+          "id": 107,
+          "count": 7975410
+        },
+        {
+          "id": 409,
+          "count": 3109219
+        },
+        {
+          "id": 294,
+          "count": 2275401
+        },
+        {
+          "id": 766,
+          "count": 2194597
+        },
+        {
+          "id": 536,
+          "count": 2083918
+        },
+        {
+          "id": 524,
+          "count": 1942487
+        },
+        {
+          "id": 474,
+          "count": 1872780
+        },
+        {
+          "id": 509,
+          "count": 1619895
+        },
+        {
+          "id": 650,
+          "count": 1485678
+        },
+        {
+          "id": 715,
+          "count": 1343055
+        },
+        {
+          "id": 112,
+          "count": 1327334
+        },
+        {
+          "id": 103,
+          "count": 1235363
+        },
+        {
+          "id": 657,
+          "count": 1151096
+        },
+        {
+          "id": 809,
+          "count": 1149934
+        },
+        {
+          "id": 2012,
+          "count": 1131806
+        },
+        {
+          "id": 104,
+          "count": 1110112
+        },
+        {
+          "id": 824,
+          "count": 1106886
+        },
+        {
+          "id": 113,
+          "count": 1099908
+        },
+        {
+          "id": 939,
+          "count": 1090018
+        },
+        {
+          "id": 564,
+          "count": 1042686
+        },
+        {
+          "id": 108,
+          "count": 1006539
+        },
+        {
+          "id": 482,
+          "count": 1006039
+        },
+        {
+          "id": 1636,
+          "count": 994638
+        },
+        {
+          "id": 114,
+          "count": 971664
+        },
+        {
+          "id": 121,
+          "count": 941782
+        },
+        {
+          "id": 520,
+          "count": 904194
+        },
+        {
+          "id": 1319,
+          "count": 904069
+        },
+        {
+          "id": 582,
+          "count": 886290
+        },
+        {
+          "id": 801,
+          "count": 884393
+        },
+        {
+          "id": 907,
+          "count": 848342
+        },
+        {
+          "id": 1144,
+          "count": 844451
+        },
+        {
+          "id": 629,
+          "count": 820036
+        },
+        {
+          "id": 708,
+          "count": 786852
+        },
+        {
+          "id": 116,
+          "count": 781963
+        },
+        {
+          "id": 1326,
+          "count": 777644
+        },
+        {
+          "id": 115,
+          "count": 772961
+        },
+        {
+          "id": 1178,
+          "count": 710586
+        },
+        {
+          "id": 1254,
+          "count": 690681
+        },
+        {
+          "id": 979,
+          "count": 688925
+        },
+        {
+          "id": 111,
+          "count": 687439
+        },
+        {
+          "id": 1185,
+          "count": 677883
+        },
+        {
+          "id": 931,
+          "count": 670605
+        },
+        {
+          "id": 635,
+          "count": 667200
+        },
+        {
+          "id": 1405,
+          "count": 640349
+        },
+        {
+          "id": 1995,
+          "count": 625939
+        },
+        {
+          "id": 1755,
+          "count": 621664
+        },
+        {
+          "id": 102,
+          "count": 620477
+        },
+        {
+          "id": 619,
+          "count": 578078
+        }
+      ],
+      "top_10_decoded": [
+        {
+          "id": 109,
+          "count": 11998788,
+          "decoded": "."
+        },
+        {
+          "id": 316,
+          "count": 8338104,
+          "decoded": " "
+        },
+        {
+          "id": 107,
+          "count": 7975410,
+          "decoded": ","
+        },
+        {
+          "id": 409,
+          "count": 3109219,
+          "decoded": ".\n"
+        },
+        {
+          "id": 294,
+          "count": 2275401,
+          "decoded": "\n"
+        },
+        {
+          "id": 766,
+          "count": 2194597,
+          "decoded": " 수"
+        },
+        {
+          "id": 536,
+          "count": 2083918,
+          "decoded": "의"
+        },
+        {
+          "id": 524,
+          "count": 1942487,
+          "decoded": "에"
+        },
+        {
+          "id": 474,
+          "count": 1872780,
+          "decoded": "이"
+        },
+        {
+          "id": 509,
+          "count": 1619895,
+          "decoded": "을"
+        }
+      ]
+    }
+  },
+  "B4": {
+    "status": "pass",
+    "details": {
+      "sampled_docs": 10000,
+      "docs_ending_in_eod_id_0": 10000,
+      "fraction": 1.0,
+      "top_10_last_tokens": [
+        {
+          "id": 0,
+          "count": 10000,
+          "decoded": "<|endoftext|>"
+        }
+      ]
+    },
+    "note": "pre-injection — expect 0; Phase 0.4 will flip this to 100%"
+  },
+  "B5": {
+    "status": "pass",
+    "details": {
+      "n_docs": 15738376,
+      "empty_zero_length": 0,
+      "shorter_than_16": 683,
+      "shorter_than_64": 566005,
+      "mean_doc_len": 1077.8802809133547,
+      "median_doc_len": 729.0,
+      "p95_doc_len": 3138.0,
+      "max_doc_len": 70111
+    }
+  },
+  "duration_sec": 25.7
+}

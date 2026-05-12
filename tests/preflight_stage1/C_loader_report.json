@@ -1,0 +1,140 @@
+{
+  "phase": "C-loader",
+  "checks": {
+    "dclm": {
+      "flags_on": {
+        "source": "dclm",
+        "samples_drawn": 100,
+        "eod_count_per_sample": {
+          "mean": 2.99,
+          "min": 0,
+          "max": 9,
+          "p50": 3.0
+        },
+        "loss_mask_coverage": {
+          "mean": 0.99927001953125,
+          "min": 0.997802734375
+        },
+        "max_position_id": {
+          "mean": 2403.71,
+          "min": 695,
+          "max": 4095
+        },
+        "cross_doc_attn_block_rate": 1.0,
+        "n_samples_with_any_eod": 80
+      },
+      "flags_off": {
+        "source": "dclm",
+        "samples_drawn": 100,
+        "eod_count_per_sample": {
+          "mean": 2.99,
+          "min": 0,
+          "max": 9,
+          "p50": 3.0
+        },
+        "loss_mask_coverage": {
+          "mean": 1.0,
+          "min": 1.0
+        },
+        "max_position_id": {
+          "mean": 4095.0,
+          "min": 4095,
+          "max": 4095
+        },
+        "cross_doc_attn_block_rate": 0.0,
+        "n_samples_with_any_eod": 80
+      }
+    },
+    "korean_web": {
+      "flags_on": {
+        "source": "korean_web",
+        "samples_drawn": 100,
+        "eod_count_per_sample": {
+          "mean": 4.02,
+          "min": 0,
+          "max": 10,
+          "p50": 4.0
+        },
+        "loss_mask_coverage": {
+          "mean": 0.9990185546875,
+          "min": 0.99755859375
+        },
+        "max_position_id": {
+          "mean": 1954.32,
+          "min": 833,
+          "max": 4095
+        },
+        "cross_doc_attn_block_rate": 1.0,
+        "n_samples_with_any_eod": 93
+      },
+      "flags_off": {
+        "source": "korean_web",
+        "samples_drawn": 100,
+        "eod_count_per_sample": {
+          "mean": 4.02,
+          "min": 0,
+          "max": 10,
+          "p50": 4.0
+        },
+        "loss_mask_coverage": {
+          "mean": 1.0,
+          "min": 1.0
+        },
+        "max_position_id": {
+          "mean": 4095.0,
+          "min": 4095,
+          "max": 4095
+        },
+        "cross_doc_attn_block_rate": 0.0,
+        "n_samples_with_any_eod": 93
+      }
+    },
+    "fineweb2hq": {
+      "flags_on": {
+        "source": "fineweb2hq",
+        "samples_drawn": 100,
+        "eod_count_per_sample": {
+          "mean": 4.69,
+          "min": 0,
+          "max": 12,
+          "p50": 5.0
+        },
+        "loss_mask_coverage": {
+          "mean": 0.99885498046875,
+          "min": 0.9970703125
+        },
+        "max_position_id": {
+          "mean": 2335.13,
+          "min": 702,
+          "max": 4095
+        },
+        "cross_doc_attn_block_rate": 1.0,
+        "n_samples_with_any_eod": 82
+      },
+      "flags_off": {
+        "source": "fineweb2hq",
+        "samples_drawn": 100,
+        "eod_count_per_sample": {
+          "mean": 4.69,
+          "min": 0,
+          "max": 12,
+          "p50": 5.0
+        },
+        "loss_mask_coverage": {
+          "mean": 1.0,
+          "min": 1.0
+        },
+        "max_position_id": {
+          "mean": 4095.0,
+          "min": 4095,
+          "max": 4095
+        },
+        "cross_doc_attn_block_rate": 0.0,
+        "n_samples_with_any_eod": 82
+      }
+    }
+  },
+  "started": 1778562760.5367775,
+  "finished": 1778562852.4121072,
+  "duration_sec": 91.88
+}

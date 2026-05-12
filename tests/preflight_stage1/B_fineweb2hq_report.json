@@ -1,0 +1,326 @@
+{
+  "source": "fineweb2hq",
+  "prefix": "/home/work/Datasets/LL_preprocessed/v5/stage1/fineweb2hq/data_text_document",
+  "B1": {
+    "status": "pass",
+    "details": {
+      "magic_bytes": "4d4d49444944580000",
+      "magic_match": true,
+      "version": 1,
+      "dtype_code": 4,
+      "dtype_name": "int32",
+      "sequence_count": 6137775,
+      "document_count": 6137776,
+      "idx_file_size": 122755542,
+      "bin_file_size": 22878249760
+    }
+  },
+  "B2": {
+    "status": "pass",
+    "details": {
+      "sequence_count_via_idx": 6137775,
+      "document_count_via_idx_len": 6137776,
+      "sum_sequence_lengths": 5719562440,
+      "expected_bin_size_bytes": 22878249760,
+      "actual_bin_size_bytes": 22878249760,
+      "bin_size_match": true,
+      "last_seq_ptr_plus_size": 22878249760
+    }
+  },
+  "B3": {
+    "status": "pass",
+    "details": {
+      "chunks": 16,
+      "chunk_bytes_each": 104857600,
+      "total_tokens_sampled": 419430400,
+      "global_min": 0,
+      "global_max": 163859,
+      "max_under_effective_vocab": true,
+      "min_nonneg": true,
+      "top_50": [
+        {
+          "id": 107,
+          "count": 12220623
+        },
+        {
+          "id": 109,
+          "count": 7535130
+        },
+        {
+          "id": 353,
+          "count": 3583455
+        },
+        {
+          "id": 409,
+          "count": 3529383
+        },
+        {
+          "id": 316,
+          "count": 3445424
+        },
+        {
+          "id": 462,
+          "count": 2374701
+        },
+        {
+          "id": 294,
+          "count": 1604242
+        },
+        {
+          "id": 108,
+          "count": 1432513
+        },
+        {
+          "id": 949,
+          "count": 1279658
+        },
+        {
+          "id": 442,
+          "count": 1190038
+        },
+        {
+          "id": 407,
+          "count": 1176748
+        },
+        {
+          "id": 1779,
+          "count": 1165640
+        },
+        {
+          "id": 121,
+          "count": 1028402
+        },
+        {
+          "id": 1062,
+          "count": 989971
+        },
+        {
+          "id": 1521,
+          "count": 944365
+        },
+        {
+          "id": 1876,
+          "count": 890372
+        },
+        {
+          "id": 3086,
+          "count": 835860
+        },
+        {
+          "id": 168,
+          "count": 829472
+        },
+        {
+          "id": 929,
+          "count": 808918
+        },
+        {
+          "id": 1887,
+          "count": 780837
+        },
+        {
+          "id": 577,
+          "count": 780535
+        },
+        {
+          "id": 2963,
+          "count": 731131
+        },
+        {
+          "id": 3146,
+          "count": 709049
+        },
+        {
+          "id": 369,
+          "count": 706682
+        },
+        {
+          "id": 3006,
+          "count": 686956
+        },
+        {
+          "id": 4047,
+          "count": 660070
+        },
+        {
+          "id": 383,
+          "count": 655565
+        },
+        {
+          "id": 104,
+          "count": 627098
+        },
+        {
+          "id": 563,
+          "count": 620128
+        },
+        {
+          "id": 405,
+          "count": 605125
+        },
+        {
+          "id": 160,
+          "count": 600009
+        },
+        {
+          "id": 3142,
+          "count": 591946
+        },
+        {
+          "id": 2216,
+          "count": 542190
+        },
+        {
+          "id": 583,
+          "count": 539358
+        },
+        {
+          "id": 520,
+          "count": 521355
+        },
+        {
+          "id": 758,
+          "count": 511535
+        },
+        {
+          "id": 361,
+          "count": 500261
+        },
+        {
+          "id": 3080,
+          "count": 497731
+        },
+        {
+          "id": 112,
+          "count": 475677
+        },
+        {
+          "id": 174,
+          "count": 462773
+        },
+        {
+          "id": 3087,
+          "count": 456430
+        },
+        {
+          "id": 3044,
+          "count": 456372
+        },
+        {
+          "id": 849,
+          "count": 447925
+        },
+        {
+          "id": 430,
+          "count": 440368
+        },
+        {
+          "id": 374,
+          "count": 439861
+        },
+        {
+          "id": 113,
+          "count": 425465
+        },
+        {
+          "id": 0,
+          "count": 421420
+        },
+        {
+          "id": 1671,
+          "count": 412564
+        },
+        {
+          "id": 1433,
+          "count": 406921
+        },
+        {
+          "id": 1206,
+          "count": 401375
+        }
+      ],
+      "top_10_decoded": [
+        {
+          "id": 107,
+          "count": 12220623,
+          "decoded": ","
+        },
+        {
+          "id": 109,
+          "count": 7535130,
+          "decoded": "."
+        },
+        {
+          "id": 353,
+          "count": 3583455,
+          "decoded": " a"
+        },
+        {
+          "id": 409,
+          "count": 3529383,
+          "decoded": ".\n"
+        },
+        {
+          "id": 316,
+          "count": 3445424,
+          "decoded": " "
+        },
+        {
+          "id": 462,
+          "count": 2374701,
+          "decoded": " de"
+        },
+        {
+          "id": 294,
+          "count": 1604242,
+          "decoded": "\n"
+        },
+        {
+          "id": 108,
+          "count": 1432513,
+          "decoded": "-"
+        },
+        {
+          "id": 949,
+          "count": 1279658,
+          "decoded": " di"
+        },
+        {
+          "id": 442,
+          "count": 1190038,
+          "decoded": " ("
+        }
+      ]
+    }
+  },
+  "B4": {
+    "status": "pass",
+    "details": {
+      "sampled_docs": 10000,
+      "docs_ending_in_eod_id_0": 10000,
+      "fraction": 1.0,
+      "top_10_last_tokens": [
+        {
+          "id": 0,
+          "count": 10000,
+          "decoded": "<|endoftext|>"
+        }
+      ]
+    },
+    "note": "pre-injection — expect 0; Phase 0.4 will flip this to 100%"
+  },
+  "B5": {
+    "status": "pass",
+    "details": {
+      "n_docs": 6137775,
+      "empty_zero_length": 0,
+      "shorter_than_16": 0,
+      "shorter_than_64": 267,
+      "mean_doc_len": 931.862513695924,
+      "median_doc_len": 395.0,
+      "p95_doc_len": 3033.0,
+      "max_doc_len": 263528
+    }
+  },
+  "duration_sec": 22.95
+}

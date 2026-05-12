@@ -1,0 +1,326 @@
+{
+  "source": "dclm",
+  "prefix": "/home/work/Datasets/LL_preprocessed/v5/stage1/dclm/data_text_document",
+  "B1": {
+    "status": "pass",
+    "details": {
+      "magic_bytes": "4d4d49444944580000",
+      "magic_match": true,
+      "version": 1,
+      "dtype_code": 4,
+      "dtype_name": "int32",
+      "sequence_count": 312031636,
+      "document_count": 312031637,
+      "idx_file_size": 6240632762,
+      "bin_file_size": 1775148645376
+    }
+  },
+  "B2": {
+    "status": "pass",
+    "details": {
+      "sequence_count_via_idx": 312031636,
+      "document_count_via_idx_len": 312031637,
+      "sum_sequence_lengths": 443787161344,
+      "expected_bin_size_bytes": 1775148645376,
+      "actual_bin_size_bytes": 1775148645376,
+      "bin_size_match": true,
+      "last_seq_ptr_plus_size": 1775148645376
+    }
+  },
+  "B3": {
+    "status": "pass",
+    "details": {
+      "chunks": 16,
+      "chunk_bytes_each": 104857600,
+      "total_tokens_sampled": 419430400,
+      "global_min": 0,
+      "global_max": 163859,
+      "max_under_effective_vocab": true,
+      "min_nonneg": true,
+      "top_50": [
+        {
+          "id": 362,
+          "count": 15811592
+        },
+        {
+          "id": 107,
+          "count": 15502157
+        },
+        {
+          "id": 109,
+          "count": 14900169
+        },
+        {
+          "id": 389,
+          "count": 8659650
+        },
+        {
+          "id": 384,
+          "count": 8376790
+        },
+        {
+          "id": 392,
+          "count": 8087011
+        },
+        {
+          "id": 163851,
+          "count": 7282885
+        },
+        {
+          "id": 353,
+          "count": 6862522
+        },
+        {
+          "id": 383,
+          "count": 5001178
+        },
+        {
+          "id": 316,
+          "count": 4249367
+        },
+        {
+          "id": 423,
+          "count": 4149635
+        },
+        {
+          "id": 451,
+          "count": 3875555
+        },
+        {
+          "id": 438,
+          "count": 2645666
+        },
+        {
+          "id": 494,
+          "count": 2466648
+        },
+        {
+          "id": 447,
+          "count": 2244190
+        },
+        {
+          "id": 497,
+          "count": 2183868
+        },
+        {
+          "id": 489,
+          "count": 2084168
+        },
+        {
+          "id": 294,
+          "count": 2039708
+        },
+        {
+          "id": 449,
+          "count": 2028878
+        },
+        {
+          "id": 487,
+          "count": 1975778
+        },
+        {
+          "id": 461,
+          "count": 1902549
+        },
+        {
+          "id": 434,
+          "count": 1850104
+        },
+        {
+          "id": 595,
+          "count": 1828039
+        },
+        {
+          "id": 121,
+          "count": 1727289
+        },
+        {
+          "id": 909,
+          "count": 1655039
+        },
+        {
+          "id": 442,
+          "count": 1574293
+        },
+        {
+          "id": 633,
+          "count": 1529803
+        },
+        {
+          "id": 488,
+          "count": 1432448
+        },
+        {
+          "id": 599,
+          "count": 1430840
+        },
+        {
+          "id": 593,
+          "count": 1368833
+        },
+        {
+          "id": 561,
+          "count": 1270745
+        },
+        {
+          "id": 574,
+          "count": 1247869
+        },
+        {
+          "id": 506,
+          "count": 1202515
+        },
+        {
+          "id": 552,
+          "count": 1187383
+        },
+        {
+          "id": 761,
+          "count": 1146025
+        },
+        {
+          "id": 585,
+          "count": 1098784
+        },
+        {
+          "id": 476,
+          "count": 1073160
+        },
+        {
+          "id": 835,
+          "count": 1034666
+        },
+        {
+          "id": 126,
+          "count": 951416
+        },
+        {
+          "id": 698,
+          "count": 949227
+        },
+        {
+          "id": 753,
+          "count": 948848
+        },
+        {
+          "id": 104,
+          "count": 928797
+        },
+        {
+          "id": 519,
+          "count": 905937
+        },
+        {
+          "id": 722,
+          "count": 898396
+        },
+        {
+          "id": 952,
+          "count": 896589
+        },
+        {
+          "id": 655,
+          "count": 894654
+        },
+        {
+          "id": 760,
+          "count": 890842
+        },
+        {
+          "id": 163840,
+          "count": 886547
+        },
+        {
+          "id": 736,
+          "count": 839516
+        },
+        {
+          "id": 520,
+          "count": 821936
+        }
+      ],
+      "top_10_decoded": [
+        {
+          "id": 362,
+          "count": 15811592,
+          "decoded": " the"
+        },
+        {
+          "id": 107,
+          "count": 15502157,
+          "decoded": ","
+        },
+        {
+          "id": 109,
+          "count": 14900169,
+          "decoded": "."
+        },
+        {
+          "id": 389,
+          "count": 8659650,
+          "decoded": " to"
+        },
+        {
+          "id": 384,
+          "count": 8376790,
+          "decoded": " of"
+        },
+        {
+          "id": 392,
+          "count": 8087011,
+          "decoded": " and"
+        },
+        {
+          "id": 163851,
+          "count": 7282885,
+          "decoded": "\n\n"
+        },
+        {
+          "id": 353,
+          "count": 6862522,
+          "decoded": " a"
+        },
+        {
+          "id": 383,
+          "count": 5001178,
+          "decoded": " in"
+        },
+        {
+          "id": 316,
+          "count": 4249367,
+          "decoded": " "
+        }
+      ]
+    }
+  },
+  "B4": {
+    "status": "pass",
+    "details": {
+      "sampled_docs": 10000,
+      "docs_ending_in_eod_id_0": 10000,
+      "fraction": 1.0,
+      "top_10_last_tokens": [
+        {
+          "id": 0,
+          "count": 10000,
+          "decoded": "<|endoftext|>"
+        }
+      ]
+    },
+    "note": "pre-injection — expect 0; Phase 0.4 will flip this to 100%"
+  },
+  "B5": {
+    "status": "pass",
+    "details": {
+      "n_docs": 312031636,
+      "empty_zero_length": 0,
+      "shorter_than_16": 1,
+      "shorter_than_64": 74635,
+      "mean_doc_len": 1422.2505353399488,
+      "median_doc_len": 769.0,
+      "p95_doc_len": 4530.0,
+      "max_doc_len": 474743
+    }
+  },
+  "duration_sec": 34.26
+}

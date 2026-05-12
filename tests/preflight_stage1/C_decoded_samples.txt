@@ -1,0 +1,274 @@
+# Phase C — decoded samples
+
+
+================================================================================
+## SOURCE: dclm  (312,031,636 docs)
+================================================================================
+
+
+--- doc 0 (len=1014 tokens, last 5 ids = [34101, 16915, 11290, 25226, 3]) ---
+HEAD (first ≤400 tokens decoded):
+YOU ARE HERE: LAT HomeCollections
+(Page 2 of 4)
+
+Kicking Out the Jams
+
+The Trials and Triumphs of Barney Rosset's Grove Press
+
+
+These same conditions were to give rise in the spring of 1970 to a conflict that marked the end of Grove's decade of remarkable success. A dissident group of employees sought to unionize the company, and a disciplined cell of feminists demanded veto power over Grove's editorial policy. The machinists' union quickly signed up half a dozen editorial workers, all of whom Rosset promptly fired. The women had other goals, including 24-hour free child care, for all profits from books written by black authors to be "returned" to the black "community" and for all profits from erotic books to be used to establish a defense fund for prostitutes. In keeping with the spirit of the times, the feminists occupied the executive offices at Grove and mounted a press campaign that made network television news. Rosset refused to acquiesce in what he saw as censorship and had them forcibly removed by the police. He had sat on his own sword.
+
+The union lost the vote among the employees, but the demands of the radicals remained morally divisive. How could a man who had been a Communist in his youth, one who held in contempt any social policy that interfered with the freedom of the artist or the individual, not accede to the values of the women's movement? The writers and film-makers who saw in Grove a haven for expression and experimentation became disaffected. Readers, 200,000 of whom bought Evergreen Review every month and who sought out new books from Grove simply because they were published by Grove, began to desert the company.
+
+These events, coupled with declining revenues from the film division and the excessive cost of renovating a new office building, combined to jeopardize Grove's financial future. But, more important, by the early 1970s, Grove's captive audience had been fractured. Books and magazine articles
+...
+TAIL (last ≤50 tokens decoded, including EOD):
+isticate one first met. Rosset needed money but disdained what he believed it represented, as when, after his father's death, he sued the state of Illinois to return a prized charter to operate a private bank.
+
+Los Angeles Times Articles<|im_end|>
+
+
+--- doc 1 (len=992 tokens, last 5 ids = [915, 389, 69863, 126, 3]) ---
+HEAD (first ≤400 tokens decoded):
+Can you ever win an argument with a teenager?
+
+
+Of course your teacher doesn't go over homework. That makes sense.
+
+I say no.
+
+Case in point: My oldest and I went around in circles yesterday about studying for a math test. She argued she couldn’t begin studying until her class finished the unit because she “wouldn’t know what to study.” I suggested she start with finished and corrected homework, which seemed like a logical approach. She spent the next 10 minutes telling me why that couldn’t happen, which seemed nonsensical.
+
+Here’s the conversation:
+
+Me: Do you have a math test coming up?
+
+Her: When we finish the unit.
+
+Me: When is that?
+
+Her: If we finish the unit Friday, the test will be Monday. If we finish Monday, it will be Tuesday.
+
+Me: Maybe you can study a little each night between now and then.
+
+Her: No, I can’t until we finish the unit.
+
+Me: What?
+
+Her: I won’t know what to study.
+
+Me: You’re doing homework every night. Presumably, that is the material that will be on the test.
+
+Her: I don’t want to study it if I’m doing it wrong.
+
+Me: Doesn’t your teacher grade it?
+
+Her: No, he just marks whether you’ve done it.
+
+Me: Really? He doesn’t go over the homework? I need to know because I think maybe I need to talk to him then.
+
+Her: He only goes over the ones you did wrong.
+
+Me: Is there something you can go over, practice each night?
+
+Her: No, I have to wait until the unit is done and do the review homework.
+
+Me: (imagine, if you will, my raised voice) OK, Use whatever study method you want. If you bring home a C, the cellphone is gone.
+
+Tracy Ormsbee
+...
+TAIL (last ≤50 tokens decoded, including EOD):
+omi – more importantly, does he give lessons?
+
+  9. john says:
+
+    You cant win an argument with a woman. Why do you think you could with a teenager? Why do you suppose dads leave it up to moms?<|im_end|>
+
+
+--- doc 100 (len=616 tokens, last 5 ids = [4432, 12911, 29208, 294, 3]) ---
+HEAD (first ≤400 tokens decoded):
+
+
+
+Sci. Signal., 25 October 2011
+Vol. 4, Issue 196, p. ec302
+[DOI: 10.1126/scisignal.4196ec302]
+
+
+Microbiology Poised by Noise
+
+Annalisa M. VanHook
+
+Science, AAAS, Washington, DC 20005, USA
+
+Bacterial sigma factors confer promoter specificity to the RNA polymerase holoenzyme, with primary sigma factors being responsible for regulating expression of housekeeping genes and alternative sigma factors stimulating transcription of genes associated with specific regulatory programs, such as the response to starvation or heat shock. In response to environmental or energy stresses, bacteria such as Bacillus subtilis initiate production of the alternative sigma factor {sigma}B, which stimulates the transcription of various target genes associated with pathogenicity. {sigma}B activity is repressed by the kinase and anti-sigma factor RsbW and activated by the unphosphorylated form of the anti-anti-sigma factor RsbV. The phosphorylation status of RsbV is controlled by RsbW and the phosphatase RsbQP. Using a {sigma}B-responsive fluorescent reporter, Locke et al. observed that Bacillus cultures exhibited sporadic, unsynchronized pulses of {sigma}B activity in response to constant exposure to the energy stressor mycophenolic acid (MPA). Increasing the concentration of MPA caused an increase in the frequency of pulses but had little effect on the amplitude or duration of pulses. In a strain of Bacillus that forms multinucleate filaments in which cells share a common cytoplasm through which cellular contents freely diffuse, the frequency of MPA-induced pulses of {sigma}B activity decreased, thus suggesting that noise resulting from cell-to-cell differences in the abundance of circuit components played a role in pulse generation. Pulse frequency was especially sensitive to the abundance of RsbQP and RsbW, and MPA treatment induced an increase in RsbQP abundance. Initial {sigma}B pulses were subject to a mixed feedback loop
+...
+TAIL (last ≤50 tokens decoded, including EOD):
+–369 (2011). [Abstract] [Full Text]
+
+Citation: A. M. VanHook, Poised by Noise. Sci. Signal. 4, ec302 (2011).
+
+To Advertise     Find Products
+<|im_end|>
+
+
+--- doc 1000 (len=225 tokens, last 5 ids = [161, 16956, 12120, 109, 3]) ---
+HEAD (first ≤400 tokens decoded):
+Engagement Ring With Hidden Diamond by John Weldon
+
+By: Bianca Bartz - Published: • References: johnwelden &
+So it might seem a little (or a lot) geeky at first, but the mechanical engagement ring with hidden diamond by John Weldon could hold a lot of appeal for people who appreciate little gems with high tech components.
+
+With the press of a button, the titanium wings covering the top of the mechanical engagement ring shoot to either side to unveil a small, yet dazzling, diamond.
+
+Every time she wants to flaunt her John Weldon rock, she'll be able to trigger the doors open, just like Dr. Evil in his space shuttle. Stats for Mechanical Diamond Rings Trending: Older & Warm
+Traction: 38,682 clicks in 288 w
+Interest: 3.3 minutes
+Concept: Mechanical Diamond Rings
+Related: 27 examples / 21 photos
+Segment: Females, 18-35
+Comparison Set: 10 similar articles, including: 49 unique engagement rings, diamond defender, and usb engagement ring.<|im_end|>
+...
+TAIL (last ≤50 tokens decoded, including EOD):
+: Mechanical Diamond Rings
+Related: 27 examples / 21 photos
+Segment: Females, 18-35
+Comparison Set: 10 similar articles, including: 49 unique engagement rings, diamond defender, and usb engagement ring.<|im_end|>
+
+
+--- doc 100000 (len=228 tokens, last 5 ids = [316, 15484, 109, 163851, 3]) ---
+HEAD (first ≤400 tokens decoded):
+Posts Tagged ‘DV’
+
+Bloggers take over nuclear sub USS Hampton
+
+ourrideWhat dangles when you angle? What slides when you dive? How many ladders can they fit in one sub, and must I climb all of them? This and many other questions were answered Friday when a group of 8 bloggers were invited aboard the U.S. Navy’s nuclear submarine U.S.S. Hampton for an all-day distinguished visitor cruise.
+
+The bloggers included Smarterware’s Gina Trapani (@ginatrapani), NBC San Diego tech correspondent and Mashable associate editor Jenn Van Grove (@jbruin), Mitch Wagner (@mitchwagner), Angie Swartz (@aaswartz), Chris Cantore (@chriscantore), Scott Kingery (@techlifeweb), Rob Marlbrough (@DowntownRob), and me, Peggy Gartin (@thepegisin). The visit was arranged by Submarine Squadron 11’s public affairs officer Lt. Denise Garcia and led by the squadron’s commander, Commodore Brett Genoble. Waiting to greet us were the boat’s commanding officer Commander Bill Houston and his crew of 134.
+
+<|im_end|>
+...
+TAIL (last ≤50 tokens decoded, including EOD):
+ arranged by Submarine Squadron 11’s public affairs officer Lt. Denise Garcia and led by the squadron’s commander, Commodore Brett Genoble. Waiting to greet us were the boat’s commanding officer Commander Bill Houston and his crew of 134.
+
+<|im_end|>
+
+
+================================================================================
+## SOURCE: korean_web  (15,738,376 docs)
+================================================================================
+
+
+--- doc 0 (len=240 tokens, last 5 ids = [801, 157907, 13596, 2144, 3]) ---
+HEAD (first ≤400 tokens decoded):
+E.1. 문서 정보 이전  부록 E. 관리  다음 E.1. 문서 정보 이 설명서는 사지(Sarge)의 데비안 설치 프로그램을 위해 만들어졌으며 이는 부트-플로피를 위한 우디 설치 설명서에 기반하고 있습니다. 또한 기반 설명서는 이전 데비안 설치 설명서와 2003년에 발표된 Progeny 배포판 설명서에 기반합니다. 이 문서는 DocBook XML로 쓰여졌습니다. 출력 형식은 docbook-xml과 docbook-xsl 꾸러미에 있는 정보를 이용하는 다양한 프로그램에 의해 생성됩니다. 이 문서는 유지보수하기 좋도록 엔티티와 프로파일 속성과 같은 많은 XML 특성을 사용합니다. 이들은 프로그래밍 언어의 변수와 상수들과 유사한 역할을 합니다. 이 문서의 XML소스는 아키텍처 특정적인 몇몇의 텍스트를 분리하는데 사용하는 각기 다른 아키텍처 — 프로파일링 속성에 관한 정보를 담고 있습니다. 이 문서의 번역에 참여한 사람은 다음과 같습니다. Jang Seok-moon, Sunjae Park, Kwangwoo Lee, Changwoo Ryu, ByungHyun Choi, Seok-moon Jang. 도움을 주셔서 감사합니다. 이전  위로  다음 부록 E. 관리  처음으로  E.2. 이 문서에 기여하기<|im_end|>
+...
+TAIL (last ≤50 tokens decoded, including EOD):
+ Kwangwoo Lee, Changwoo Ryu, ByungHyun Choi, Seok-moon Jang. 도움을 주셔서 감사합니다. 이전  위로  다음 부록 E. 관리  처음으로  E.2. 이 문서에 기여하기<|im_end|>
+
+
+--- doc 1 (len=5207 tokens, last 5 ids = [2033, 59209, 5581, 3126, 3]) ---
+HEAD (first ≤400 tokens decoded):
+주께서 가라사대 하늘은 나의 보좌요 땅은 나의 발등상이니 너희가 나를 위하여 무슨 집을 짓겠으며 나의 안식할 처소가 어디뇨 이 모든 것이 다 내 손으로 지은 것이 아니냐 [사도행전 7:49,50] 창조의 신비 성경과 기독교 노아의 홍수 생명복제와 UFO 천문학 물리학 수학 환경 지질학 화석 진화론 진화론의 주장 창조론 연대문제 압도적인 노아 홍수 의 지질학적 증거들 사람과 공룡이 함께 살았다는 증거들 부정되고 있는 수십 억년의 지구연대 정확무오한 하나님의 말씀인 성경 만물에 깃든 창조주 의 능력과 신성 진화를 부정하는 살아있는 화석들 진화론의 허구적 증거와 주장 첫 방문자를 위한 창조과학 추천자료 Impact Article Creation Magazine Encyclopedia Technical Journal CEH Headlines CRSQ Omniology CSC Bible.ca RAE [2008년 4~6월호]   정확무오한 하나님의 말씀인 성경 HOME > 자료실 > 주제별 우리의 생명이신 그리스도 1 (Christ Our Life) Henry M. Morris '우리 생명이신 그리스도께서 나타나실 그 때에 너희도 그와 함께 영광 중에 나타나리라' (골로새서 3:4) 'When Christ, who is our life, shall appear, then shall ye also appear with him in glory' (Colossians 3:4) 이 구절은 주 예수 그리스도께서는 우리의 생명이 창조되는 그 때부터 영광 중에 영원한 생명으로 완성되는 그 때까지 우리의 생명 바로 그것이라는 것을 확실히 하는 경이로운 말씀이다! 그는 태초에 우리의 육신에 생명을 창조하시었다. 그리고 그는 '만민에게 생명과, 호흡과, 만물을 친히 주시는 자' 이시다. 이는 그가 '우리 각 사람에게서 멀리 떠나 계시지 아니하기' 위함이다. (사도행전 17:25, 27). 지금 그는 '능력의 말씀으로 만물을 붙드시며' (히브리서 1:3) 계시기 때문에, 만약에 그가 한 순간이라도 그 신비로운 결속의 힘을
+...
+TAIL (last ≤50 tokens decoded, including EOD):
+ 창조과학 AtoZ(정가12,000원) 김재욱 저 어린이 도서 세트 할인판매 저 어버이날 2종 세트 저 진화론에는 진화가 없다 (정가, 8,000원... 김재욱 저<|im_end|>
+
+
+--- doc 100 (len=3480 tokens, last 5 ids = [3638, 66445, 1412, 707, 3]) ---
+HEAD (first ≤400 tokens decoded):
+Skip to content or-exchange.com사이트 “40 Filipino Massage Therapies to Soothe Your Body and Mind” Close Button 바다이야기, 규제 강화에도 끊이지 않는 이유? 16 2월, 2025 mandreel 0 Comments 바다이야기, 왜 끊이지 않을까? 사회적 맥락 분석 바다이야기, 왜 끊이지 않을까? 사회적 맥락 분석 결국 바다이야기는 단순한 도박 게임을 넘어선 무언가라는 점을 알 수 있습니다. 그렇다면 왜 그토록 강력한 규제에도 불구하고 바다이야기는 끊이지 않는 걸까요? 이제부터 바다이야기가 우리 사회에 깊숙이 뿌리내리게 된 사회적 배경과 심리적 요인을 심층적으로 분석해보겠습니다. 이를 통해 바다이야기 현상의 본질에 더욱 가까이 다가가 보고자 합니다. 바다이야기, 추억의 오락인가 사회적 문제인가? 바다이야기, 추억의 오락인가 사회적 문제인가? 끊이지 않는 이유 심층 분석 안녕하세요, 여러분. 30대 마케터 OOO입니다. 오늘은 우리 사회에서 끊임없이 논란이 되고 있는 바다이야기에 대해 이야기해보려 합니다. 한때 오락실을 휩쓸었던 추억의 게임, 바다이야기가 왜 여전히 우리 사회의 뜨거운 감자인지, 그 이유를 낱낱이 파헤쳐 보겠습니다. 향수를 자극하는 과거의 오락, 바다이야기 바다이야기는 2000년대 초반, 단순한 룰과 화려한 그래픽으로 오락실 문화를 선도했습니다. 당시 청소년들에게는 용돈을 탕진하는 악마의 게임으로 불리기도 했지만, 동시에 친구들과 함께 즐기는 하나의 문화로 자리 잡았습니다. 마치 어린 시절 즐겨 먹던 불량식품처럼, 바다이야기는 어른들에게는 아련한 향수를 불러일으키는 존재입니다. 단순한 오락을 넘어선 사회적 문제로의 심화 하지만 바다이야기는 단순한 추억으로 포장하기에는 심각한 사회적 문제를 야기했습니다. 사행성을 조장하고 중독을 유발하여 가정을 파탄시키는 사례가 속출했죠. 실제로 2006년 바다이야기 사태 당시, 수많은 사람들이 전 재산을 탕진하고 심지어 범죄까지 저지르는 등 심각한 사회 문제로 대두되었습니다. 구체적인 예시: 한 가장이 바다이야기에 빠져 직장을 그만두고 전 재산을 탕진한 후, 가족들이 뿔뿔이 흩어지는 비극적인 사건이 발생하기도 했습니다. 이러한 사례는 바다이야기가 단순한
+...
+TAIL (last ≤50 tokens decoded, including EOD):
+ 방법 30대 공감: 더이너스로 시작하는 진짜 나를 위한 변화 [2024 최신] 트루엘 분양 정보: 놓치면 후회할 핵심만 쏙쏙 최신 댓글 안녕하세요!의 워드프레스 댓글 관리 도구 Pharmacy Shop WordPress Theme By Themespride<|im_end|>
+
+
+--- doc 1000 (len=749 tokens, last 5 ids = [19430, 489, 163115, 10455, 3]) ---
+HEAD (first ≤400 tokens decoded):
+Skip to content 건강 영양소 나라 Home 생강의 놀라운 효능과 매력! 소화 개선부터 면역력 증진까지 2월 24, 2024 by Raycast 생강은 매콤한 맛과 특유의 향기로 음식에 깊은 맛을 더해주는 것으로 잘 알려져 있습니다. 그러나 생강은 그 맛뿐만이 아니라 다양한 건강 효능과 매력을 지니고 있습니다. 이 글에서는 생강의 놀라운 효능과 매력에 대해 알아보겠습니다. Table of Contents Toggle 소화 개선을 위한 생강 생강과 소화촉진 생강의 구토 및 메스꺼움 완화 효과 면역력 증진을 위한 생강 생강의 항균 작용 생강의 항염증 효과 생강의 기타 효능과 활용 생강의 통증 완화 효과 생강의 혈액순환 개선 효과 생강의 체온 조절 효과 소화 개선을 위한 생강 생강은 소화를 도와주는데 탁월한 효과를 발휘합니다. 생강과 소화촉진 생강은 소화를 촉진하여 위장관의 건강을 돕습니다. 그 주요 원리는 생강에 함유된 성분 중 하나인 질산생강올레오레신이 소화 효율을 향상시키는 데 기여하는 것으로 알려져 있습니다. 이 성분은 위장 운동을 활성화시켜 음식물이 소화되는 속도를 높여주는 역할을 합니다. 생강의 구토 및 메스꺼움 완화 효과 생강은 구토와 메스꺼움을 완화시키는 데 도움을 줄 수 있습니다. 생강에는 소화를 원활하게 하는 성분들이 풍부하게 함유되어 있어 소화기관의 불편을 줄여주고, 이는 구토나 메스꺼움을 일으키는 원인을 제거하거나 완화시키는 데 도움이 됩니다. 면역력 증진을 위한 생강 생강에는 면역력을 증진시키는 데 도움이 되는 다양한 성분이 함유되어 있습니다. 생강의 항균 작용 생강은 항균 작용을 통해 감염을 예방하고 면역 시스템을 지원합니다. 생강에 함유된 생강올레오레신과 생강롤에는 항균 성분이 풍부하게 함유되어 있어 다양한 세균과 바이러스에 대항하여 면역력을 강화시키는 역할을 합니다. 생강의 항염증 효과 생강은 염증을 줄이는데 도움을 주어 면역력을 향상시킵니다. 염증은 면역 시스템의 과도한 반응으로 인해 발생하는데, 생강은 그 염증을 억제하여 면역 시스템의 균형을 유지하는 데 도움을 줍니다. 생강의 기타 효능과 활용 생강은 위의 소화 개선과 면역력 증진 외에도 다양한 효능을 지니고 있습니다. 생강의 통증 완화 효과 생강은 통증을 완화시키는데 도움을 줄 수 있습니다. 생강에 함유된 생강올레오레신은 통증을 줄이는데 효과적이며, 특히 만성적인 통증에
+...
+TAIL (last ≤50 tokens decoded, including EOD):
+) – 운이냐 실력이냐, 판돈을 걸어라 국제시장(2014) – 한 남자의 인생, 대한민국의 역사 사도(2015) – 아버지와 아들의 비극적인 역사 © 2025 Marketer • Built with GeneratePress<|im_end|>
+
+
+--- doc 100000 (len=1030 tokens, last 5 ids = [23313, 48495, 389, 10433, 3]) ---
+HEAD (first ≤400 tokens decoded):
+Skip to content v9738 Home Food News Sports Tech Contact Us facebook.com twitter.com t.me instagram.com youtube.com Subscribe Home Uncategorized 먹튀사이트 피해를 줄이는 법률 상담 Posted inUncategorized 먹튀사이트 피해를 줄이는 법률 상담 Posted by v9738.com October 19, 2024 인터넷을 통해 다양한 서비스와 거래를 할 수 있는 시대에 살고 있는 우리에게 먹튀사이트(먹튀 사이트)는 큰 위협이 되고 있습니다. 먹튀사이트란, 주로 온라인 도박이나 스포츠 베팅과 같은 분야에서 합법적으로 운영되는 것처럼 보이지만, 결국에는 사용자로부터 돈을 챙기고 사라지는 사이트를 의미합니다 먹튀사이트. 이러한 피해를 줄이기 위해 법률 상담을 받는 것이 매우 중요합니다. 이번 포스팅에서는 먹튀사이트 피해를 줄이기 위한 법률 상담의 필요성과 주의해야 할 점들에 대해 알아보겠습니다. 1. 먹튀사이트의 특징 먹튀사이트는 다음과 같은 특징을 가지고 있습니다: 불법 운영: 대부분의 먹튀사이트는 법적으로 허가받지 않은 경우가 많습니다. 이는 사용자에게 법적 보호가 없다는 것을 의미합니다. 미흡한 고객 서비스: 먹튀사이트는 종종 고객 서비스가 형편없거나 아예 존재하지 않으며, 사용자가 문제를 겪을 때 도움을 받기 어렵습니다. 기만적인 프로모션: 유혹적인 보너스와 프로모션을 제공하여 사용자를 유인하지만, 실제로는 이러한 혜택을 누리기 어렵게 만듭니다. 2. 피해를 줄이기 위한 법률 상담의 중요성 먹튀사이트의 피해를 줄이기 위해서는 법률 상담을 받는 것이 중요합니다. 법률 전문가의 도움을 통해 다음과 같은 사항을 검토할 수 있습니다: 법적 권리 이해: 법률 상담을 통해 자신의 법적 권리를 이해하고, 먹튀사이트에 대한 대응 방안을 마련할 수 있습니다. 증거 수집: 피해 사실을 입증할 수 있는 증거를 수집하는 방법에 대한 조언을 받을 수 있습니다. 법적 조치: 법적 조치를 취하기 위한 절차와 방법에 대한 정보를 얻을 수 있습니다. 3. 법률 상담 시 주의할 점 법률 상담을 받기 전 몇 가지 주의할 점이 있습니다: 신뢰할 수 있는 변호사 선택: 먹튀사이트 관련 경험이 풍부한 변호사를 선택하는 것이 중요합니다. 이들은 해당 분야의 법률과 사례에 대해 잘 알고 있습니다. 비용 확인: 법률 상담은 비용이 발생할 수 있으므로, 상담 전에 비용 구조를 확인하는 것이 좋습니다. 상담 내용 기록: 상담 중 나눈 내용을 잘 기록해 두어야 나중에 참고할 수 있습니다. 4. 먹튀사이트 예방을 위한 팁 법률 상담 외에도 먹튀사이트의 피해를 예방하기 위해 다음과 같은 팁을 고려해 볼 수 있습니다
+...
+TAIL (last ≤50 tokens decoded, including EOD):
+ December 2024 November 2024 October 2024 September 2024 August 2024 July 2024 Categories Business Casino Uncategorized Copyright 2025 — v9738. All rights reserved. Bloghash WordPress Theme Scroll to Top<|im_end|>
+
+
+================================================================================
+## SOURCE: fineweb2hq  (6,137,775 docs)
+================================================================================
+
+
+--- doc 0 (len=1743 tokens, last 5 ids = [78590, 8664, 3006, 80088, 3]) ---
+HEAD (first ≤400 tokens decoded):
+تويوتا تتصدر بطولة العالم للتحمل عن فئة الـ "هايبرِد" للمصنعين
+استهل فريق "تويوتا جازو للسباقات" (GAZOO Racing) مشاركته في "بطولة العالم للتحمل 2016" (WEC) التي ينظمها "الاتحاد الدولي للسيارات" (FIA) بتحقيق نتيجة مشجعة معتلياً منصة التتويج بعد منافسة حامية في سباق سيلفرستون ست ساعات. وأنهى السائقون ستيفان سارازين ومايك كونواي وكاموي كوباياشي السباق في المركز الثالث، مضيفين بذلك إنجازاً جديداً إلى مسيرة شركة تويوتا المكللة بالنجاح في سباق سيلفرستون منذ أول مشاركة للفريق في موسم العام 2012 من بطولة العالم للتحمل.
+واحتلت شركة تويوتا صدارة الترتيب في بطولة العالم للتحمل بعد انقضاء الجولة الأولى من أصل تسع جولات، وذلك لكونها المُصنِّع الوحيد الذي تصل مركبتيه المشاركتين ضمن فئة الـ "هايبرِد" إلى خط النهاية. وقدم فريق مركبة تويوتا التي تحمل رقم 6 أداءً استثنائياً طيلة مراحل السباق أوصله إلى منصة التتويج، حيث حقق السائق مايك الفوز بكأس ريتشارد لويد الذي يُمنَح لأعضاء نادي سائقي السباقات البريطاني الأكثر بلوغاً لمنصة التتويج في سباق سيلفرستون ست ساعات، وذلك بعد اعتلائه لمنصة التتويج للمرة الثالثة في بطولة العالم للتحمل. في حين كان فريق مركبة تويوتا التي تحمل الرقم 5، والذي يتأ
+...
+TAIL (last ≤50 tokens decoded, including EOD):
+اق: المركز السادس عشر، 170 دورة، 7 توقفات للصيانة
+o الإنطلاق: في المركز السادس
+o زمن أسرع دورة: 1 دقيقة و41 ثانية و76 جزءاً من الثانية<|im_end|>
+
+
+--- doc 1 (len=155 tokens, last 5 ids = [2060, 83865, 8664, 109, 3]) ---
+HEAD (first ≤400 tokens decoded):
+في بدعة جديدة استخدمت امرأة سمكة في محاولة اعتداءها على رجل خلال نومه، مما تسبب أن تفتح الشرطة السويدية تحقيقاُ في تلك الحادثة.الشرطة قد فتحت التحقيق بعد أن تلقت بلاغاً من رجل في الستينيات من العمر، قال إنه كان يغطّ في النوم حين استيقظ على صفعات توجهها له امرأة بواسطة سمكة “مكاريل” كانت تحملها بيدها بحسب صحيفة “ذا لوكال”.واتهم الرجل المرأة التي قال إنه على معرفة سابقة بها، بسرقة مبلغ 310 دولارات وأخذ طعام من براده، وأفادت الشرطة أن المرأة في الستينات من العمر أيضاً وهي تقيم مع الرجل أحياناً.<|im_end|>
+...
+TAIL (last ≤50 tokens decoded, including EOD):
+واتهم الرجل المرأة التي قال إنه على معرفة سابقة بها، بسرقة مبلغ 310 دولارات وأخذ طعام من براده، وأفادت الشرطة أن المرأة في الستينات من العمر أيضاً وهي تقيم مع الرجل أحياناً.<|im_end|>
+
+
+--- doc 100 (len=1251 tokens, last 5 ids = [52388, 430, 1460, 109, 3]) ---
+HEAD (first ≤400 tokens decoded):
+إسطنبول، 28 أكتوبر 2016/PRNewswire/ — تماشيًا مع رؤيتها التي تقوم على “احترام العالم ونيل احترام العالم” وبفضل منتجاتها وعمليات التصنيع الصديقة للبيئة، أُدرجت شركة Arçelik A.Ş. للمرة الثانية في قائمة المناخ أ (Climate A) التي يعدها مشروع الإفصاح عن الكربون (Carbon Disclosure Project). يتألف مشروع الإفصاح عن الكربون من الشركات التي تسجل أعلى مستويات الأداء في العالم فيما يختص بالأنشطة التي تهدف إلى تخفيض الانبعاثات الكربونية. تجدر الإشارة إلى أن شركة Arçelik A.Ş. هي الشركة الوحيدة التي حققت هذا في مجالها الصناعي في تركيا.
+ثمة 193 شركة مدرجة في قائمة “A Listers”، وهي القائمة التي تم إنجازها بناء على طلب 827 مستثمرًا بأصول تبلغ 100 تريليون دولار أمريكي. تندرج شركة Arçelik ضمن مجموعة تضم 9% من الشركات المشاركة في برنامج التغير المناخي لمشروع الإفصاح عن الكربون، وهي التي سيتم تكريمها بمنحها مركزًا على قائمة Climate A كنوع من الإقرار بإجراءاتها المتبعة لتقليل الانبعاثات وتخفيف حدة التغير المناخي في العام الماضي الذي صدر عنه التقرير.
+ويُذكر أن الشركة قد شاركت في مشروع الإفصاح عن الكربون منذ عام 2012 وفازت بجوائز عن كل عام. وكما حدث في عام 2014، حصلت شركة Arçelik على ترتيب في “قائمة أ (A List): جائزة ريادة الأداء المناخي لمشروع الإفصاح عن الكربون لعام 2016″، وهي قائمة تتألف من شر
+...
+TAIL (last ≤50 tokens decoded, including EOD):
+çelik لكي تفوز بالجوائز الدولية المتعددة عن الابتكار والتقنية والتصميم والإنتاج. http://www.arcelikas.com/page/204/Sustainability_Report
+المصدر: Arçelik A.S.<|im_end|>
+
+
+--- doc 1000 (len=143 tokens, last 5 ids = [38728, 80967, 3814, 109, 3]) ---
+HEAD (first ≤400 tokens decoded):
+اَللّهُمَّ اجْعَلْ صِيامي فيهِ صِيامَ الصّائِمينَ وَ قِيامي فيِهِ قِيامَ القائِمينَ ، وَ نَبِّهْني فيهِ عَن نَوْمَةِ الغافِلينَ ، وَهَبْ لي جُرمي فيهِ يا اِلهَ العالمينَ ، وَاعْفُ عَنّي يا عافِياً عَنِ المُجرِمينَ .
+تدور الأحداث في إطار درامي شعبي، حيث تقوم سيدة بإدارة محلات كبدة ورثتها عن والدها، ولكن سرعان ما تقع في الحب وتتغير حياتها.<|im_end|>
+...
+TAIL (last ≤50 tokens decoded, including EOD):
+جرِمينَ .
+تدور الأحداث في إطار درامي شعبي، حيث تقوم سيدة بإدارة محلات كبدة ورثتها عن والدها، ولكن سرعان ما تقع في الحب وتتغير حياتها.<|im_end|>
+
+
+--- doc 100000 (len=233 tokens, last 5 ids = [12355, 115071, 9494, 6876, 3]) ---
+HEAD (first ≤400 tokens decoded):
+功能：星夜微微蹙了蹙眉...
+使用说明：不安分的除夜手往衣内探了去
+软件介绍：二话不说
+战北城还懒得回覆星夜了.
+首页有链接
+是吗？战北城嘲弄了一句
+你在军区里不是都……星夜刚想说些甚么...
+冷冽的声音里带着一分不凡的气焰...
+主要功能：嗯
+软件名称：平平的嗓音夹着一丝悠远...
+一个尖锐的嗓音划破了暗暗的空气传了过来
+我永远不会分隔你
+当凌晨的第一道曙光透过那道细细的窗缝照进室内的时辰
+那名中年女子也是一个地道的日本人
+其实她也就是吃了一片青菜而已
+有些不兴奋的启齿
+;星夜却不感受然的笑了笑”“
+跟远藤凌川统一个母亲所生<|im_end|>
+...
+TAIL (last ≤50 tokens decoded, including EOD):
+道的日本人
+其实她也就是吃了一片青菜而已
+有些不兴奋的启齿
+;星夜却不感受然的笑了笑”“
+跟远藤凌川统一个母亲所生<|im_end|>

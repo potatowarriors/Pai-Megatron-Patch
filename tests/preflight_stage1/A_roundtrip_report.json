@@ -1,0 +1,57 @@
+{
+  "phase": "A",
+  "checks": {
+    "A1": {
+      "status": "pass",
+      "details": {
+        "len_tokenizer": 163860,
+        "eos_token": "<|endoftext|>",
+        "eos_token_id": 0,
+        "bos_token_id": null,
+        "pad_token": "<|pad|>",
+        "pad_token_id": 1,
+        "decode_0": "<|endoftext|>",
+        "decode_1": "<|pad|>",
+        "decode_2": "<|im_start|>",
+        "decode_3": "<|im_end|>"
+      }
+    },
+    "A2": {
+      "status": "pass",
+      "details": {
+        "dclm": {
+          "sampled": 1000,
+          "mismatches": 0,
+          "total_chars": 6326542
+        },
+        "korean_web": {
+          "sampled": 1000,
+          "mismatches": 0,
+          "total_chars": 2581931
+        },
+        "fineweb2hq": {
+          "sampled": 1000,
+          "mismatches": 0,
+          "total_chars": 2983680
+        }
+      }
+    },
+    "A3": {
+      "status": "pass",
+      "details": {
+        "samples": 200,
+        "mismatches": 0
+      }
+    },
+    "A4": {
+      "status": "pass",
+      "details": {
+        "matrix_rows": 10
+      }
+    }
+  },
+  "status": "pass",
+  "started": 1778550116.94664,
+  "finished": 1778550137.9730284,
+  "duration_sec": 21.03
+}

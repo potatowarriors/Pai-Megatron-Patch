@@ -1,0 +1,3 @@
+# Transient run logs from watcher / phase scripts.
+# All meaningful results are preserved in the *.md / *.json artifacts.
+*.log
