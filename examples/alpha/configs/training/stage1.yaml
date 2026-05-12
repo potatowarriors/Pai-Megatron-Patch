@@ -1,9 +1,3 @@
-# ⚠️  DEPRECATED (2026-05-12): Stage 1 now uses configs/training/stage1.yaml.
-# This file is retained temporarily for git-history reference and to avoid
-# breaking any in-flight scripts. Do NOT use for new runs.
-# Differences vs stage1.yaml: lr 4e-4 → 2e-4, global-batch-size 2688 → 1536,
-# save-interval 25000 → 10000, eval cadence tightened.
-#
 # Stage 1 from-scratch pretraining with aux-loss-free MoE routing.
 #
 # All keys are Megatron CLI flag names — `train.sh` expands them via
@@ -25,8 +19,8 @@ lr-decay-iters: 450000        # WSD: full scope
 lr-wsd-decay-iters: 45000     # last 10% is the decay phase
 
 # ── LR ──────────────────────────────────────────────────────────────────────
-lr: 4.0e-4
-min-lr: 4.0e-5
+lr: 2.0e-4
+min-lr: 2.0e-5
 lr-decay-style: WSD
 lr-wsd-decay-style: cosine
 
@@ -37,7 +31,7 @@ expert-model-parallel-size: 8
 expert-tensor-parallel-size: 1
 context-parallel-size: 1
 micro-batch-size: 3
-global-batch-size: 2688
+global-batch-size: 1536
 
 # ── Activation checkpointing ───────────────────────────────────────────────
 recompute-granularity: selective
@@ -72,7 +66,7 @@ clip-grad: 1.0
 # ── QK-Clip (Muon stabilization, requires TE >= 2.9.0) ────────────────────
 qk-clip: true
 qk-clip-alpha: 0.5
-qk-clip-threshold: 75
+qk-clip-threshold: 100
 log-max-attention-logit: true
 
 # ── LayerNorm WD (Qwen3-Next/Qwen3.5 official recipe) ─────────────────────
@@ -101,13 +95,13 @@ eod-mask-loss: true
 bf16: true
 
 # ── Checkpointing ──────────────────────────────────────────────────────────
-save-interval: 25000
+save-interval: 10000
 no-save-optim: true           # Muon recovers via warmup; verified in Stage 1 cooldown
 ckpt-format: torch_dist
 
 # ── Eval ───────────────────────────────────────────────────────────────────
-eval-iters: 8
-eval-interval: 25000
+eval-iters: 3
+eval-interval: 10000
 
 # ── Logging / runtime ──────────────────────────────────────────────────────
 log-interval: 1

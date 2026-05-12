@@ -1,0 +1,36 @@
+# Stage 1 v5 — Blended pre-training corpus (DCLM + FineWeb2-HQ + Korean Web).
+#
+# Vocab compatibility:
+#   - All three sources pre-tokenized with alpha v5 tokenizer (effective vocab
+#     163,860, padded-vocab-size 163,968). Use only with baseline_48L.yaml
+#     that has the matching tokenizer-model and padded-vocab-size.
+#
+# Per-source token counts (uint32 dtype: bin_bytes / 4):
+#   DCLM         1,775,148,645,376 B  →  443.8B tokens   (7 of 16 shards, seed=42)
+#   Korean Web      67,856,340,576 B  →   17.0B tokens   (first half by line count)
+#   FineWeb2-HQ     22,878,249,760 B  →    5.7B tokens   (first half by parquet row shuffle)
+#   ----------------------------------------------------------------
+#   Total                                ~466.5B tokens
+#
+# Blending: weight-less — Megatron's BlendedMegatronDatasetConfig auto-infers
+# weights from per-dataset sample counts (= .idx length), which under a
+# constant --seq-length equals proportional-to-token-count mixing:
+#
+#   DCLM        95.13%
+#   Korean Web   3.64%
+#   FineWeb2-HQ  1.23%
+#
+# Rationale: each of the three half-corpora was sized so that, blended natively,
+# a ~466B-token Stage 1 budget finishes ≈1 epoch per source simultaneously
+# (no over-epoching of the small Korean / multilingual sets). The corresponding
+# second halves live in stage2_v5_*.yaml for the continual-learning stage.
+#
+# To override proportions, prepend explicit weights to each path, e.g.:
+#   data-path: "0.80 /…/dclm/data_text_document 0.15 /…/korean_web/data_text_document 0.05 /…/fineweb2hq/data_text_document"
+# (See megatron/core/datasets/blended_megatron_dataset_config.py for the
+#  weight-list parser.)
+
+data-path: "/home/work/Datasets/LL_preprocessed/v5/stage1/dclm/data_text_document /home/work/Datasets/LL_preprocessed/v5/stage1/korean_web/data_text_document /home/work/Datasets/LL_preprocessed/v5/stage1/fineweb2hq/data_text_document"
+split: "99,1,0"
+dataset: MMAP
+num-workers: 8
