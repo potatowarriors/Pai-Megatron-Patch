@@ -5,7 +5,7 @@
 #     bash train.sh <model_preset> <training_preset> <data_preset> [extra-megatron-args...]
 #
 # Examples:
-#     bash train.sh baseline_48L pretrain_auxfree kormo_50pct
+#     bash train.sh baseline_48L stage1 stage1_v5_blend  # current Stage 1 recipe
 #     bash train.sh baseline_48L stage2_3 stage2_2
 #     bash train.sh smoke smoke mock                     # 2-iter smoke test
 #
@@ -157,7 +157,7 @@ read -r -a DATA_FLAGS     < <(yaml_to_flags "$DATA_YAML"     | xargs)
 
 # ── WANDB derived flags ───────────────────────────────────────────────────
 # Megatron requires --wandb-exp-name when --wandb-project is in training preset
-# (which pretrain_auxfree.yaml has). For smoke runs we still emit a dummy name
+# (which stage1.yaml has). For smoke runs we still emit a dummy name
 # so argparse validation passes, but WANDB_MODE=disabled (set above) blocks
 # actual logging.
 WANDB_FLAGS=()

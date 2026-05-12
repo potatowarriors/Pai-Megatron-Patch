@@ -316,6 +316,78 @@ def build_tokenizer(args):
         if args.padded_vocab_size == 0:
             args.padded_vocab_size = tokenizer.vocab_size
 
+    elif args.patch_tokenizer_type == 'AlphaTokenizer':
+        # Alpha v5 BBPE tokenizer wrapper. The v5 tokenizer is a custom BBPE
+        # that ships only tokenizer.json (HuggingFace fast format) — no
+        # vocab.json/merges.txt — so AutoTokenizer always returns a
+        # PreTrainedTokenizerFast which lacks .encoder/.decoder dicts.
+        # This wrapper uses len(self.tokenizer) and get_vocab() throughout,
+        # which work uniformly for both slow + fast HF tokenizers.
+        try:
+            from megatron.core.datasets.megatron_tokenizer import MegatronTokenizer
+        except ImportError:
+            from megatron.core.datasets.megatron_tokenizer import MegatronLegacyTokenizer as MegatronTokenizer
+        class _AlphaTokenizer(MegatronTokenizer):
+            def __init__(self, tokenizer_path, extra_vocab_size, padded_vocab_size):
+                super().__init__(tokenizer_path)
+                self.tokenizer = AutoTokenizer.from_pretrained(
+                    tokenizer_path,
+                    padding_side="right",
+                    use_fast=True,
+                    trust_remote_code=True,
+                )
+                if padded_vocab_size == 0:
+                    self.extra_vocab_size = extra_vocab_size
+                else:
+                    self.extra_vocab_size = padded_vocab_size - len(self.tokenizer)
+
+            def __call__(self, text, return_tensors=None,
+                         padding=None, max_length=None, truncation=None, add_special_tokens=None):
+                return self.tokenizer(text, return_tensors=return_tensors, padding=padding,
+                                      max_length=max_length, truncation=truncation,
+                                      add_special_tokens=add_special_tokens)
+
+            def apply_chat_template(self, conversations):
+                return self.tokenizer.apply_chat_template(conversations)
+
+            @property
+            def vocab_size(self):
+                return len(self.tokenizer) + self.extra_vocab_size
+
+            @property
+            def vocab(self):
+                return self.tokenizer.get_vocab()
+
+            @property
+            def inv_vocab(self):
+                return {v: k for k, v in self.tokenizer.get_vocab().items()}
+
+            def tokenize(self, text):
+                return self.tokenizer.encode(text)
+
+            def detokenize(self, token_ids):
+                return self.tokenizer.decode(token_ids)
+
+            @property
+            def eod(self):
+                return self.tokenizer.eos_token_id
+
+            @property
+            def eos_token(self):
+                return self.tokenizer.eos_token
+
+            @property
+            def pad_token_id(self):
+                return self.tokenizer.pad_token_id
+
+            @property
+            def eos_token_id(self):
+                return self.tokenizer.eos_token_id
+
+        tokenizer = _AlphaTokenizer(args.load, args.extra_vocab_size, args.padded_vocab_size)
+        if args.padded_vocab_size == 0:
+            args.padded_vocab_size = tokenizer.vocab_size
+
     elif args.patch_tokenizer_type == 'Qwen2VLTokenizer':
         from megatron.core.datasets.megatron_tokenizer import MegatronTokenizer
         class _Qwen2VLTokenizer(MegatronTokenizer):

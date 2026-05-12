@@ -97,6 +97,6 @@
     "<|reserved_special_token_78|>",
     "<|reserved_special_token_79|>"
   ],
-  "eos_token": "<|im_end|>",
+  "eos_token": "<|endoftext|>",
   "pad_token": "<|pad|>"
 }

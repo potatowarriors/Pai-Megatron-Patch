@@ -26,7 +26,7 @@ group-query-attention: true
 num-query-groups: 2
 
 # ── MoE (DSV3-style routing on Qwen3.5 expert dim) ─────────────────────────
-num-experts: 184                  # 8-multiple round, lands at ~15.0B total at FFN=512
+num-experts: 192                  # changed 184 -> 192. 184는 8*23으로 23은 소수니까 숫자가 별로다.
 moe-ffn-hidden-size: 512          # Qwen3.5 expert dim
 moe-router-topk: 8
 moe-aux-loss-coeff: 1.0e-4        # DSV3 best practice (was 0.001; 10× smaller)
@@ -41,7 +41,7 @@ moe-shared-expert-gate: true
 # groups (92 candidate experts). Reduces all-to-all communication ~50%.
 moe-router-num-groups: 8
 moe-router-group-topk: 4
-moe-router-topk-scaling-factor: 2.5   # DSV3: compensates sigmoid+topk geometric reduction
+moe-router-topk-scaling-factor: 2.5   # ablation #1a: disable DSV3 amplifier to isolate grad norm root cause
 
 # NOTE: moe-router-load-balancing-type / moe-router-score-function /
 # moe-router-enable-expert-bias / moe-router-bias-update-rate live in the
@@ -90,8 +90,10 @@ max-position-embeddings: 262144
 # Alpha-specific tokenizer v5 (PreTrainedTokenizerFast, BBPE). Replaces
 # previous Qwen-compatible tokenizer. Effective len(tokenizer) = 163,860 (163,840
 # base + 80 reserved special tokens); padded to multiple of 128 → 163,968.
-# Special tokens: EOS=<|im_end|>, PAD=<|pad|>, BOS=None, plus <|im_start|>,
-# <|fim_*|>, <tool_call>, <think>, <|endoftext|>, and 80 reserved slots.
+# Special tokens: EOS/EOD=<|endoftext|> (id 0), PAD=<|pad|> (id 1), BOS=None.
+# <|im_end|> (id 3) is reserved for SFT chat-turn-end per frontier convention
+# (Qwen3 / Llama 3 / DSV3 separate pre-training EOD from chat turn markers).
+# Vocab also contains <|im_start|>, <|fim_*|>, <tool_call>, <think>, 80 reserved slots.
 untie-embeddings-and-output-weights: true
 padded-vocab-size: 163968
 tokenizer-type: HuggingFaceTokenizer

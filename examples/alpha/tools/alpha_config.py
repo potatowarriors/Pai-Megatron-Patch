@@ -44,9 +44,15 @@ CHAR_ATTENTION = "*"  # Full attention layer
 CHAR_MLP = "-"  # MoE MLP layer
 CHAR_DENSE_MLP = "D"  # Dense MLP layer (standard FFN)
 
-# Default token IDs (Qwen3 tokenizer)
-DEFAULT_BOS_TOKEN_ID = 151643
-DEFAULT_EOS_TOKEN_ID = 151645
+# Default token IDs (alpha v5 tokenizer post-2026-05 pre-flight)
+# Alpha has no BOS — the tokenizer's bos_token is null in tokenizer_config.json.
+# EOS/EOD = <|endoftext|> (id 0), separated from chat-turn-end <|im_end|> (id 3)
+# per frontier convention (Qwen3 / Llama 3 / DSV3 all separate these).
+# Note: BOS_TOKEN_ID = None is preferred but kept as 0 here only as a structural
+# default for HF config emission; downstream tools should explicitly omit
+# bos_token_id from the HF config when BOS is None.
+DEFAULT_BOS_TOKEN_ID = None
+DEFAULT_EOS_TOKEN_ID = 0
 
 
 # ============================================================================
@@ -58,9 +64,9 @@ DEFAULT_EOS_TOKEN_ID = 151645
 class TokenConfig:
     """Token ID configuration for tokenizer."""
 
-    bos_token_id: int = DEFAULT_BOS_TOKEN_ID
-    eos_token_id: int = DEFAULT_EOS_TOKEN_ID
-    pad_token_id: Optional[int] = None  # Usually same as eos_token_id
+    bos_token_id: Optional[int] = DEFAULT_BOS_TOKEN_ID  # alpha has no BOS (None)
+    eos_token_id: int = DEFAULT_EOS_TOKEN_ID            # <|endoftext|> id 0
+    pad_token_id: Optional[int] = 1                     # <|pad|> id 1
 
 
 @dataclass

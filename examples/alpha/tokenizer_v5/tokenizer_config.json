@@ -1029,7 +1029,7 @@
   ],
   "bos_token": null,
   "clean_up_tokenization_spaces": false,
-  "eos_token": "<|im_end|>",
+  "eos_token": "<|endoftext|>",
   "extra_special_tokens": {},
   "model_max_length": 1000000000000000019884624838656,
   "pad_token": "<|pad|>",

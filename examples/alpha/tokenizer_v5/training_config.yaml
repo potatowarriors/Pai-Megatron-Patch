@@ -58,8 +58,15 @@ whitespace_inject_tokens:
 - ');
 
   '
+# NOTE (2026-05-12 pre-flight): The `roles` block below records what the v5
+# tokenizer was *trained* with — which originally designated <|im_end|> as
+# eos_token. For Stage 1 pre-training, the live designation lives in
+# tokenizer_config.json / special_tokens_map.json and is now <|endoftext|>
+# (id 0), separating pre-training EOD from chat-turn-end per frontier
+# convention (Qwen3 / Llama 3 / DSV3 separate these). The historical value
+# is preserved here for reproducibility of the v5 training pipeline.
 roles:
-  eos_token: <|im_end|>
+  eos_token: <|endoftext|>    # was <|im_end|>; updated 2026-05-12 pre-flight
   pad_token: <|pad|>
 megatron:
   model_type: gpt
