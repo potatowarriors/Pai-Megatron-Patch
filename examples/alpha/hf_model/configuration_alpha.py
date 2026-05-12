@@ -43,13 +43,13 @@ class AlphaConfig(PretrainedConfig):
 
 
     Args:
-        vocab_size (`int`, *optional*, defaults to 151936):
+        vocab_size (`int`, *optional*, defaults to 163968):
             Vocabulary size of the model. Defines the number of different tokens that can be represented by the
-            `inputs_ids`.
+            `inputs_ids`. Alpha v5 BBPE: effective 163,860 + 108 pad slots → 163,968 (multiple of 128).
         hidden_size (`int`, *optional*, defaults to 2048):
             Dimension of the hidden representations.
-        intermediate_size (`int`, *optional*, defaults to 5632):
-            Dimension of the MLP representations.
+        intermediate_size (`int`, *optional*, defaults to 8192):
+            Dimension of the dense MLP representations (matches `ffn-hidden-size` in baseline_48L.yaml).
         num_hidden_layers (`int`, *optional*, defaults to 48):
             Number of hidden layers in the Transformer encoder.
         num_attention_heads (`int`, *optional*, defaults to 16):
@@ -60,8 +60,9 @@ class AlphaConfig(PretrainedConfig):
             `num_key_value_heads=1` the model will use Multi Query Attention (MQA) otherwise GQA is used.
         hidden_act (`str`, *optional*, defaults to `"silu"`):
             The non-linear activation function in the decoder.
-        max_position_embeddings (`int`, *optional*, defaults to 32768):
-            The maximum sequence length that this model might ever be used with.
+        max_position_embeddings (`int`, *optional*, defaults to 262144):
+            The maximum sequence length that this model might ever be used with. Training context is 4096
+            (`seq-length`); 262144 reflects the long-context envelope supported by RoPE θ=10M.
         initializer_range (`float`, *optional*, defaults to 0.02):
             The standard deviation of the truncated_normal_initializer for initializing all weight matrices.
         rms_norm_eps (`float`, *optional*, defaults to 1e-06):
@@ -70,8 +71,8 @@ class AlphaConfig(PretrainedConfig):
             Whether or not the model should return the last key/values attentions.
         tie_word_embeddings (`bool`, *optional*, defaults to `False`):
             Whether the model's input and output word embeddings should be tied.
-        rope_theta (`float`, *optional*, defaults to 10000.0):
-            The base period of the RoPE embeddings.
+        rope_theta (`float`, *optional*, defaults to 10000000.0):
+            The base period of the RoPE embeddings. Alpha uses θ=10M (frontier-LLM standard for long-context).
         rope_scaling (`Dict`, *optional*):
             Dictionary containing the scaling configuration for the RoPE embeddings.
         partial_rotary_factor (`float`, *optional*, defaults to 0.25):
@@ -98,16 +99,16 @@ class AlphaConfig(PretrainedConfig):
             Intermediate size of the routed expert.
         shared_expert_intermediate_size (`int`, *optional*, defaults to 512):
             Intermediate size of the shared expert.
-        num_experts_per_tok (`int`, *optional*, defaults to 10):
-            Number of selected experts.
-        num_experts (`int`, *optional*, defaults to 512):
-            Number of routed experts.
+        num_experts_per_tok (`int`, *optional*, defaults to 8):
+            Number of selected experts per token (matches `moe-router-topk` in baseline_48L.yaml).
+        num_experts (`int`, *optional*, defaults to 184):
+            Number of routed experts (DSV3-tuned for ~15B; 23 experts/GPU at EP=8).
         norm_topk_prob (`bool`, *optional*, defaults to `True`):
             Whether to normalize the topk probabilities.
         output_router_logits (`bool`, *optional*, defaults to `False`):
             Whether or not the router logits should be returned by the model.
-        router_aux_loss_coef (`float`, *optional*, defaults to 0.001):
-            The aux loss factor for the total loss.
+        router_aux_loss_coef (`float`, *optional*, defaults to 0.0001):
+            The aux loss factor for the total loss (DSV3 — matches `moe-aux-loss-coeff` in baseline_48L.yaml).
         mlp_only_layers (`list[int]`, *optional*, defaults to `[]`):
             Indicate which layers use AlphaMLP rather than AlphaSparseMoeBlock.
         layer_types (`list[str]`, *optional*):
@@ -151,19 +152,19 @@ class AlphaConfig(PretrainedConfig):
 
     def __init__(
         self,
-        vocab_size=151936,
+        vocab_size=163968,
         hidden_size=2048,
-        intermediate_size=5632,
+        intermediate_size=8192,
         num_hidden_layers=48,
         num_attention_heads=16,
         num_key_value_heads=2,
         hidden_act="silu",
-        max_position_embeddings=32768,
+        max_position_embeddings=262144,
         initializer_range=0.02,
         rms_norm_eps=1e-6,
         use_cache=True,
         tie_word_embeddings=False,
-        rope_theta=10000.0,
+        rope_theta=10000000.0,
         rope_scaling=None,
         partial_rotary_factor=0.25,
         attention_bias=False,
@@ -177,11 +178,11 @@ class AlphaConfig(PretrainedConfig):
         decoder_sparse_step=1,
         moe_intermediate_size=512,
         shared_expert_intermediate_size=512,
-        num_experts_per_tok=10,
-        num_experts=512,
+        num_experts_per_tok=8,
+        num_experts=184,
         norm_topk_prob=True,
         output_router_logits=False,
-        router_aux_loss_coef=0.001,
+        router_aux_loss_coef=1.0e-4,
         mlp_only_layers=[],
         layer_types=None,
         **kwargs,

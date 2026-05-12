@@ -61,7 +61,7 @@ Each row below is classified as:
 | 9 | `--eod-mask-loss` | true | NVIDIA Qwen3-Next reference: true; Megatron default: false | **Intentional** (paired with #7) |
 | 10 | Doc-end EOD in `.bin` | id 0 at every doc end (post-Phase-0.4 remap) | Universal: EOD-in-stream | **Will-fix → done** (was id 3 from pre-Phase-0.0 era; Phase 0.4 remapped 3 → 0) |
 | 11 | `alpha_config.py` default token IDs | bos=None, eos=0, pad=1 | — | **Will-fix → done** (were Qwen3 IDs 151643 / 151645) |
-| 12 | `configuration_alpha.py` defaults | various stale (vocab_size=151936, etc.) | — | **Documented-cleanup** (deferred — affects only no-kwargs instantiation) |
+| 12 | `configuration_alpha.py` defaults | various stale (vocab_size=151936, intermediate_size=5632, max_position_embeddings=32768, rope_theta=1e4, num_experts_per_tok=10, num_experts=512, router_aux_loss_coef=1e-3) | — | **Will-fix → done** (2nd-pass 2026-05-12; 7 defaults + docstring updated; regression test `test_configuration_alpha_defaults_match_baseline_48L` added) |
 
 ## Phase artifacts
 
@@ -88,8 +88,13 @@ Each row below is classified as:
    Phase B's 3 datasets × 4 seeds × 250 samples + boundary docs all showing
    100% id 3 at doc end). No code change required.
 
-2. **`configuration_alpha.py` stale defaults** (Item 12 above) — should be
-   cleaned up before the first HF checkpoint conversion goes public.
+2. **`configuration_alpha.py` stale defaults** (Item 12 above) — **resolved
+   in 2nd-pass verification (2026-05-12)**. Originally flagged as 2 stale
+   values (vocab_size, intermediate_size); 2nd-pass parallel Explore audit
+   surfaced 5 additional stale defaults from the same migration boundary
+   (commit `906f054`). All 7 + matching docstring rows corrected in a single
+   logical commit; new regression test pins each value against
+   baseline_48L.yaml so future migration drift is caught at CI time.
 
 3. **SFT readiness for `<|im_end|>`**: the id 3 embedding will be effectively
    cold-started at SFT (since Phase 0.4 remap removed all id 3 occurrences from
@@ -137,6 +142,10 @@ The remap is fully reversible by re-running `remap_eod.py --old-eod 0 --new-eod 
       shows 10,000 / 10,000 docs ending in id 0 for each of the 3 sources)
 - [x] Phase D dataflow audit passes (3/3 reset-flag invariants verified on a
       packed 4097-token sample from DCLM)
+- [x] **2nd-pass verification (2026-05-12)** — 3 parallel Explore agents
+      (regression / silent-bug-hunt / production-launch-audit) report no new
+      issues except `configuration_alpha.py` Item 12 (7 stale defaults), which
+      is now fixed. Regression suite expanded to 10 tests, all passing in 21.72s.
 - [ ] Phase E 100-iter smoke loss < 11.5 — **user-launched gate** before Stage 1
       (`bash tests/preflight_stage1/run_phase_e_smoke.sh`)
 - [ ] User signs off → launch Stage 1

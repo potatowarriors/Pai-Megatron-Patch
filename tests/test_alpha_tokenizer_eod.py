@@ -276,3 +276,47 @@ def test_preprocess_end_to_end_writes_eod_in_bin():
                 f"This is the exact regression that produced Stage 1's "
                 f"historical EOD-less .bin files."
             )
+
+
+# ---------------------------------------------------------------------------
+# F. hf_model/configuration_alpha.py — AlphaConfig() defaults must match baseline_48L
+# ---------------------------------------------------------------------------
+
+
+def test_configuration_alpha_defaults_match_baseline_48L():
+    """no-kwargs `AlphaConfig()` must yield a model matching baseline_48L.yaml.
+
+    History: the 2026-05 Qwen3.5+DSV3+v5 migration updated baseline_48L.yaml but
+    overlooked the mirrored defaults in `hf_model/configuration_alpha.py` (the
+    `AlphaConfig.__init__` signature). 1st-pass preflight (F_decisions.md Item 12)
+    deferred this as cosmetic; the 2nd-pass (2026-05-12) promoted it to a fix
+    because any HF/SGLang serving path that calls `AlphaConfig.from_pretrained`
+    on a config.json missing one of these keys falls back to the (then-stale)
+    default — silent corruption at deploy time.
+
+    This test pins each of the 7 corrected defaults so future migration drift
+    fails CI loudly instead of silently.
+    """
+    hf_model_dir = os.path.join(_REPO_ROOT, "examples", "alpha", "hf_model")
+    if hf_model_dir not in sys.path:
+        sys.path.insert(0, hf_model_dir)
+    from configuration_alpha import AlphaConfig
+
+    c = AlphaConfig()
+    assert c.vocab_size == 163968, f"vocab_size default drift: {c.vocab_size}"
+    assert c.intermediate_size == 8192, f"intermediate_size default drift: {c.intermediate_size}"
+    assert c.max_position_embeddings == 262144, (
+        f"max_position_embeddings default drift: {c.max_position_embeddings}"
+    )
+    assert c.rope_theta == 10_000_000.0, f"rope_theta default drift: {c.rope_theta}"
+    assert c.num_experts_per_tok == 8, f"num_experts_per_tok default drift: {c.num_experts_per_tok}"
+    assert c.num_experts == 184, f"num_experts default drift: {c.num_experts}"
+    assert c.router_aux_loss_coef == 1.0e-4, (
+        f"router_aux_loss_coef default drift: {c.router_aux_loss_coef}"
+    )
+    # Sanity: the defaults that should not drift either.
+    assert c.hidden_size == 2048
+    assert c.num_hidden_layers == 48
+    assert c.head_dim == 256
+    assert c.moe_intermediate_size == 512
+    assert c.shared_expert_intermediate_size == 512
