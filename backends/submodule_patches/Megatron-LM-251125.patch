@@ -1,0 +1,870 @@
+diff --git a/megatron/core/num_microbatches_calculator.py b/megatron/core/num_microbatches_calculator.py
+index ae7cea92e..ac8b30ea2 100644
+--- a/megatron/core/num_microbatches_calculator.py
++++ b/megatron/core/num_microbatches_calculator.py
+@@ -4,16 +4,68 @@
+ 
+ import logging
+ from abc import ABC, abstractmethod
+-from typing import List, Optional, Union
++from typing import List, Optional, Tuple, Union
+ 
+ logger = logging.getLogger(__name__)
+ 
+ # TODO: global_var merge into mcore?
+ _GLOBAL_NUM_MICROBATCHES_CALCULATOR: Union[
+-    'ConstantNumMicroBatchesCalculator', 'RampupBatchsizeNumMicroBatchesCalculator'
++    'ConstantNumMicroBatchesCalculator',
++    'RampupBatchsizeNumMicroBatchesCalculator',
++    'StepBatchSizeScheduleCalculator',
+ ] = None
+ 
+ 
++_SUFFIX_MULT = {'K': 10**3, 'M': 10**6, 'B': 10**9, 'T': 10**12}
++
++
++def _parse_int_with_suffix(s: str) -> int:
++    """Parse integer with optional K/M/B/T suffix (e.g. '250B' -> 250_000_000_000)."""
++    s = s.strip()
++    if not s:
++        raise ValueError("empty integer literal")
++    if s[-1].upper() in _SUFFIX_MULT:
++        return int(float(s[:-1]) * _SUFFIX_MULT[s[-1].upper()])
++    return int(s)
++
++
++def parse_step_batch_size_schedule(
++    schedule_str: str, seq_length: Optional[int] = None
++) -> List[Tuple[int, int]]:
++    """Parse step batch size schedule string into sorted list of (sample_threshold, gbs).
++
++    Format: ``"T1:BS1 T2:BS2 ..."`` where Tn supports K/M/B/T suffixes.
++    If ``seq_length`` is provided, thresholds are interpreted as **tokens** and
++    converted to samples (floor). Otherwise interpreted as samples directly.
++
++    The first entry's threshold MUST be 0.
++    """
++    pairs: List[Tuple[int, int]] = []
++    for entry in schedule_str.split():
++        if ':' not in entry:
++            raise ValueError(
++                f"invalid step-batch-size-schedule entry '{entry}', expected 'THRESHOLD:BS'"
++            )
++        thr_str, bs_str = entry.split(':', 1)
++        thr = _parse_int_with_suffix(thr_str)
++        bs = _parse_int_with_suffix(bs_str)
++        if seq_length is not None:
++            thr = thr // int(seq_length)
++        if bs <= 0:
++            raise ValueError(f"batch size must be positive, got {bs} in entry '{entry}'")
++        if thr < 0:
++            raise ValueError(f"threshold must be non-negative, got {thr} in entry '{entry}'")
++        pairs.append((thr, bs))
++    if not pairs:
++        raise ValueError("empty step-batch-size-schedule")
++    pairs.sort(key=lambda p: p[0])
++    if pairs[0][0] != 0:
++        raise ValueError(
++            f"first threshold in step-batch-size-schedule must be 0, got {pairs[0][0]}"
++        )
++    return pairs
++
++
+ def get_num_microbatches() -> int:
+     """Get number of microbatches."""
+     return _GLOBAL_NUM_MICROBATCHES_CALCULATOR.get()
+@@ -68,6 +120,7 @@ def init_num_microbatches_calculator(
+     micro_batch_size: int,
+     data_parallel_size: int,
+     decrease_batch_size_if_needed: bool = False,
++    step_batch_size_schedule: Optional[List[Tuple[int, int]]] = None,
+ ) -> None:
+     """Initialize number of microbatches calculator. Supporting backward compatibility.
+ 
+@@ -86,6 +139,9 @@ def init_num_microbatches_calculator(
+         decrease_batch_size_if_needed (bool, optional):
+             If true, scale down batch size to ensure divisibility by DP size * microbatch size.
+             Defaults to False.
++        step_batch_size_schedule (Optional[List[Tuple[int, int]]]):
++            Step-wise GBS schedule as a sorted list of ``(sample_threshold, global_batch_size)``
++            pairs. Mutually exclusive with ``rampup_batch_size``.
+     """
+     _configure_global_num_microbatches_calculator(
+         rank,
+@@ -95,6 +151,7 @@ def init_num_microbatches_calculator(
+         data_parallel_size,
+         decrease_batch_size_if_needed,
+         init=True,
++        step_batch_size_schedule=step_batch_size_schedule,
+     )
+ 
+ 
+@@ -111,25 +168,9 @@ def reconfigure_num_microbatches_calculator(
+     micro_batch_size: int,
+     data_parallel_size: int,
+     decrease_batch_size_if_needed: bool = False,
++    step_batch_size_schedule: Optional[List[Tuple[int, int]]] = None,
+ ) -> None:
+-    """Reconfigure number of microbatches calculator. Supporting backward compatibility.
+-
+-    Args:
+-        rank (int):
+-            Rank of the GPU, only rank 0 will log the information.
+-        rampup_batch_size (Optional[List[int]]):
+-            Rampup batch size, should be in format of
+-            [start_global_batch_size, batch_size_increment, ramup_samples].
+-        global_batch_size (int):
+-            Global batch size for the model.
+-        micro_batch_size (int):
+-            Micro batch size at initialization.
+-        data_parallel_size (int):
+-            Data parallel size.
+-        decrease_batch_size_if_needed (bool, optional):
+-            If true, scale down batch size to ensure divisibility by DP size * microbatch size.
+-            Defaults to False.
+-    """
++    """Reconfigure number of microbatches calculator. Supporting backward compatibility."""
+     _configure_global_num_microbatches_calculator(
+         rank,
+         rampup_batch_size,
+@@ -138,6 +179,7 @@ def reconfigure_num_microbatches_calculator(
+         data_parallel_size,
+         decrease_batch_size_if_needed,
+         init=False,
++        step_batch_size_schedule=step_batch_size_schedule,
+     )
+ 
+ 
+@@ -149,6 +191,7 @@ def _configure_global_num_microbatches_calculator(
+     data_parallel_size: int,
+     decrease_batch_size_if_needed: bool = False,
+     init: bool = False,
++    step_batch_size_schedule: Optional[List[Tuple[int, int]]] = None,
+ ) -> None:
+     """Configure number of microbatches calculator. Can be used for initialization and
+     reconfiguration.
+@@ -185,6 +228,7 @@ def _configure_global_num_microbatches_calculator(
+         micro_batch_size,
+         data_parallel_size,
+         decrease_batch_size_if_needed,
++        step_batch_size_schedule=step_batch_size_schedule,
+     )
+ 
+ 
+@@ -195,25 +239,30 @@ def _build_num_microbatches_calculator(
+     micro_batch_size: int,
+     data_parallel_size: int,
+     decrease_batch_size_if_needed: bool,
+-) -> Union['ConstantNumMicroBatchesCalculator', 'RampupBatchsizeNumMicroBatchesCalculator']:
+-    """Build number of microbatches calculator. Internal helper method.
+-
+-    Args:
+-        rank (int):
+-            Rank of the GPU, only rank 0 will log the information.
+-        rampup_batch_size (Optional[List[int]]):
+-            Rampup batch size, should be in format of
+-            [start_global_batch_size, batch_size_increment, ramup_samples].
+-        global_batch_size (int):
+-            Global batch size for the model.
+-        micro_batch_size (int):
+-            Micro batch size at initialization.
+-        data_parallel_size (int):
+-            Data parallel size.
+-        decrease_batch_size_if_needed (bool):
+-            If true, scale down batch size to ensure divisibility by DP size * microbatch size.
+-
+-    """
++    step_batch_size_schedule: Optional[List[Tuple[int, int]]] = None,
++) -> Union[
++    'ConstantNumMicroBatchesCalculator',
++    'RampupBatchsizeNumMicroBatchesCalculator',
++    'StepBatchSizeScheduleCalculator',
++]:
++    """Build number of microbatches calculator. Internal helper method."""
++
++    if step_batch_size_schedule is not None:
++        assert rampup_batch_size is None, (
++            'cannot specify both --step-batch-size-schedule and --rampup-batch-size'
++        )
++        if rank == 0:
++            logger.info(
++                f'using step-wise batch size schedule with {len(step_batch_size_schedule)} steps: '
++                f'{step_batch_size_schedule}'
++            )
++        return StepBatchSizeScheduleCalculator(
++            schedule=step_batch_size_schedule,
++            micro_batch_size=micro_batch_size,
++            data_parallel_size=data_parallel_size,
++            decrease_batch_size_if_needed=decrease_batch_size_if_needed,
++            rank=rank,
++        )
+ 
+     # Constant batch size.
+     if rampup_batch_size is None:
+@@ -506,3 +555,101 @@ class RampupBatchsizeNumMicroBatchesCalculator(NumMicroBatchesCalculator):
+         self.num_micro_batches = (
+             self.current_running_global_batch_size // self.micro_batch_times_data_parallel_size
+         )
++
++
++class StepBatchSizeScheduleCalculator(NumMicroBatchesCalculator):
++    """Calculator of number of microbatches with step-wise GBS schedule.
++
++    The schedule is a sorted list of ``(sample_threshold, global_batch_size)`` pairs.
++    At any ``consumed_samples``, the active GBS is the value of the largest threshold that is
++    <= ``consumed_samples``. The first entry must have threshold 0.
++
++    Args:
++        schedule (List[Tuple[int, int]]):
++            Sorted list of ``(sample_threshold, gbs)``. First threshold must be 0.
++        micro_batch_size (int): Micro batch size.
++        data_parallel_size (int): Data parallel size.
++        decrease_batch_size_if_needed (bool):
++            If true, decrease batch size to ensure divisibility by DP size * microbatch size.
++        rank (int): Rank (to determine whether logging should be performed).
++    """
++
++    def __init__(
++        self,
++        schedule: List[Tuple[int, int]],
++        micro_batch_size: int,
++        data_parallel_size: int,
++        decrease_batch_size_if_needed: bool,
++        rank: int,
++    ) -> None:
++        assert len(schedule) >= 1, 'schedule must have at least one entry'
++        self.schedule: List[Tuple[int, int]] = sorted(schedule, key=lambda p: p[0])
++        assert self.schedule[0][0] == 0, (
++            f'first threshold in schedule must be 0, got {self.schedule[0][0]}'
++        )
++        for thr, bs in self.schedule:
++            assert thr >= 0 and bs > 0, f'invalid schedule entry ({thr}, {bs})'
++
++        self.micro_batch_size = micro_batch_size
++        self.data_parallel_size = data_parallel_size
++        self.decrease_batch_size_if_needed = decrease_batch_size_if_needed
++        self.rank = rank
++        self.micro_batch_times_data_parallel_size = micro_batch_size * data_parallel_size
++        assert self.micro_batch_times_data_parallel_size > 0
++        self.global_batch_size = max(p[1] for p in self.schedule)
++        self.current_global_batch_size = None
++        self.current_running_global_batch_size = None
++
++        self.update(0, consistency_check=False, verbose=True)
++
++    def _lookup(self, consumed_samples: int) -> int:
++        active = self.schedule[0][1]
++        for thr, bs in self.schedule:
++            if consumed_samples >= thr:
++                active = bs
++            else:
++                break
++        return active
++
++    def update(self, consumed_samples: int, consistency_check: bool, verbose: bool = False) -> None:
++        """Update number of microbatches based on the step-wise schedule."""
++        old = self.current_global_batch_size
++        new_gbs = self._lookup(consumed_samples)
++        self.current_global_batch_size = new_gbs
++
++        changed = old != new_gbs
++        if self.rank == 0 and changed and verbose:
++            if old is None:
++                logger.info(f'setting initial batch size to {new_gbs}')
++            else:
++                logger.info(
++                    f'step-wise schedule: GBS {old} -> {new_gbs} '
++                    f'(consumed_samples={consumed_samples})'
++                )
++
++        if consistency_check and not self.decrease_batch_size_if_needed:
++            assert (
++                self.current_global_batch_size % self.micro_batch_times_data_parallel_size == 0
++            ), (
++                f'current global batch size ({self.current_global_batch_size}) is not '
++                f'divisible by micro_batch_size ({self.micro_batch_size}) * '
++                f'data_parallel_size ({self.data_parallel_size})'
++            )
++
++        if (
++            self.decrease_batch_size_if_needed
++            and self.current_global_batch_size % self.micro_batch_times_data_parallel_size != 0
++        ):
++            self.current_running_global_batch_size = _round(
++                self.current_global_batch_size, self.micro_batch_times_data_parallel_size
++            )
++            assert (
++                self.current_running_global_batch_size % self.micro_batch_times_data_parallel_size
++                == 0
++            )
++        else:
++            self.current_running_global_batch_size = self.current_global_batch_size
++
++        self.num_micro_batches = (
++            self.current_running_global_batch_size // self.micro_batch_times_data_parallel_size
++        )
+diff --git a/megatron/core/optimizer/muon.py b/megatron/core/optimizer/muon.py
+index b6af7a3e1..5044bf00c 100644
+--- a/megatron/core/optimizer/muon.py
++++ b/megatron/core/optimizer/muon.py
+@@ -84,7 +84,7 @@ class TensorParallelMuon(OrthogonalizedOptimizer):
+                 coefficient_type=coefficient_type,
+                 tp_group=tp_group,
+                 partition_dim=partition_dim,
+-                mode="duplicated" if mode == "blockwise" else mode,
++                tp_mode="duplicated" if mode == "blockwise" else mode,
+             )
+             scale_factor = get_muon_scale_factor(size[0], size[1], mode=scale_mode)
+             return orth_grad * scale_factor * extra_scale_factor
+@@ -100,7 +100,7 @@ class TensorParallelMuon(OrthogonalizedOptimizer):
+             params,
+             lr,
+             momentum_beta,
+-            use_nesterov=use_nesterov,
++            nesterov=use_nesterov,
+             weight_decay=weight_decay,
+             weight_decay_method=weight_decay_method,
+             fp32_matmul_prec=fp32_matmul_prec,
+@@ -135,17 +135,34 @@ class TensorParallelMuon(OrthogonalizedOptimizer):
+             partition_dim = None
+ 
+         if self.split_qkv and self.is_qkv_fn(p):  # type: ignore[misc]
+-            # split grouped attention parameters (e.g., QKV, GQA, etc.)
++            # split grouped attention parameters (e.g., QKV 3-way, QGKV 4-way for gated attn)
+             grad_shape = grad.shape
++            qkv_split_shapes = getattr(p, 'qkv_split_shapes', self.qkv_split_shapes)
++            # Distributed wrapping (e.g., LayerWiseDistributedOptimizer) may drop the
++            # per-param attribute; recover by trying registered candidates against grad shape.
++            if grad_shape[0] % sum(qkv_split_shapes) != 0:
++                for cand in getattr(self, 'qkv_split_shapes_candidates', ()):
++                    if grad_shape[0] % sum(cand) == 0:
++                        qkv_split_shapes = cand
++                        break
++                else:
++                    log_single_rank(
++                        logger,
++                        logging.WARNING,
++                        f'qkv split shape mismatch for grad of shape {grad_shape}; '
++                        f'falling back to monolithic Newton-Schulz.',
++                    )
++                    grad = self.scaled_orthogonalize_fn(grad, tp_group, partition_dim)
++                    return grad
+             log_single_rank(
+                 logger,
+                 logging.DEBUG,
+-                f'qkv split grad shape {grad_shape}, split shapes {self.qkv_split_shapes}',
++                f'qkv split grad shape {grad_shape}, split shapes {qkv_split_shapes}',
+             )
+-            num_query_groups = grad_shape[0] // sum(self.qkv_split_shapes)
++            num_query_groups = grad_shape[0] // sum(qkv_split_shapes)
+             qkv_grads = torch.split(
+-                grad.view(num_query_groups, sum(self.qkv_split_shapes), -1),
+-                self.qkv_split_shapes,
++                grad.view(num_query_groups, sum(qkv_split_shapes), -1),
++                qkv_split_shapes,
+                 dim=1,
+             )
+             qkv_grads = [g.reshape(-1, grad_shape[-1]) for g in qkv_grads]
+@@ -211,17 +228,27 @@ def get_megatron_muon_optimizer(
+     linear_params = []
+     nonlinear_params = []
+ 
++    # Silent-failure guards: count how many fused-QKV weights got recognized vs how many
++    # attention-like 2D weights exist overall. If a model's attention layer uses a
++    # non-standard fused name (e.g. a future MLA variant) the split path will silently
++    # skip it — these counters let us emit a clear warning instead of going unnoticed.
++    qkv_3way_matched = 0
++    qkv_4way_matched = 0
++    attention_2d_weight_total = 0
++
+     for model_chunk in model_chunks:
+         # use config to determine qkv split shapes.
+         # no need to check tp since tp splits by head and this is per head(group) dimension
+         num_attention_heads = model_chunk.config.num_attention_heads
+         num_query_groups = model_chunk.config.num_query_groups
+         kv_channels = model_chunk.config.kv_channels
+-        qkv_split_shapes = [
+-            num_attention_heads // num_query_groups * kv_channels,
+-            kv_channels,
+-            kv_channels,
+-        ]
++        q_per_group = (num_attention_heads // num_query_groups) * kv_channels
++        qkv_split_shapes_3way = [q_per_group, kv_channels, kv_channels]
++        # Gated attention (e.g., Qwen3-Next / Alpha) packs an extra Gate projection
++        # the same size as Q: [Q | Gate | K | V] per query-group.
++        qkv_split_shapes_4way = [q_per_group, q_per_group, kv_channels, kv_channels]
++        # Default passed to the optimizer constructor; per-param shapes override it.
++        qkv_split_shapes = qkv_split_shapes_3way
+         for name, param in model_chunk.named_parameters():
+             if not param.requires_grad:
+                 continue
+@@ -232,8 +259,24 @@ def get_megatron_muon_optimizer(
+                 param.expert_tp = True
+             # add flag for qkv parameter
+             # TODO(deyuf): support MLA
+-            if 'linear_qkv.weight' in name and len(param.shape) == 2:
++            if 'linear_qgkv.weight' in name and len(param.shape) == 2:
++                param.is_qkv = True
++                param.qkv_split_shapes = qkv_split_shapes_4way
++                qkv_4way_matched += 1
++            elif 'linear_qkv.weight' in name and len(param.shape) == 2:
+                 param.is_qkv = True
++                param.qkv_split_shapes = qkv_split_shapes_3way
++                qkv_3way_matched += 1
++            # Heuristic: any 2D weight inside a self_attention / attention module.
++            # Used only for the silent-failure guard below — does not affect param marking.
++            if (
++                len(param.shape) == 2
++                and ('self_attention' in name or '.attention.' in name)
++                and 'weight' in name
++                and 'norm' not in name
++                and 'layernorm' not in name
++            ):
++                attention_2d_weight_total += 1
+             # TODO(deyuf): currently only allow 2D non-embedding weight to avoid breaking
+             if (
+                 not getattr(param, 'is_embedding_or_output_parameter', False)
+@@ -243,6 +286,39 @@ def get_megatron_muon_optimizer(
+             else:
+                 nonlinear_params.append(param)
+ 
++    log_single_rank(
++        logger,
++        logging.INFO,
++        f'Muon QKV matcher: 3-way (linear_qkv.weight)={qkv_3way_matched}, '
++        f'4-way (linear_qgkv.weight)={qkv_4way_matched}, '
++        f'attention-like 2D weights total={attention_2d_weight_total}',
++    )
++    if config.muon_split_qkv and (qkv_3way_matched + qkv_4way_matched) == 0 and (
++        attention_2d_weight_total > 0
++    ):
++        log_single_rank(
++            logger,
++            logging.WARNING,
++            'Muon split_qkv is enabled but no fused QKV weight was matched '
++            '(neither linear_qkv.weight nor linear_qgkv.weight). '
++            f'{attention_2d_weight_total} attention-like 2D weights will be '
++            'orthogonalized as monolithic matrices — Q/K/V (and Gate) will NOT be '
++            'spectrum-equalized independently. This is likely a non-standard attention '
++            'layout (e.g. MLA, a renamed fused projection). '
++            'Add the new name pattern to get_megatron_muon_optimizer or disable split with '
++            '--muon-no-split-qkv.',
++        )
++
++    # Default qkv_split_shapes passed to the optimizer is used by orthogonalize()
++    # when the per-param `qkv_split_shapes` attribute is missing (e.g., dropped by
++    # distributed wrapping). Prefer the shape the model actually uses so this
++    # fallback path remains correct: 4-way for gated attention (linear_qgkv),
++    # 3-way for standard linear_qkv.
++    if qkv_4way_matched > 0 and qkv_3way_matched == 0:
++        qkv_split_shapes = qkv_split_shapes_4way
++    elif qkv_3way_matched > 0 and qkv_4way_matched == 0:
++        qkv_split_shapes = qkv_split_shapes_3way
++
+     # freezing nonlinear params and get param groups for muon
+     for param in nonlinear_params:
+         param.requires_grad = False
+@@ -275,6 +351,13 @@ def get_megatron_muon_optimizer(
+         mode=config.muon_tp_mode,
+     )
+ 
++    # Register both candidate split shapes so orthogonalize() can recover from
++    # per-param attribute loss without crashing on view().
++    optimizer.qkv_split_shapes_candidates = (
++        tuple(qkv_split_shapes_3way),
++        tuple(qkv_split_shapes_4way),
++    )
++
+     # set config here to:
+     # 1. get adam for rest of layer
+     # 2. avoid ChainedOptimizer check fail that assert all optimizers are same kind
+diff --git a/megatron/training/arguments.py b/megatron/training/arguments.py
+index 757f2b63d..a952a6984 100644
+--- a/megatron/training/arguments.py
++++ b/megatron/training/arguments.py
+@@ -544,9 +544,44 @@ def validate_args(args, defaults={}):
+                    for elt in [args.train_data_path, args.valid_data_path, args.test_data_path]) is False or \
+             args.per_split_data_args_path is None
+ 
++    if getattr(args, 'progressive_blend_config', None) is not None:
++        assert not use_data_path, \
++            '--progressive-blend-config is mutually exclusive with --data-path/--data-args-path'
++        assert not use_per_split_data_path, \
++            '--progressive-blend-config is mutually exclusive with --train-data-path etc.'
++        if args.split is None:
++            # Default same as legacy --data-path path.
++            args.split = '969, 30, 1'
++
+     # Batch size.
+     assert args.micro_batch_size is not None
+     assert args.micro_batch_size > 0
++
++    # Step-wise GBS schedule. Mutually exclusive with --rampup-batch-size and explicit
++    # --global-batch-size; --global-batch-size is auto-set to max BS in the schedule.
++    args.step_batch_size_schedule_parsed = None
++    if args.step_batch_size_schedule is not None:
++        from megatron.core.num_microbatches_calculator import parse_step_batch_size_schedule
++        assert args.rampup_batch_size is None, \
++            'cannot specify both --step-batch-size-schedule and --rampup-batch-size'
++        assert args.seq_length is not None and args.seq_length > 0, \
++            '--seq-length must be set when using --step-batch-size-schedule (thresholds are tokens)'
++        explicit_gbs = args.global_batch_size is not None
++        args.step_batch_size_schedule_parsed = parse_step_batch_size_schedule(
++            args.step_batch_size_schedule, seq_length=args.seq_length
++        )
++        derived_gbs = max(bs for _, bs in args.step_batch_size_schedule_parsed)
++        if explicit_gbs:
++            assert args.global_batch_size == derived_gbs, (
++                f'--global-batch-size ({args.global_batch_size}) conflicts with the max BS in '
++                f'--step-batch-size-schedule ({derived_gbs}). Omit --global-batch-size or set it '
++                f'to {derived_gbs}.'
++            )
++        args.global_batch_size = derived_gbs
++        if args.rank == 0:
++            print(f'setting global batch size to {args.global_batch_size} '
++                  f'(max of step-batch-size-schedule)', flush=True)
++
+     if args.global_batch_size is None:
+         args.global_batch_size = args.micro_batch_size * args.data_parallel_size
+         if args.rank == 0:
+@@ -816,6 +851,8 @@ def validate_args(args, defaults={}):
+             'expected iteration-based learning rate warmup'
+         assert args.rampup_batch_size is None, \
+             'expected no batch-size rampup for iteration-based training'
++        assert args.step_batch_size_schedule is None, \
++            'expected no step-batch-size-schedule for iteration-based training'
+         if args.lr_warmup_fraction is not None:
+             assert args.lr_warmup_iters == 0, \
+                 'can only specify one of lr-warmup-fraction and lr-warmup-iters'
+@@ -2143,6 +2180,13 @@ def _add_training_args(parser):
+                        ' (1024 - 16) / 8 = 126 intervals will increase'
+                        'the batch size linearly to 1024. In each interval'
+                        'we will use approximately 300000 / 126 = 2380 samples.')
++    group.add_argument('--step-batch-size-schedule', type=str, default=None,
++                       help='Step-wise GBS schedule "T0:BS0 T1:BS1 ..." with K/M/B/T '
++                       'suffixes. Thresholds are interpreted as TOKENS (converted to samples '
++                       'using --seq-length). The first threshold must be 0. Example: '
++                       '"0:768 250B:1536 500B:3072 750B:6144". Mutually exclusive with '
++                       '--rampup-batch-size and --global-batch-size; the global batch size is '
++                       'derived as the max BS in the schedule.')
+     group.add_argument('--decrease-batch-size-if-needed', action='store_true', default=False,
+                        help='If set, decrease batch size if microbatch_size * dp_size'
+                        'does not divide batch_size. Useful for KSO (Keep Soldiering On)'
+@@ -2994,6 +3038,15 @@ def _add_data_args(parser):
+                        '(3) a list of prefixes e.g. prefix1 prefix2. '
+                        'For (3), weights are inferred from the lengths of the contributing datasets. '
+                        'This argument is exclusive to the other independent --*-data-path arguments.')
++    group.add_argument('--progressive-blend-config', type=str, default=None,
++                       help='Path to a YAML/JSON config defining a base blend plus N auxiliary '
++                       'datasets, each with its own smooth-ramp schedule (start_at, '
++                       'reach_full_at, start_ratio, final_ratio) in tokens/samples/iterations. '
++                       'Mutually exclusive with --data-path/--train-data-path. '
++                       'See megatron_patch/data/progressive_mix_dataset.py for the format.')
++    group.add_argument('--progressive-blend-emit-source', action='store_true', default=False,
++                       help='If set, attach an "aux_source" field to each sample dict for '
++                       'diagnostic logging of which aux/base each sample came from.')
+     group.add_argument('--split', type=str, default=None,
+                        help='Comma-separated list of proportions for training,'
+                        ' validation, and test split. For example the split '
+diff --git a/megatron/training/global_vars.py b/megatron/training/global_vars.py
+index ec402263d..2d0354462 100644
+--- a/megatron/training/global_vars.py
++++ b/megatron/training/global_vars.py
+@@ -96,6 +96,7 @@ def set_global_variables(args, build_tokenizer=True):
+         args.micro_batch_size,
+         args.data_parallel_size,
+         args.decrease_batch_size_if_needed,
++        step_batch_size_schedule=getattr(args, 'step_batch_size_schedule_parsed', None),
+     )
+     if build_tokenizer:
+         _ = _build_tokenizer(args)
+diff --git a/megatron/training/training.py b/megatron/training/training.py
+index c29c48d4c..a02cb0ea9 100644
+--- a/megatron/training/training.py
++++ b/megatron/training/training.py
+@@ -932,9 +932,32 @@ def update_train_iters(args):
+         return
+ 
+     # Constant batch size with sample-based training.
+-    if args.rampup_batch_size is None:
++    if args.rampup_batch_size is None and getattr(args, 'step_batch_size_schedule_parsed', None) is None:
+         args.train_iters = args.train_samples // args.global_batch_size
+ 
++    elif getattr(args, 'step_batch_size_schedule_parsed', None) is not None:
++        # Sample-based training with step-wise GBS schedule.
++        # Walk the schedule; in each segment, GBS is constant so iterations are
++        # (segment_samples // gbs_in_segment), exactly. The final segment runs from
++        # the last threshold to args.train_samples.
++        schedule = args.step_batch_size_schedule_parsed  # sorted (sample_thr, gbs)
++        iterations = 0
++        consumed_samples = 0
++        for i, (thr, gbs) in enumerate(schedule):
++            if consumed_samples >= args.train_samples:
++                break
++            seg_end = (
++                schedule[i + 1][0] if (i + 1) < len(schedule) else args.train_samples
++            )
++            seg_end = min(seg_end, args.train_samples)
++            seg_samples = max(0, seg_end - consumed_samples)
++            seg_iters = seg_samples // gbs  # drop partial last batch
++            iterations += seg_iters
++            consumed_samples += seg_iters * gbs
++        # Reset calculator state to step 0 (caller will re-initialize during training).
++        update_num_microbatches(0, consistency_check=False)
++        args.train_iters = iterations
++
+     else:
+         # Sample based training with rampup batch size.
+         iterations = 0
+diff --git a/tests/unit_tests/test_muon_optimizer.py b/tests/unit_tests/test_muon_optimizer.py
+index cc99f7a16..c7d86c7d9 100644
+--- a/tests/unit_tests/test_muon_optimizer.py
++++ b/tests/unit_tests/test_muon_optimizer.py
+@@ -613,6 +613,143 @@ def test_muon_optimizer_qkv_split():
+     ), "Weights should be different between split_qkv=True and split_qkv=False"
+ 
+ 
++def test_muon_optimizer_qgkv_4way_split():
++    """Test 4-way QGKV split (gated attention: Q, Gate, K, V) via per-param shapes.
++
++    Validates the patch that lets each param carry its own qkv_split_shapes,
++    so gated-attention models (linear_qgkv) get [Q, Gate, K, V] split rather
++    than the standard 3-way [Q, K, V] split or no split at all.
++    """
++    # Layout: per query-group, packed [Q | Gate | K | V] with Q == Gate, K == V.
++    ng = 2  # num_query_groups
++    qp_per_group = 64
++    kvp_per_group = 32
++    per_group = 2 * (qp_per_group + kvp_per_group)  # = 192
++    qgkv_size = ng * per_group  # = 384
++    hidden_size = 256
++
++    qgkv_split_shapes = (qp_per_group, qp_per_group, kvp_per_group, kvp_per_group)
++
++    model = torch.nn.Linear(
++        hidden_size, qgkv_size, bias=False, dtype=torch.float32, device='cuda'
++    )
++    model.requires_grad_(True)
++    model.weight.data.fill_(1.0)
++
++    # Per-param marking — mirrors what get_megatron_muon_optimizer does for linear_qgkv.
++    model.weight.is_qkv = True
++    model.weight.qkv_split_shapes = qgkv_split_shapes
++
++    # Run with 4-way split via per-param shapes (constructor-level shapes deliberately
++    # set to a wrong 3-way shape to prove per-param override wins).
++    optimizer_4way = TensorParallelMuon(
++        params=[model.weight],
++        lr=0.01,
++        split_qkv=True,
++        is_qkv_fn=lambda p: getattr(p, 'is_qkv', False),
++        qkv_split_shapes=(qp_per_group, kvp_per_group, kvp_per_group),  # ignored
++        num_ns_steps=5,
++        pg_collection=None,
++        mode="duplicated",
++    )
++
++    input_tensor = torch.randn(16, hidden_size, dtype=torch.float32, device='cuda')
++    loss = model(input_tensor).sum()
++    loss.backward()
++
++    original_weight = model.weight.data.clone()
++    optimizer_4way.step()
++    weight_4way = model.weight.data.clone()
++
++    assert not torch.equal(
++        weight_4way, original_weight
++    ), "QGKV weight should be updated with 4-way split"
++
++    # Compare against no-split (whole [Q|Gate|K|V] block treated as one matrix).
++    model.weight.data.fill_(1.0)
++    if hasattr(model.weight, 'qkv_split_shapes'):
++        delattr(model.weight, 'qkv_split_shapes')
++    optimizer_no_split = TensorParallelMuon(
++        params=[model.weight],
++        lr=0.01,
++        split_qkv=False,
++        num_ns_steps=5,
++        pg_collection=None,
++        mode="duplicated",
++    )
++
++    loss = model(input_tensor).sum()
++    loss.backward()
++    optimizer_no_split.step()
++    weight_no_split = model.weight.data.clone()
++
++    assert not torch.equal(
++        weight_4way, weight_no_split
++    ), "4-way split must produce a different update than no-split — proves the split path ran"
++
++
++def test_muon_optimizer_qgkv_per_block_independence():
++    """Oracle test: 4-way split path must produce exactly the same result as
++    manually splitting [Q | Gate | K | V] and applying scaled NS to each block
++    independently. This is the strict correctness check that each sub-projection
++    truly gets its own Newton-Schulz iteration with no cross-block contamination.
++    """
++    torch.manual_seed(0)
++    ng = 2  # num_query_groups
++    qp = 64
++    kvp = 32
++    hidden = 256
++    shapes = (qp, qp, kvp, kvp)
++    per_group = sum(shapes)  # 192
++    qgkv_size = ng * per_group  # 384
++
++    # Build a deterministic 2D weight with attached metadata.
++    weight = torch.randn(qgkv_size, hidden, dtype=torch.float32, device='cuda')
++    weight.requires_grad_(True)
++    weight.is_qkv = True
++    weight.qkv_split_shapes = list(shapes)
++
++    grad = torch.randn(qgkv_size, hidden, dtype=torch.float32, device='cuda')
++
++    optimizer = TensorParallelMuon(
++        params=[weight],
++        lr=0.01,
++        split_qkv=True,
++        is_qkv_fn=lambda p: getattr(p, 'is_qkv', False),
++        qkv_split_shapes=shapes,
++        num_ns_steps=5,
++        pg_collection=None,
++        mode="duplicated",
++    )
++
++    # (1) Result from the optimizer's 4-way split path.
++    optimizer_update = optimizer.orthogonalize(weight, grad.clone())
++
++    # (2) Oracle: manually split [Q | Gate | K | V] and run the SAME scaled NS function
++    #     (closure stored on the optimizer) on each sub-block independently, then concat.
++    grad_view = grad.view(ng, per_group, -1)
++    sub_grads = [g.reshape(-1, hidden) for g in torch.split(grad_view, list(shapes), dim=1)]
++    oracle_blocks = [
++        optimizer.scaled_orthogonalize_fn(sg, None, None).view(ng, -1, hidden)
++        for sg in sub_grads
++    ]
++    oracle_update = torch.cat(oracle_blocks, dim=1).view(qgkv_size, hidden)
++
++    # The two MUST match — proves Q, Gate, K, V each got their own NS iteration.
++    assert torch.allclose(optimizer_update, oracle_update, atol=1e-5, rtol=1e-5), (
++        "4-way split path output must equal manual per-block scaled NS — "
++        "this proves Q, Gate, K, V are each NS-iterated independently."
++    )
++
++    # Sanity guard: optimizer output must NOT match whole-block NS, otherwise the
++    # split path silently regressed to no-split.
++    whole_update = optimizer.scaled_orthogonalize_fn(grad.clone(), None, None)
++    assert not torch.allclose(optimizer_update, whole_update, atol=1e-4), (
++        "4-way split output must differ from whole-block NS — "
++        "guard against silent regression to no-split."
++    )
++
++
+ def test_muon_optimizer_extra_scale_factor():
+     """Test TensorParallelMuon optimizer with different extra_scale_factor values."""
+     model = torch.nn.Linear(80, 40, bias=False, dtype=torch.float32, device='cuda')
+diff --git a/tests/unit_tests/test_step_batch_size_schedule.py b/tests/unit_tests/test_step_batch_size_schedule.py
+new file mode 100644
+index 000000000..77dcdd9c8
+--- /dev/null
++++ b/tests/unit_tests/test_step_batch_size_schedule.py
+@@ -0,0 +1,98 @@
++"""Unit tests for StepBatchSizeScheduleCalculator and parser."""
++
++import pytest
++
++import megatron.core.num_microbatches_calculator as mb_calc
++
++
++def _reset():
++    mb_calc._GLOBAL_NUM_MICROBATCHES_CALCULATOR = None
++
++
++def test_parse_basic():
++    pairs = mb_calc.parse_step_batch_size_schedule("0:768 250B:1536 500B:3072", seq_length=2048)
++    assert pairs[0] == (0, 768)
++    assert pairs[1] == (250 * 10**9 // 2048, 1536)
++    assert pairs[2] == (500 * 10**9 // 2048, 3072)
++
++
++def test_parse_samples_unit():
++    pairs = mb_calc.parse_step_batch_size_schedule("0:8 1K:16 2K:32", seq_length=None)
++    assert pairs == [(0, 8), (1000, 16), (2000, 32)]
++
++
++def test_parse_unsorted_input_gets_sorted():
++    pairs = mb_calc.parse_step_batch_size_schedule("500:32 0:8 100:16", seq_length=None)
++    assert pairs == [(0, 8), (100, 16), (500, 32)]
++
++
++def test_parse_rejects_missing_zero_threshold():
++    with pytest.raises(ValueError, match="first threshold"):
++        mb_calc.parse_step_batch_size_schedule("100:8 200:16", seq_length=None)
++
++
++def test_parse_rejects_invalid_entry():
++    with pytest.raises(ValueError):
++        mb_calc.parse_step_batch_size_schedule("0:8 500-16", seq_length=None)
++
++
++def test_step_calculator_lookup():
++    _reset()
++    schedule = [(0, 8), (100, 16), (500, 32)]
++    mb_calc.init_num_microbatches_calculator(
++        rank=0,
++        rampup_batch_size=None,
++        global_batch_size=32,  # ignored when step schedule given
++        micro_batch_size=4,
++        data_parallel_size=2,
++        decrease_batch_size_if_needed=False,
++        step_batch_size_schedule=schedule,
++    )
++    assert mb_calc.get_current_global_batch_size() == 8
++
++    mb_calc.update_num_microbatches(50, consistency_check=False)
++    assert mb_calc.get_current_global_batch_size() == 8
++
++    mb_calc.update_num_microbatches(100, consistency_check=False)
++    assert mb_calc.get_current_global_batch_size() == 16
++
++    mb_calc.update_num_microbatches(499, consistency_check=False)
++    assert mb_calc.get_current_global_batch_size() == 16
++
++    mb_calc.update_num_microbatches(500, consistency_check=False)
++    assert mb_calc.get_current_global_batch_size() == 32
++
++    mb_calc.update_num_microbatches(10**9, consistency_check=False)
++    assert mb_calc.get_current_global_batch_size() == 32
++
++
++def test_num_microbatches_correctness():
++    _reset()
++    # GBS=24 at start, MBS=4, DP=2 -> num_microbatches = 24/(4*2) = 3
++    schedule = [(0, 24), (1000, 48)]
++    mb_calc.init_num_microbatches_calculator(
++        rank=0,
++        rampup_batch_size=None,
++        global_batch_size=48,
++        micro_batch_size=4,
++        data_parallel_size=2,
++        decrease_batch_size_if_needed=False,
++        step_batch_size_schedule=schedule,
++    )
++    assert mb_calc.get_num_microbatches() == 3
++    mb_calc.update_num_microbatches(1000, consistency_check=False)
++    assert mb_calc.get_num_microbatches() == 6
++
++
++def test_step_and_rampup_mutually_exclusive():
++    _reset()
++    with pytest.raises(AssertionError, match="cannot specify both"):
++        mb_calc.init_num_microbatches_calculator(
++            rank=0,
++            rampup_batch_size=[8, 8, 1000],
++            global_batch_size=32,
++            micro_batch_size=4,
++            data_parallel_size=2,
++            decrease_batch_size_if_needed=False,
++            step_batch_size_schedule=[(0, 8), (500, 32)],
++        )
