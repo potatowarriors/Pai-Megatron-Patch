@@ -207,7 +207,13 @@ class GatedDeltaNetMixer(MambaMixer):
 
         with get_cuda_rng_tracker().fork():
             # Initialize dt bias so that F.softplus(dt_bias) is between dt_min and dt_max
-            self.dt_bias = nn.Parameter(torch.ones(self.nheads_local_tp))
+            self.dt_bias = nn.Parameter(
+                torch.ones(
+                    self.nheads_local_tp,
+                    device=torch.cuda.current_device(),
+                    dtype=config.params_dtype,
+                )
+            )
             # Our initialization would set all Linear.bias to zero,
             # need to mark this one as _no_reinit
             self.dt_bias._no_reinit = True
@@ -217,8 +223,12 @@ class GatedDeltaNetMixer(MambaMixer):
             self.dt_bias._no_weight_decay = True
             setattr(self.dt_bias, "tensor_model_parallel", True)
 
-            # A parameter
-            A = torch.empty(self.nheads_local_tp).uniform_(0, 16)
+            # A parameter — keep fp32 for numerical stability (Mamba convention)
+            A = torch.empty(
+                self.nheads_local_tp,
+                device=torch.cuda.current_device(),
+                dtype=torch.float32,
+            ).uniform_(0, 16)
             self.A_log = nn.Parameter(torch.log(A))
             self.A_log._no_weight_decay = True
             setattr(self.A_log, "tensor_model_parallel", True)
