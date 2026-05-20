@@ -114,6 +114,10 @@ def build_dataset(args, train_val_test_num_samples):
         val_dataset = JSONSFTDataset(args.valid_data_path, args.max_padding_length)
         test_dataset = JSONSFTDataset(args.valid_data_path, args.max_padding_length)
     elif args.dataset == 'MMAP':
+        if getattr(args, 'progressive_blend_config', None):
+            return _build_progressive_blend_dataset(
+                args, train_val_test_num_samples, dataset_module=GPTDataset
+            )
         config = core_gpt_dataset_config_from_args(args)
         dataset_type = MockGPTDataset if config.mock else GPTDataset
         should_build_dataset = is_dataset_built_on_rank
@@ -132,3 +136,97 @@ def build_dataset(args, train_val_test_num_samples):
         raise NotImplementedError(f"Dataset {args.dataset} is no longer supported in Pai-Megatron-Patch anymore, downgrade to v0.10.2 or lower to use it.")
 
     return train_dataset, val_dataset, test_dataset
+
+
+def _build_progressive_blend_dataset(args, train_val_test_num_samples, dataset_module):
+    """Build base + N aux BlendedMegatronDatasets and wrap train with ProgressiveMixDataset.
+
+    Validation/test splits use the base blend only — progressive ramping applies to train.
+    """
+    from collections import OrderedDict
+    from megatron.core.datasets.blended_megatron_dataset_builder import (
+        BlendedMegatronDatasetBuilder,
+    )
+    from megatron.core.datasets.gpt_dataset import GPTDatasetConfig
+    from megatron.core.datasets.utils import get_blend_from_list
+    from .progressive_mix_dataset import (
+        ProgressiveMixDataset,
+        parse_progressive_blend_config,
+    )
+
+    horizon_samples = train_val_test_num_samples[0]
+    blend_cfg = parse_progressive_blend_config(
+        args.progressive_blend_config,
+        seq_length=args.seq_length,
+        step_batch_size_schedule=getattr(args, 'step_batch_size_schedule_parsed', None),
+        constant_gbs=args.global_batch_size,
+        horizon_samples=horizon_samples,
+    )
+
+    tokenizer = get_tokenizer()
+    common_kwargs = dict(
+        random_seed=args.seed,
+        sequence_length=args.seq_length,
+        split=args.split,
+        path_to_cache=args.data_cache_path,
+        reset_position_ids=args.reset_position_ids,
+        reset_attention_mask=args.reset_attention_mask,
+        eod_mask_loss=args.eod_mask_loss,
+        mmap_bin_files=args.mmap_bin_files,
+        tokenizer=tokenizer,
+        create_attention_mask=args.create_attention_mask_in_dataloader,
+    )
+
+    def _make_config(data_path_list):
+        kwargs = dict(common_kwargs)
+        kwargs['blend'] = get_blend_from_list(data_path_list)
+        kwargs['blend_per_split'] = None
+        try:
+            return GPTDatasetConfig(
+                num_dataset_builder_threads=args.num_dataset_builder_threads, **kwargs
+            )
+        except Exception:
+            return GPTDatasetConfig(**kwargs)
+
+    print_rank_0("> building base blended dataset ...")
+    base_train, base_val, base_test = BlendedMegatronDatasetBuilder(
+        dataset_module,
+        train_val_test_num_samples,
+        is_dataset_built_on_rank,
+        _make_config(blend_cfg['base']['data_path']),
+    ).build()
+
+    aux_train: "OrderedDict[str, object]" = OrderedDict()
+    aux_schedules: "OrderedDict[str, object]" = OrderedDict()
+    for aux in blend_cfg['aux']:
+        name = aux['name']
+        print_rank_0(f"> building auxiliary blended dataset '{name}' ...")
+        aux_t, _, _ = BlendedMegatronDatasetBuilder(
+            dataset_module,
+            train_val_test_num_samples,
+            is_dataset_built_on_rank,
+            _make_config(aux['data_path']),
+        ).build()
+        if aux_t is None:
+            # Non-data-loading rank
+            continue
+        aux_train[name] = aux_t
+        aux_schedules[name] = aux['schedule']
+
+    if base_train is None:
+        # Pipeline rank that doesn't load data — wrapper unnecessary.
+        return None, base_val, base_test
+
+    train_dataset = ProgressiveMixDataset(
+        base_dataset=base_train,
+        aux_datasets=dict(aux_train),
+        aux_schedules=dict(aux_schedules),
+        seed=args.seed,
+        size=horizon_samples,
+        emit_dataset_source=getattr(args, 'progressive_blend_emit_source', False),
+    )
+    print_rank_0(
+        f"> finished creating progressive-blend GPT datasets "
+        f"(base + {len(aux_train)} aux: {list(aux_train.keys())}) ..."
+    )
+    return train_dataset, base_val, base_test
