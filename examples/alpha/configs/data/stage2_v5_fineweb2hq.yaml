@@ -1,0 +1,16 @@
+# Stage 2 v5 — FineWeb2-HQ 50% (second half of per-parquet row shuffle).
+#
+# Vocab: alpha v5 tokenizer (effective 163,860, padded 163,968).
+#
+# Split: tail half of per-parquet seed=42 row shuffle. Stage1 (first half)
+#   at stage1_v5_fineweb2hq.yaml. Produced in the same fast_tokenize_v5.py
+#   parquet-subset run (both halves emitted simultaneously).
+#
+# Source: /home/work/Datasets/LL_preprocessed/v5/stage2/fineweb2hq/
+#   data_text_document.bin   ~88 GB
+#   data_text_document.idx   ~?? MB
+
+data-path: "/home/work/Datasets/LL_preprocessed/v5/stage2/fineweb2hq/data_text_document"
+split: "99,1,0"
+dataset: MMAP
+num-workers: 8

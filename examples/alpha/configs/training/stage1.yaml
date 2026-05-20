@@ -1,22 +1,30 @@
 # Stage 1 from-scratch pretraining with aux-loss-free MoE routing.
 #
 # All keys are Megatron CLI flag names — `train.sh` expands them via
-# yaml_to_flags. Derived values (train-iters from token budget) are baked
-# in directly with the formula in a comment, not recomputed in shell.
+# yaml_to_flags. Schedule is expressed in **samples** (token-based) instead
+# of iterations so the token budget intent survives GBS changes:
+#   tokens = samples × seq_length(4096)
+#   iters  = samples ÷ global_batch_size(1536)
 #
-# Schedule: WSD (warmup-stable-decay) over 450k iters
-#   warmup:  iter 0       → 2,000    (linear, init_lr → lr=4e-4)
-#   stable:  iter 2,000   → 405,000  (flat at lr=4e-4)
-#   decay:   iter 405,000 → 450,000  (cosine, lr → min_lr=4e-5)
+# Schedule: WSD (warmup-stable-decay), targeted 450B token budget over the
+# 461.81B train pool of stage1_v5_blend (= 0.99 × 466.47B total). Leaves
+# ~11.8B (2.6%) safety headroom so the run terminates cleanly without
+# wrapping the dataset.
 #
-# Token budget: 450k × GBS(256) × seq_len(4096) ≈ 0.47T tokens
-# (~0.42 epoch over kormo_50pct's ~1.13T tokens)
+#   warmup:  0      → 2.929M samples  (=  12.00B tok, ~1,907 iters; linear, init_lr → lr=2e-4)
+#   stable:  2.929M → 100.098M samples (= 398.00B tok, ~63,261 iters; flat at lr=2e-4)
+#   decay:   100.098M → 109.864M samples (= 40.00B tok, ~6,358 iters; cosine, lr → min_lr=2e-5)
+#   total:   109.864M samples           (= 450.00B tok, ~71,526 iters)
+#
+# All samples are integer multiples of GBS=1536, so update_train_iters()
+# truncates cleanly with no leftover batch. Math verified against
+# training.py:1161-1188 (iter-path × GBS == sample-path; byte-identical LR curve).
 
-# ── Iteration schedule ─────────────────────────────────────────────────────
-train-iters: 450000
-lr-warmup-iters: 2000
-lr-decay-iters: 450000        # WSD: full scope
-lr-wsd-decay-iters: 45000     # last 10% is the decay phase
+# ── Sample (token-based) schedule ──────────────────────────────────────────
+train-samples: 109863936          # = 71,526 iters × 1536 → 450.003B tokens
+lr-warmup-samples: 2929152        # =  1,907 iters × 1536 →  11.998B tokens
+lr-decay-samples: 109863936       # WSD: full scope (= train-samples)
+lr-wsd-decay-samples: 9765888     # =  6,358 iters × 1536 →  40.001B tokens
 
 # ── LR ──────────────────────────────────────────────────────────────────────
 lr: 2.0e-4
@@ -37,12 +45,24 @@ global-batch-size: 1536
 recompute-granularity: selective
 recompute-modules: "layernorm moe"
 
-# ── MoE routing (Stage 1 auxfree: bias-based, sigmoid score) ──────────────
-# Already DSV3-aligned on sigmoid + expert bias + 1e-3 bias rate. We keep
-# load-balancing-type=none here (purely aux-loss-free) rather than DSV3's
-# seq_aux_loss safety net, to preserve alpha's validated Stage 1 recipe.
-# Stage 2 presets (stage2_*.yaml) switch to seq_aux_loss for DSV3 alignment.
-moe-router-load-balancing-type: none
+# ── MoE routing (DSV3-strict: aux-loss-free + complementary seq_aux_loss) ─
+# Full DeepSeek-V3 alignment per paper Section 2.1.2:
+#   • PRIMARY: aux-loss-free strategy via expert bias updates
+#     (moe-router-enable-expert-bias=true, bias-update-rate=0.001)
+#   • COMPLEMENTARY: sequence-wise auxiliary balance loss with extremely
+#     small coefficient (moe-aux-loss-coeff=1.0e-4 in baseline_48L.yaml).
+#     DSV3 paper: "to prevent extreme imbalance within any single sequence,
+#     we also employ a complementary sequence-wise balance loss".
+#   • Sigmoid score + group-limited routing (8 groups × top-4) + topk-scaling
+#     2.5 from baseline_48L.yaml round out the DSV3 routing recipe.
+#
+# Deviation from prior alpha Stage 1 (kormo) recipe: that run used
+# load-balancing-type=none (pure aux-loss-free, no seq_aux safety net).
+# Switched to seq_aux_loss for proper DSV3 alignment per 2026-05-12 review.
+# The 1e-4 coefficient is small enough that gradient contribution is
+# nearly invisible vs lm loss, but the safety net prevents extreme
+# intra-sequence routing collapse. Stage 2-2/2-3 already use this setting.
+moe-router-load-balancing-type: seq_aux_loss
 moe-router-score-function: sigmoid
 moe-router-enable-expert-bias: true
 moe-router-bias-update-rate: 0.001
@@ -77,17 +97,33 @@ log-max-attention-logit: true
 # alpha's `apply_wd_to_qk_layernorm` in Megatron-LM-251125).
 no-weight-decay-cond-type: apply_wd_to_qk_layernorm
 
-# ── Document boundary handling (frontier Megatron recipe) ─────────────────
+# ── Document boundary handling (alpha hybrid recipe) ──────────────────────
 # After Phase 0.0 / 0.4 of the 2026-05-12 pre-flight, every doc in the Stage 1
-# .bin ends with token id 0 (= <|endoftext|>, the designated EOS/EOD). These
-# three flags activate the standard Megatron document-aware packing: position
-# IDs reset at each EOD within a packed sample, attention masks zero out
-# cross-doc context, and EOD tokens are masked from the loss so the model
-# isn't trained to predict its own doc-end marker. Required by yanring/
-# Megatron-MoE-ModelZoo Qwen3-Next-80B-A3B reference recipe; aligns with
-# Llama 3 / DSV3 / NeMo defaults. Pre-flight verified that <|endoftext|>
-# (id 0) is present at every doc end in DCLM / korean_web / fineweb2hq.
-reset-position-ids: true
+# .bin ends with token id 0 (= <|endoftext|>, the designated EOS/EOD).
+#
+# reset-attention-mask + eod-mask-loss handle doc boundaries for alpha:
+#   • reset-attention-mask=true: zeros cross-doc attention in the 6 attention
+#     layers (12.5% of layers). The 18 Mamba layers ignore attention masks;
+#     state leakage across doc boundaries in Mamba is the accepted hybrid-SSM
+#     convention (same as Qwen3-Next, Jamba, Mamba-2).
+#   • eod-mask-loss=true: excludes EOD tokens from loss so the model isn't
+#     trained to predict its own doc-end marker.
+#
+# reset-position-ids is INTENTIONALLY OFF for alpha hybrid:
+#   1. Mamba/MoE layers don't read position_ids → no effect.
+#   2. Attention layers' RoPE has the property <R_m Q, R_n K> = f(n-m), so
+#      within-doc relative positions are preserved regardless of absolute
+#      offset (N cancels: (N+i)-(N+j) = i-j). Cross-doc score values differ
+#      between reset-on/off, but reset-attention-mask zeros them → softmax
+#      and backward contribution is 0 in either case.
+#   3. Forward outputs, gradients, and learned weights converge identically
+#      with reset-position-ids on vs off for this architecture.
+#   4. The patch-side get_batch (megatron_patch/template/helper.py:91-110)
+#      auto-builds PackedSeqParams (THD/cu_seqlens) whenever this is true,
+#      but MambaModel.forward() doesn't accept packed_seq_params (chunk-scan
+#      Triton kernel has no cu_seqlens path) → AssertionError at iter 1.
+#      Disabling here bypasses that path with zero functional impact.
+reset-position-ids: false
 reset-attention-mask: true
 eod-mask-loss: true
 
