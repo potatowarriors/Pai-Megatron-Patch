@@ -1,0 +1,48 @@
+{
+  "enabledPlugins": {
+    "atlassian@claude-plugins-official": true,
+    "allow": [
+      "Bash(python3:*)",
+      "Bash(ls:*)"
+    ]
+  },
+  "permissions": {
+    "allow": [
+      "mcp__plugin_atlassian_atlassian__getConfluenceSpaces",
+      "mcp__plugin_atlassian_atlassian__getPagesInConfluenceSpace",
+      "mcp__plugin_atlassian_atlassian__updateConfluencePage",
+      "mcp__plugin_atlassian_atlassian__createConfluencePage",
+      "Bash(ls *)",
+      "Bash(find *)",
+      "Bash(du *)",
+      "Bash(cat *)",
+      "Bash(head *)",
+      "Bash(tail *)",
+      "Bash(wc *)",
+      "Bash(file *)",
+      "Bash(tree *)",
+      "Bash(stat *)",
+      "Bash(git status*)",
+      "Bash(git log*)",
+      "Bash(git diff*)",
+      "Bash(git branch*)",
+      "Bash(git show*)",
+      "Bash(git remote*)",
+      "Bash(git rev-parse*)",
+      "Bash(which *)",
+      "Bash(type *)",
+      "Bash(node --version*)",
+      "Bash(python *)",
+      "Bash(python3 *)",
+      "Bash(npm list*)",
+      "Bash(pwd*)",
+      "Bash(echo *)",
+      "Bash(env*)",
+      "Bash(printenv*)",
+      "Bash(docker ps*)",
+      "Bash(docker images*)",
+      "Bash(uname*)"
+    ],
+    "defaultMode": "default"
+  }
+}

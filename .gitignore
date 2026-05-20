@@ -48,6 +48,5 @@ __pycache__/
 *.sublime-*
 
 # Internal documentation (not for public GitHub)
-CLAUDE.md
 examples/alpha/docs/
 toolkits/distributed_checkpoints_convertor/scripts/alpha/docs/
