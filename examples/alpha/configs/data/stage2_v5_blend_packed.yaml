@@ -1,0 +1,35 @@
+# Stage 2 v5 — Best-fit-Packed variant of stage2_v5_blend.yaml.
+#
+# Identical 10-dataset blend, but each shard has been run through offline
+# Best-fit Packing (toolkits/pretrain_data_preprocessing/bestfit_pack.py;
+# arXiv 2404.10830 "Fewer Truncations Improve Language Modeling") so that every
+# stored "document" is exactly seq_length=4096 tokens (whole docs bin-packed,
+# EOD-padded). Megatron's train-time concat-and-chunk then slices on document
+# boundaries → documents are no longer truncated across training sequences
+# (except genuinely-long docs > 4096, which any method must split).
+#
+# Produce it with:
+#   bash toolkits/pretrain_data_preprocessing/run_stage2_v5.sh pack-dry   # stats only
+#   bash toolkits/pretrain_data_preprocessing/run_stage2_v5.sh pack       # write stage2_packed/
+#
+# Measured (dry-run) per-shard fill ratio is ≥99% (pad overhead <1%), and
+# truncation reduction vs concat-and-chunk is large — e.g. code/transpilation
+# −100% (no docs > 4096), fineweb2hq −72.8% (residual = real long docs).
+#
+# IMPORTANT — use only with baseline_48L.yaml AND --seq-length 4096 (the packing
+# capacity). Training with a different seq-length would misalign the chunk
+# boundaries and reintroduce truncation. EOD = id 0 is the pad token, masked by
+# --eod-mask-loss (already on for alpha) and isolated by --reset-attention-mask.
+#
+# Blend weights: still weight-less (auto-inferred from packed sample counts).
+# Because per-dataset padding differs slightly (<1%), the real-token mix drifts
+# sub-percent from stage2_v5_blend.yaml. To pin exact real-token ratios, prepend
+# explicit weights (see tools/compute_blend_weights.py).
+#
+# Budget control: unchanged — --train-samples = desired_tokens / 4096 (each sample
+# is one 4096-token bin; ~<1% of those tokens are EOD padding).
+
+data-path: "/home/work/Datasets/LL_preprocessed/v5/stage2_packed/korean_web/data_text_document /home/work/Datasets/LL_preprocessed/v5/stage2_packed/fineweb2hq/data_text_document /home/work/Datasets/LL_preprocessed/v5/stage2_packed/math/data_text_document /home/work/Datasets/LL_preprocessed/v5/stage2_packed/code/code_review/data_text_document /home/work/Datasets/LL_preprocessed/v5/stage2_packed/code/question_answering/data_text_document /home/work/Datasets/LL_preprocessed/v5/stage2_packed/code/rewriting/data_text_document /home/work/Datasets/LL_preprocessed/v5/stage2_packed/code/student_teacher/data_text_document /home/work/Datasets/LL_preprocessed/v5/stage2_packed/code/transpilation/data_text_document /home/work/Datasets/LL_preprocessed/v5/stage2_packed/nemotron_cc_hq/actual/data_text_document /home/work/Datasets/LL_preprocessed/v5/stage2_packed/nemotron_cc_hq/qa_pairs/data_text_document"
+split: "99,1,0"
+dataset: MMAP
+num-workers: 8

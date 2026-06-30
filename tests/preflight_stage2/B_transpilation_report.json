@@ -1,0 +1,102 @@
+{
+  "source": "transpilation",
+  "prefix": "/home/work/Datasets/LL_preprocessed/v5/stage2/code/transpilation/data_text_document",
+  "B1": {
+    "magic_match": true,
+    "version": 1,
+    "dtype_code": 4,
+    "dtype_name": "int32",
+    "sequence_count": 29401922,
+    "document_count": 29401923,
+    "idx_file_size": 588038482,
+    "bin_file_size": 117098376456
+  },
+  "B2": {
+    "sequence_count_via_idx": 29401922,
+    "sum_sequence_lengths": 29274594114,
+    "expected_bin_size_bytes": 117098376456,
+    "actual_bin_size_bytes": 117098376456,
+    "bin_size_match": true
+  },
+  "B3": {
+    "total_tokens_sampled": 419430400,
+    "global_min": 0,
+    "global_max": 163859,
+    "max_under_effective_vocab": true,
+    "min_nonneg": true,
+    "top_10_decoded": [
+      {
+        "id": 1168,
+        "count": 16576995,
+        "decoded": "::"
+      },
+      {
+        "id": 163844,
+        "count": 15532646,
+        "decoded": "    "
+      },
+      {
+        "id": 163845,
+        "count": 11935563,
+        "decoded": "        "
+      },
+      {
+        "id": 294,
+        "count": 9815879,
+        "decoded": "\n"
+      },
+      {
+        "id": 163843,
+        "count": 7876196,
+        "decoded": "           "
+      },
+      {
+        "id": 580,
+        "count": 7591273,
+        "decoded": " {\n"
+      },
+      {
+        "id": 4315,
+        "count": 7308746,
+        "decoded": " std"
+      },
+      {
+        "id": 163859,
+        "count": 6612209,
+        "decoded": ");\n"
+      },
+      {
+        "id": 163858,
+        "count": 6283238,
+        "decoded": "}\n"
+      },
+      {
+        "id": 107,
+        "count": 6050498,
+        "decoded": ","
+      }
+    ]
+  },
+  "B4": {
+    "sampled_docs": 10000,
+    "docs_ending_in_eod_id_0": 10000,
+    "fraction": 1.0,
+    "top_10_last_tokens": [
+      {
+        "id": 0,
+        "count": 10000,
+        "decoded": "<|endoftext|>"
+      }
+    ]
+  },
+  "B5": {
+    "n_docs": 29401922,
+    "empty_zero_length": 0,
+    "shorter_than_16": 29,
+    "mean_doc_len": 995.6694026329299,
+    "median_doc_len": 924.0,
+    "p95_doc_len": 1929.0,
+    "max_doc_len": 2950
+  },
+  "duration_sec": 19.44
+}

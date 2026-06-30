@@ -1,0 +1,102 @@
+{
+  "source": "korean_web",
+  "prefix": "/home/work/Datasets/LL_preprocessed/v5/stage2/korean_web/data_text_document",
+  "B1": {
+    "magic_match": true,
+    "version": 1,
+    "dtype_code": 4,
+    "dtype_name": "int32",
+    "sequence_count": 24559682,
+    "document_count": 24559683,
+    "idx_file_size": 491193682,
+    "bin_file_size": 76095209892
+  },
+  "B2": {
+    "sequence_count_via_idx": 24559682,
+    "sum_sequence_lengths": 19023802473,
+    "expected_bin_size_bytes": 76095209892,
+    "actual_bin_size_bytes": 76095209892,
+    "bin_size_match": true
+  },
+  "B3": {
+    "total_tokens_sampled": 419430400,
+    "global_min": 0,
+    "global_max": 163859,
+    "max_under_effective_vocab": true,
+    "min_nonneg": true,
+    "top_10_decoded": [
+      {
+        "id": 109,
+        "count": 11150561,
+        "decoded": "."
+      },
+      {
+        "id": 316,
+        "count": 8355982,
+        "decoded": " "
+      },
+      {
+        "id": 107,
+        "count": 7742764,
+        "decoded": ","
+      },
+      {
+        "id": 294,
+        "count": 5755300,
+        "decoded": "\n"
+      },
+      {
+        "id": 409,
+        "count": 3077925,
+        "decoded": ".\n"
+      },
+      {
+        "id": 766,
+        "count": 1963007,
+        "decoded": " 수"
+      },
+      {
+        "id": 524,
+        "count": 1911703,
+        "decoded": "에"
+      },
+      {
+        "id": 536,
+        "count": 1911513,
+        "decoded": "의"
+      },
+      {
+        "id": 474,
+        "count": 1859948,
+        "decoded": "이"
+      },
+      {
+        "id": 509,
+        "count": 1593912,
+        "decoded": "을"
+      }
+    ]
+  },
+  "B4": {
+    "sampled_docs": 10000,
+    "docs_ending_in_eod_id_0": 10000,
+    "fraction": 1.0,
+    "top_10_last_tokens": [
+      {
+        "id": 0,
+        "count": 10000,
+        "decoded": "<|endoftext|>"
+      }
+    ]
+  },
+  "B5": {
+    "n_docs": 24559682,
+    "empty_zero_length": 0,
+    "shorter_than_16": 433,
+    "mean_doc_len": 774.5948206088336,
+    "median_doc_len": 378.0,
+    "p95_doc_len": 2258.0,
+    "max_doc_len": 520784
+  },
+  "duration_sec": 10.82
+}

@@ -10,7 +10,11 @@ See `examples/alpha/CLAUDE.md` § "Pre-tokenization Performance" for the
 architecture rules and measured throughput table that motivated this script.
 
 Two modes:
-  - `jsonl-chunk`     : tokenize one JSONL file → single .bin/.idx
+  - `jsonl-chunk`     : tokenize one JSONL file (--input) OR many JSONL files
+                       (--input-list-file, one path per line) → single .bin/.idx.
+                       Multi-file is byte-identical to tokenizing the files
+                       concatenated in list order, and is how the stage-2 driver
+                       feeds one process a partition of a multi-file dataset.
   - `parquet-subset`  : tokenize a list of parquet files, shuffle rows per
                        parquet with seed, write first half → stage1,
                        second half → stage2 (both .bin/.idx in one pass)
@@ -111,12 +115,32 @@ def _progress_log(stats, t0):
 # ============================================================
 # Mode: jsonl-chunk
 # ============================================================
+def _resolve_jsonl_inputs(args):
+    """Return the ordered list of jsonl files for jsonl-chunk mode.
+
+    Either a single --input file or many files via --input-list-file (one path
+    per line). List order defines document order, so it must be deterministic
+    (the driver sorts before partitioning)."""
+    if args.input_list_file:
+        with open(args.input_list_file, "r") as f:
+            files = [ln.strip() for ln in f if ln.strip()]
+    else:
+        files = [args.input]
+    missing = [p for p in files if not os.path.exists(p)]
+    if missing:
+        raise FileNotFoundError(f"{len(missing)} input jsonl file(s) not found, e.g. {missing[0]}")
+    return files
+
+
 def run_jsonl_chunk(args):
     import numpy as np
     tok, eos_id, vocab_size = _load_tokenizer(args.tokenizer)
     from megatron.core.datasets.indexed_dataset import DType
     dtype = DType.optimal_dtype(vocab_size)
     print(f"tokenizer vocab_size={vocab_size}, dtype={dtype.__name__}, eos_id={eos_id}", flush=True)
+
+    input_files = _resolve_jsonl_inputs(args)
+    print(f"jsonl-chunk: {len(input_files)} input file(s) → {args.output_prefix}_text_document.{{bin,idx}}", flush=True)
 
     builder = _open_builder(args.output_prefix, dtype)
     stats = {"docs": 0, "tokens": 0, "empty_docs": 0, "parse_errors": 0}
@@ -126,31 +150,33 @@ def run_jsonl_chunk(args):
     log_every_s = 60
 
     try:
-        with open(args.input, "r") as f:
-            for line in f:
-                try:
-                    obj = json.loads(line)
-                    text = obj.get(args.text_key, None)
-                except json.JSONDecodeError:
-                    stats["parse_errors"] += 1
-                    continue
-                if not text:
-                    stats["empty_docs"] += 1
-                    continue
-                batch.append(text)
-                if len(batch) >= args.batch_size:
-                    _flush_batch(tok, builder, batch, eos_id, args.append_eod, dtype, stats)
-                    batch = []
-                    now = time.time()
-                    if now - last_log >= log_every_s:
-                        _progress_log(stats, t0)
-                        last_log = now
+        for fi, path in enumerate(input_files):
+            with open(path, "r") as f:
+                for line in f:
+                    try:
+                        obj = json.loads(line)
+                        text = obj.get(args.text_key, None)
+                    except json.JSONDecodeError:
+                        stats["parse_errors"] += 1
+                        continue
+                    if not text:
+                        stats["empty_docs"] += 1
+                        continue
+                    batch.append(text)
+                    if len(batch) >= args.batch_size:
+                        _flush_batch(tok, builder, batch, eos_id, args.append_eod, dtype, stats)
+                        batch = []
+                        now = time.time()
+                        if now - last_log >= log_every_s:
+                            print(f"  [file {fi+1}/{len(input_files)}]", end=" ")
+                            _progress_log(stats, t0)
+                            last_log = now
         _flush_batch(tok, builder, batch, eos_id, args.append_eod, dtype, stats)
     finally:
         _finalize_builder(builder, args.output_prefix)
 
     elapsed = time.time() - t0
-    print(f"\nDONE jsonl-chunk in {elapsed:.1f}s", flush=True)
+    print(f"\nDONE jsonl-chunk ({len(input_files)} files) in {elapsed:.1f}s", flush=True)
     print(f"  docs:          {stats['docs']:,}", flush=True)
     print(f"  tokens:        {stats['tokens']:,} ({stats['tokens']/1e9:.2f}B)", flush=True)
     print(f"  empty_docs:    {stats['empty_docs']:,}", flush=True)
@@ -285,12 +311,14 @@ def main():
                         help="Megatron-LM-* path (for IndexedDatasetBuilder import)")
 
     # jsonl-chunk mode args
-    parser.add_argument("--input", help="[jsonl-chunk] input jsonl file path")
+    parser.add_argument("--input", help="[jsonl-chunk] single input jsonl file path")
     parser.add_argument("--output-prefix", help="[jsonl-chunk] output prefix (writes <prefix>_text_document.{bin,idx})")
 
     # parquet-subset mode args
     parser.add_argument("--input-list", help="[parquet-subset] comma-separated parquet paths")
-    parser.add_argument("--input-list-file", help="[parquet-subset] file containing parquet paths (one per line)")
+    # --input-list-file is shared: jsonl-chunk (many jsonl files) + parquet-subset (parquet paths)
+    parser.add_argument("--input-list-file", help="file of input paths, one per line "
+                        "([jsonl-chunk] jsonl files, or [parquet-subset] parquet files)")
     parser.add_argument("--output-prefix-stage1", help="[parquet-subset] stage1 output prefix")
     parser.add_argument("--output-prefix-stage2", help="[parquet-subset] stage2 output prefix")
     parser.add_argument("--shuffle-seed", type=int, default=42, help="[parquet-subset] per-parquet row shuffle seed")
@@ -306,8 +334,10 @@ def main():
 
     # Validate mode-specific args
     if args.mode == "jsonl-chunk":
-        if not args.input or not args.output_prefix:
-            parser.error("jsonl-chunk requires --input and --output-prefix")
+        if not (args.input or args.input_list_file) or not args.output_prefix:
+            parser.error("jsonl-chunk requires (--input or --input-list-file) and --output-prefix")
+        if args.input and args.input_list_file:
+            parser.error("jsonl-chunk: pass only one of --input / --input-list-file")
         run_jsonl_chunk(args)
     elif args.mode == "parquet-subset":
         if not (args.input_list or args.input_list_file):
