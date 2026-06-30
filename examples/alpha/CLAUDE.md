@@ -16,17 +16,17 @@ Alpha는 GatedDeltaNet + Attention + MoE 하이브리드 아키텍처 기반의 
 | Q heads × head_dim | 16 × 256 (Q upcast → 4096) |
 | KV groups × head_dim | 2 × 256 |
 | GatedDeltaNet num_v_heads × head_v_dim | 32 × 128 |
-| MoE routed experts × FFN | **184 × 512** |
+| MoE routed experts × FFN | **192 × 512** (184→192: 8×24, divisibility) |
 | MoE shared expert × FFN | 1 × 512 |
 | MoE topk | 8 |
-| MoE group routing | 8 groups × top-4 (4×23 = 92 candidates) |
+| MoE group routing | 8 groups × top-4 (4×24 = 96 candidates) |
 | MoE topk scaling factor | 2.5 |
 | MoE score function | sigmoid (모든 stage 통일) |
-| MoE balancing | Stage 1: `none` + expert bias / Stage 2+: `seq_aux_loss` + expert bias (1e-4 coeff) |
+| MoE balancing | **Stage 1+: `seq_aux_loss` + expert bias (1e-4 coeff)** — DSV3-strict (aux-loss-free bias + complementary seq_aux safety net). *(live run = seq_aux_loss; ground truth는 checkpoint `common.pt`)* |
 | Vocab (effective / padded) | 163,860 / **163,968** |
 | Tokenizer | `examples/alpha/tokenizer_v5/` (alpha 전용 BBPE) |
 | EOS / pre-training EOD | `<\|endoftext\|>` (id 0) — `<\|im_end\|>` (id 3)는 SFT 단계 chat turn 전용 |
-| Document boundary handling | `--reset-position-ids` + `--reset-attention-mask` + `--eod-mask-loss` 전부 ON |
+| Document boundary handling | `--reset-attention-mask` + `--eod-mask-loss` ON; `--reset-position-ids` **OFF** (alpha hybrid: Mamba가 packed_seq_params 미지원, attention은 RoPE 상대성으로 무영향 — stage1.yaml 주석 참조) |
 | RMSNorm | 표준 (γ=1 init, **1p 제거**) |
 | QK-LayerNorm | 활성 + WD `apply_wd_to_qk_layernorm` |
 | Optimizer | Muon (`dist_muon`) + QK-Clip (γ scaling 포함) |
@@ -45,7 +45,7 @@ M-M-M-*-M-M-M-*-M-M-M-*-M-M-M-*-M-M-M-*-M-M-M-*-
 |--------|------|-------------|
 | `M` | GatedDeltaNet | Linear attention with gated delta rule (Megatron `MambaLayer` 슬롯에 호스팅; O(n) 복잡도) |
 | `*` | Multi-Head Attention | Full attention layers (12.5% of total, GatedSoftmaxAttention with QK-norm + QK-Clip) |
-| `-` | MoE MLP | Mixture-of-Experts FFN (**184 routed experts + 1 shared, top-8, FFN 512**) |
+| `-` | MoE MLP | Mixture-of-Experts FFN (**192 routed experts + 1 shared, top-8, FFN 512**) |
 | `D` | Dense MLP | Standard SwiGLU FFN (현재 0 layer; 향후 DSV3-style 도입 시 재활성화 가능) |
 
 ### Layer Mapping (2:1)
@@ -57,7 +57,7 @@ M-M-M-*-M-M-M-*-M-M-M-*-M-M-M-*-M-M-M-*-M-M-M-*-
 | Constraint | Value | Reason |
 |------------|-------|--------|
 | TP (Tensor Parallel) | **1** | GatedDeltaNet (Megatron `MambaLayer` 슬롯) don't support TP > 1 |
-| EP (Expert Parallel) | 8 | **184 experts / 8 GPUs = 23 experts per GPU** |
+| EP (Expert Parallel) | 8 (학습) | **192 experts / 8 GPUs = 24 experts per GPU**. 변환/검증 시 EP는 GPU 수에서 유도(EP=#GPU); torch_dist가 학습 EP=8 → 임의 EP로 resharding |
 | Backend | Megatron-LM-251125 | Muon optimizer + DSV3 MoE routing flags (group-limited, topk-scaling, seq_aux_loss) native 지원 |
 
 ## Quick Commands
@@ -81,17 +81,34 @@ Each preset name resolves to `configs/<group>/<preset>.yaml`. YAML keys are Mega
 
 The launcher derives run-identity flags: `--save`, `--tensorboard-dir`, `--data-cache-path`, and (when not in smoke mode + `WANDB_API_KEY` 있음) `--wandb-exp-name`.
 
-### Checkpoint Conversion (MG → HF)
+### Evaluation Pipeline (unified — MG→HF 변환 → 검증 → 벤치마크)
+
+기존의 수동 3단계(변환 → `validate.sh` → `run_benchmarks.sh`)를 한 launcher로 통합.
+**모든 변환/검증 args는 체크포인트 `common.pt`(ground truth)에서 유도** → config drift(184/192,
+mamba-dim 등) 구조적 차단. EP는 런타임 GPU 수에서 유도(EP=#GPU; torch_dist resharding).
+
 ```bash
-cd toolkits/distributed_checkpoints_convertor
-bash scripts/alpha/run_8xH20.sh baseline_48L /path/to/mcore /path/to/hf true true bf16
-# Auto mode: use 'auto' as checkpoint path to convert latest
+cd examples/alpha
+# Stage 0 preflight → 1 convert → 1.5 verify(config.json↔common.pt + tokenizer) → 2 weight diff
+bash evaluate.sh outputs/alpha_baseline_48L_stage1_<TS> --gpus 4
+# 벤치마크까지: --benchmark --tasks standard
+# 변환 건너뛰고 재검증만: --skip-convert   /  검증 생략: --skip-validate
+# 특정 iter: --iter 10000  (기본 latest)
 ```
 
-### Validation
+개별 단계도 그대로 사용 가능:
 ```bash
-bash validate.sh /path/to/mg /path/to/hf baseline_48L
+# 변환만 (GPU 수 매개변수화; run_8xH20.sh/run_4xGPU.sh는 GPUS=8/4 shim)
+GPUS=4 bash ../../toolkits/distributed_checkpoints_convertor/scripts/alpha/run_convert.sh \
+  baseline_48L <ckpt_or_run_dir> auto true true bf16
+# 검증만 (모델 args는 checkpoint에서 자동 유도)
+bash validate.sh <mg_ckpt_iter_dir> <hfmodel_dir>
+# config 점검 (GPU 불필요)
+python tools/alpha_config.py emit-megatron-flags --from-checkpoint <ckpt>
+python tools/verify_pipeline.py preflight --from-checkpoint <ckpt> --gpus 4
 ```
+
+전체 v1→v2 검증 감사 + 발견·수정 내역: [`docs/V2_PIPELINE_VERIFICATION.md`](docs/V2_PIPELINE_VERIFICATION.md).
 
 ### SGLang Deployment (Inference)
 ```bash
@@ -123,12 +140,14 @@ configs/
 ├── training/stage2_2.yaml           # Stage 2-2 cosine (DSV3 routing: seq_aux_loss + sigmoid + bias)
 ├── training/stage2_3.yaml           # Stage 2-3 (4× LR, DSV3 routing)
 ├── training/smoke.yaml              # 2-iter, no-Muon smoke
-├── data/stage1_v5_korean_web.yaml   # ★ v5-tokenized Korean web (144GB, current Stage 1)
+├── data/stage1_v5_blend.yaml        # ★ v5 Stage 1 blend (DCLM+Korean+FW2HQ, ~466B)
+├── data/stage2_v5_blend.yaml        # ★ v5 Stage 2 blend (10 datasets, 1.686T, weight-less → CC-HQ 60%)
+├── data/stage2_v5_blend_cc40.yaml   # ★ same 9, CC-HQ capped 40% (compute_blend_weights.py; for small budgets)
 ├── data/kormo_1pct.yaml             # legacy: pre-tokenized with Qwen3 tokenizer (vocab 151,936)
 ├── data/kormo_50pct.yaml            # legacy: pre-tokenized with Qwen3 tokenizer (vocab 151,936)
 ├── data/kormo_code_balanced.yaml    # legacy
-├── data/stage2.yaml                 # legacy: Stage 2 9-dataset blend (Qwen3 tokenizer)
-├── data/stage2_2.yaml               # legacy: same blend (Qwen3 tokenizer)
+├── data/arxive/stage2.yaml          # legacy: Stage 2 9-dataset blend (Qwen3 tokenizer; v5 source-of-truth for stage2_v5_blend)
+├── data/arxive/stage2_2.yaml        # legacy: same blend (Qwen3 tokenizer)
 └── data/mock.yaml                   # --mock-data for smoke tests
 ```
 
@@ -151,14 +170,14 @@ kv-channels: 256                                            # head_dim (was 128,
 num-query-groups: 2                                         # GQA
 
 # MoE (Qwen3.5 expert dim, alpha-tuned count for ~15B)
-num-experts: 184                                            # 8-multiple, 23/GPU at EP=8 (was 128)
+num-experts: 192                                            # 8-multiple, 24/GPU at EP=8 (128→184→192)
 moe-router-topk: 8
 moe-ffn-hidden-size: 512                                    # was 768
 moe-shared-expert-intermediate-size: 512                    # was 768
 
 # DSV3 MoE routing (group-limited + topk scaling)
 moe-router-num-groups: 8
-moe-router-group-topk: 4                                    # 4×23=92 candidate experts
+moe-router-group-topk: 4                                    # 4×24=96 candidate experts
 moe-router-topk-scaling-factor: 2.5
 moe-aux-loss-coeff: 1.0e-4                                  # DSV3 (was 1e-3)
 
@@ -187,12 +206,16 @@ max-position-embeddings: 262144
 |------|---------|
 | `train.sh` | Single launcher (~210 lines): yaml_to_flags + multi-node detect + env exports + derived run paths + **smoke/mock auto-detect → wandb auto-disable** |
 | `pretrain_alpha.py` | Training entry point (Megatron pretrain() + alpha-specific monkey-patches) |
-| `validate.sh` | MG↔HF weight validation wrapper |
-| `validate_mg_hf_full.py` | Comprehensive weight validation |
-| `tools/alpha_config.py` | Config inspection (validate, generate HF config) — defaults updated to vocab 163,968 |
+| `evaluate.sh` | **통합 평가 오케스트레이터** (preflight → convert → verify → validate → opt-in benchmark). `--gpus N`/`--iter`/`--benchmark`/`--skip-*` |
+| `validate.sh` | MG↔HF weight validation wrapper — **모델 args를 checkpoint `common.pt`에서 유도** (nested-YAML 파싱·하드코딩 v1 제거) |
+| `validate_mg_hf_full.py` | Comprehensive weight validation. v2 MoE 대응: `router.expert_bias↔gate.e_score_correction_bias`, `shared_experts.gate_weight↔shared_expert_gate.weight` 비교, transient `local_tokens_per_expert` 제외 |
+| `tools/alpha_config.py` | Config inspection + **`load_config_from_checkpoint()`** + **`emit-megatron-flags`**(convert/validate 공용 단일 매핑) + `generate-hf-config`(DSV3 routing 키 포함). `--from-checkpoint` 지원 |
+| `tools/verify_pipeline.py` | 검증 게이트: `preflight` / `compare-config`(config.json↔common.pt) / `tokenizer-roundtrip` |
 | `calculate_parameters.py` | Parameter count tool — accepts flat YAML; reports 15.08B for current baseline |
+| `tools/compute_blend_weights.py` | Stage-2 blend weight 계산 — CC-HQ cap + 자연비율 재분배, epoch 표(over-epoch 경고), data-path/YAML emit. `--cap-cchq`/`--budget-t`/`--write` (§"Stage 2 v5 Re-tokenization") |
 | `tokenizer_v5/` | **Alpha 전용 v5 tokenizer** (5 files, 12.6MB; HF `PreTrainedTokenizerFast`, vocab 163,860) |
-| `hf_model/` | HuggingFace model implementation |
+| `hf_model/` | HuggingFace model implementation. `AlphaSparseMoeBlock`는 **DSV3 라우팅**(sigmoid + group-limited 8×4 + `e_score_correction_bias` + routed_scaling 2.5; `DeepseekV3TopkRouter` mirror) — 학습과 일치해야 벤치마크 유효. `configuration_alpha.py`에 `scoring_func/n_group/topk_group/routed_scaling_factor`, num_experts default=192. **`e_score_correction_bias`는 fp32 `nn.Parameter` + `_keep_in_fp32_modules_strict`** — buffer/bf16으로 되돌리지 말 것(MG fp32 정렬·라우팅 충실; Known Issues "fp32 router bias 다운캐스트" 참조) |
+| `../../toolkits/distributed_checkpoints_convertor/scripts/alpha/run_convert.sh` | **GPU-agnostic 변환기** (EP=#GPU, `num_experts%GPU` 검증, 모델 flags는 `emit-megatron-flags`에서). `run_8xH20.sh`/`run_4xGPU.sh`는 `GPUS=8`/`4` shim |
 | `sglang/deploy.sh` | SGLang deployment script (Option A/B, uses local backend) |
 | `sglang/convert_config_for_sglang.py` | Alpha→Qwen3-Next config converter (head_dim 256 / vocab 163,968 호환성 검증 필요) |
 | `sglang/sglang_alpha_model.py` | SGLang model adapter (mlp_only_layers support) |
@@ -210,11 +233,65 @@ max-position-embeddings: 262144
 | `Invalid characters in pattern` | Only use M, *, -, D |
 | `Attention ratio mismatch` | Count of `*` should match `hybrid_attention_ratio × num_layers` |
 | `MambaLayer has no attribute self_attention` | QK-Clip bug with hybrid models — fixed in `pretrain_alpha.py` via monkey-patch |
+| `Unsupported function referenced: get_int_dtype` (Triton JIT, 1st step) | Wrong package versions — pin **triton 3.3.0 / mamba-ssm 2.2.6.post3 / fla 0.4.1**; see `### Environment Issues` |
 
 ### Environment Issues
 ```bash
 bash scripts/validate_environment.sh  # Check CUDA, Flash Attn 3, TE version
 ```
+**Pinned package stack (required to run alpha forward/backward).** The GatedDeltaNet
+and TE-MoE-permute Triton kernels need **triton 3.3.0 / mamba-ssm 2.2.6.post3 /
+fla 0.4.1** (TE stays 2.9.0). Newer versions (triton 3.7, mamba-ssm 2.3.2, fla
+0.5.0) crash the 1st step with `Unsupported function referenced: get_int_dtype`.
+Canonical pins + rationale: `../../../setup_pai_megatron_env_with_deepep.sh` (repo
+parent dir) Steps 8/9/11/14b — mamba-ssm must be **built from git** (PyPI sdist
+lacks `csrc/`); sudo is passwordless on the analysis node.
+
+## Profiling & Throughput Optimization
+
+Full guide: [`docs/throughput_optimization.md`](docs/throughput_optimization.md).
+Profile on an idle H100×N node (not the live training run):
+
+```bash
+# Capture an nsys trace of a half-depth twin (analysis_24L) at EP=N.
+NSYS=1 bash train.sh analysis_24L profile mock \
+    --profile-ranks 0 --profile-step-start 6 --profile-step-end 7 --train-iters 9
+#   -> outputs/<run>/logs/nsys_<run>.nsys-rep   (open in Nsight Systems >= 2025.3)
+
+# Quantify what's optimizable (sweepline: idle / exposed-comm / launch-bound tail).
+python3 tools/analyze_nsys_trace.py outputs/<run>/logs/nsys_<run>.nsys-rep
+```
+
+Artifacts: model preset `configs/model/analysis_24L.yaml`, training preset
+`configs/training/profile.yaml`, the `NSYS=1` wrapper in `train.sh`, and
+`tools/analyze_nsys_trace.py`.
+
+**Headline findings (A/B validated 2026-06-09, analysis_24L EP=4):**
+- **Lever 1 (free ~3%):** `CUDA_DEVICE_MAX_CONNECTIONS=1→8` gives **+2.7%**
+  throughput (bit-identical; safe because alpha is TP=1/CP=1). `train.sh` now
+  honors the env override (default still 1).
+- **Lever 2 (A/B VALIDATED 2026-06-10, +15.2%):** `--recompute-modules layernorm`
+  (drop `moe`) = 133.9→154.3 TFLOP/s at +9.4 GB max-alloc on analysis_24L. Prod 48L
+  ≈ +19 GB/rank — verify live-run memory headroom, then adopt at checkpoint resume.
+- **Tested & rejected (2026-06-10): layer-scope CUDA graphs** (GB200 DSV3 recipe,
+  `--cuda-graph-impl transformer_engine`) — moe scopes conflict with moe recompute
+  (hard error) and OOM without it; attn scope crashes alpha QK-Clip (host-side
+  max-logit stash never runs under graph replay); mamba scope captures fine but
+  nets **−4.0%**. See `docs/throughput_optimization.md` § CUDA-graph A/B.
+- **CRITICAL methodology note:** the analysis model's GBS (96) vs prod (1536)
+  inflates **per-step** costs ~8×. The **Muon optimizer looked like the top lever
+  (~12%/44%-idle here) but is GBS-invariant → ~1.6% on prod** (NVIDIA: opt = 1–3%
+  of a real step) — **do NOT prioritize it**. Per-token levers (comm, GEMM/fp8,
+  recompute) transfer by fraction; per-step levers (optimizer) do not.
+- **Tested & rejected:** `moe-shared-expert-overlap` even at conn=8 nets ~0 — it
+  *does* hide the A2A (SendRecv 76%→58% exposed) but per-layer cross-stream
+  barriers eat the gain. The ~20% "exposed" EP all-to-all is mostly **structural**
+  (critical-path dispatch→GEMM→combine), not a cheap overlap miss. (Same root cause
+  makes DeepEP a net loss on single-node NVLink — it's a multi-node tool.)
+
+See the guide for the full A/B table and the **mid-training application protocol**
+(scheduling-only changes apply at checkpoint resume; dynamics-changing ones wait
+for a stage boundary).
 
 ## Training Plan (Long-term)
 
@@ -296,6 +373,94 @@ bash train.sh baseline_48L pretrain_auxfree stage1_v5_korean_web
 
 ## Known Issues & Fixes
 
+### MG↔HF weight 검증이 `expert_bias` 1개에서 지속 실패 — fp32 router bias 다운캐스트 (2026-06-15 ✅)
+
+- **증상**: `evaluate.sh` Stage 2 (`validate_mg_hf_full.py`)가 `✗ WEIGHT MISMATCH DETECTED`로 exit 1. 요약은 **`14180/14181 matched` — 정확히 1개 비교만 실패**. coverage 갭(unchecked 24 / phantom 48)은 전부 filtered=0이라 실패 원인이 아니고, 실패한 1개는 layer 0의 `router.expert_bias ↔ gate.e_score_correction_bias`. iter가 진행될수록 **악화**(bias가 단조 누적).
+- **근본 원인 (컨버터 아님, 검증 로드의 dtype 평탄화)**:
+  - Megatron은 `router.expert_bias`를 **의도적으로 fp32로 유지**(`core/.../moe/router.py::_maintain_float32_expert_bias`, "to avoid routing errors when updating the expert_bias"). 컨버터는 저장 dtype을 **MG 소스 텐서에서 물려받으므로**(`m2h_synchronizer.py`의 `_local_params`가 소스 보관) → **이미 fp32로 정확히 저장**됨. 나머지 가중치는 bf16. (safetensors `stored dtype` 직접 확인: bias=`float32`, weights=`bfloat16`.)
+  - 버그는 검증기의 HF **로드**에 있었음: `load_hf_model()`이 `from_pretrained(torch_dtype=torch.bfloat16)`로 **모든 텐서를 로드 시점에 bf16으로 평탄화** → 디스크의 fp32 bias가 bf16으로 다운캐스트.
+  - layer 0 bias 크기 ~4.5는 bf16 binade [4,8)에 속해 ulp/2 = **0.0156 > 0.01**(고정 절대 임계). → MG(fp32) vs HF(로드시 bf16)에서 max_diff ≈ 0.0156으로 1개 실패. 다른 23개 레이어는 bias ≤ 1.82(binade [1,2), 오차 0.0039)라 통과. 디스크 artifact엔 없는 **유령 오차**.
+- **왜 expert_bias만**: bf16 ulp/2가 0.01을 넘으려면 값이 ≥ 4.0이어야 하는데, fp32-on-MG이면서 그만큼 큰 텐서는 aux-loss-free `expert_bias`(누적되어 layer 0에서 ~4.5)뿐. gate.weight 등은 bf16-vs-bf16 정확 복사라 max_diff 0.
+- **수정 방향 (충실 변환 + 엄격 검증; 오차 완화 거부)**: bias를 **end-to-end fp32**로 유지해서 fp32-vs-fp32 정확 비교가 되게 함. DSV3 공식 HF와 동일한 형태.
+  - `hf_model/modeling_alpha.py`: `e_score_correction_bias`를 `register_buffer` → **fp32 `nn.Parameter(requires_grad=False)`**, `AlphaPreTrainedModel`에 **`_keep_in_fp32_modules_strict = ["e_score_correction_bias"]`** 추가.
+  - `validate_mg_hf_full.py`: 허용오차를 **원래의 엄격한 기준 그대로** 유지(`max_diff < threshold and cos_sim > 0.999`). (변경 없음 — 완화 안 함.)
+  - 컨버터: **변경 없음** (이미 fp32 저장). `gate.weight`도 bf16 그대로 — MG가 그것만 fp32로 유지하므로 expert_bias만 fp32가 정확한 "MG 동일".
+- **놓치기 쉬운 함정 2개**:
+  1. **`_keep_in_fp32_modules`(strict 아님)는 fp16에서만 발동** — bf16 로드는 안 지킴. bf16까지 커버하려면 **`_keep_in_fp32_modules_strict`** 필요 (transformers 4.57 `modeling_utils` 주석/분기 확인).
+  2. **이 플래그는 `named_parameters()`만 보호, 버퍼는 미보호** (`_load_state_dict_into_meta_model`이 params만 순회). 그래서 buffer→`nn.Parameter` 전환이 필수. toy `PreTrainedModel`로 직접 검증: 동일 이름이라도 **Parameter는 fp32 유지 / Buffer는 bf16 다운캐스트**.
+- **회귀 가드** (`tests/test_alpha_pipeline_config.py`, +3 → 12개):
+  - `test_modeling_alpha_router_bias_is_fp32_parameter` — Parameter 형태 + strict 플래그 등록 확인.
+  - `test_keep_in_fp32_modules_strict_protects_param_not_buffer` — transformers의 param-vs-buffer 동작을 toy 모델로 잠금(버전업으로 깨지면 멀티시간 eval 전에 차단).
+  - `test_compare_tensors_is_strict` — fp32-vs-fp32 정확 통과 / +0.5 drift 실패 / ~4.5 fp32의 bf16 다운캐스트는 **엄격 기준에서 실패**(= bias를 fp32로 두는 이유).
+- **적용**: `bash evaluate.sh <run> --gpus 4` 재실행 시 재변환이 새 `modeling_alpha.py`를 HF 디렉토리로 복사(`run_convert.sh:190 cp .../hf_model/*.py`)하고 Stage 2가 14181/14181 통과. **기존 HF 디렉토리는 bias가 이미 fp32 저장**이므로 재변환 없이 `cp examples/alpha/hf_model/*.py <hf_dir>/` 후 `validate.sh`만 재실행해도 통과(로드되는 modeling 클래스만 갱신).
+- **부수 효과 (긍정)**: 추론(`forward_sanity.py`·lm-eval·HF serving)도 이제 bias를 fp32로 로드 → 학습-시점 라우팅과 더 충실하게 일치(selection은 원래 fp32 계산이라 bias만 bf16이면 borderline expert가 미세하게 흔들렸음).
+
+### HF `AlphaRMSNorm`이 zero-centered(1p) → 모든 벤치마크 random (silent, 2026-05-26 ✅)
+
+- **증상**: v2 체크포인트를 `evaluate.sh`로 끝까지 돌리면 **모든 게이트(weight 검증·config 대조·tokenizer)는 통과**하는데 Stage 3 벤치마크만 random (ARC-easy 정확히 25%).
+- **근본 원인**: `hf_model/modeling_alpha.py::AlphaRMSNorm`가 Qwen3-Next에서 물려받은 **zero-centered `x_norm * (1 + γ)`** 를 적용. 그러나 Alpha v2는 Megatron을 **`apply-layernorm-1p` OFF(표준 `x_norm * γ`, γ≈1)** 로 학습 (checkpoint `common.pt`: `apply_layernorm_1p=False`, 저장 γ mean≈0.69~1.5). → 모든 norm(input/post/q/k/final, 24레이어)이 **~1.7~2.5× 과증폭** → 잔차 스트림 누적 왜곡 → near-uniform logit (perplexity≈vocab). NaN 아님(scale 오류). 같은 파일 `AlphaRMSNormGated`는 이미 표준(`*γ`)이라 GDN norm은 정상이었음 → 두 norm 클래스가 불일치했던 것.
+- **수정**: `AlphaRMSNorm`를 표준으로 — forward `output * self.weight.float()` (1+ 제거), init `torch.ones`. `AlphaRMSNormGated`와 일관.
+- **실측 검증** (iter_0010000, 단일 모델 로드 monkeypatch): `(1+γ)` ppl=295,440 / greedy `'…andNV and) From Form'` → `γ` ppl=8.84 / greedy `'The capital of France is Paris.'`. ARC-easy 0-shot(100): **25% → acc 0.73 / acc_norm 0.76**.
+- **왜 weight 검증이 못 잡았나 (교훈)**: `validate_mg_hf_full.py`는 **weight tensor만** 비교하고 forward를 안 한다. converter가 γ를 그대로 복사 → 검증은 MG γ==HF weight 통과. 차이는 forward의 `1+` 에서만 발생 → 사각지대. 게다가 attention 비교는 converter의 reshape를 복제(`Reference: m2h_synchronizer.py`)해서 해석 오류를 양쪽이 공유.
+- **회귀 가드**: ① `examples/alpha/forward_sanity.py` — 변환 HF 모델 perplexity 게이트(임계 100; random≈vocab). ② `evaluate.sh` **Stage 2.5**로 편입(weight 검증 후·벤치마크 전). ③ `tests/test_alpha_pipeline_config.py::test_modeling_alpha_rmsnorm_is_standard_not_1p`. **기존 변환 산출물은 재변환 불필요** — weight는 정상이므로 `hf_model/modeling_alpha.py`만 HF 디렉토리에 재복사하면 됨.
+- **부수**: `toolkits/distributed_checkpoints_convertor/impl/alpha/m2h_synchronizer.py:246` bias 경로 `linear_qkv`→`linear_qgkv` 오타 정리(dormant: `attention_bias=False`). bias 활성화 시 q bias에 weight-path의 gate-interleave transpose 필요(주석 추가).
+
+### Stage 1 재개 (10k) + 처리량 최적화 — `stage1_resume.yaml` (2026-05-26)
+
+컴퓨팅 세션 장애로 Stage 1 run(`outputs/alpha_baseline_48L_stage1_20260512_170157`)이 중단.
+실제로는 iter ~16k까지 갔으나 디스크엔 **iter 10000 체크포인트만** 존재(원인: `save-interval: 10000`).
+iter 10k에서 재개하는 신규 프리셋 `configs/training/stage1_resume.yaml` 추가
+(`stage1.yaml`은 from-scratch 레시피로 보존). **실제 적용된 변경은 4개**(아래 표).
+처리량 최적화로 시도했던 `moe-shared-expert-overlap`은 throughput 회귀를 일으켜 되돌렸고,
+`micro-batch-size 3→6`·`recompute += core_attn`은 계획만 하고 커밋되지 않았다(아래 "⚠️ 처리량 회귀" 참조).
+
+```bash
+bash train.sh baseline_48L stage1_resume stage1_v5_blend
+```
+
+| 변경 | 값 | 이유 |
+|---|---|---|
+| `load` + `no-load-optim: true` | 10k ckpt | 재개. ckpt에 옵티마이저 상태 없음(no-save-optim)이라 no-load-optim 필수 |
+| **`finetune` 미설정** | — | consumed_train_samples(15.36M) 보존 → **데이터 위치** 연속. (Stage *전환*에만 finetune) |
+| **LR 스케줄 재구성** | warmup 200it / decay 94.5M samples | **no-save-optim ckpt엔 스케줄러 상태가 없어 재개 시 scheduler num_steps가 0으로 리셋**(consumed_samples로 재시드하는 코드 없음 — `checkpointing.py:848,1708`). stage1.yaml 스케줄 그대로 쓰면 풀 1907it warmup + cooldown 미발동. 그래서 *남은 구간*(61,526it=94.5M samples) 기준으로 짧은 re-warmup(200it)+WSD cooldown(6,358it) 재정의 — stage2_2.yaml 패턴과 동일 |
+| **LR 상향** 2e-4 → **2.5e-4** (min-lr 2e-5 → 2.5e-5) | peak 2.5e-4 / min 2.5e-5 | **√k 배치 스케일링 ratio로 선정.** 참조점 GBS=256 → lr=1e-4 (Stage 2-2 레시피). 현재 GBS=1536 → 배율 **k = 1536/256 = 6** → 제곱근 스케일 lr = **√6 × 1e-4 ≈ 2.449e-4**, 이를 깔끔히 **2.5e-4**로 반올림(+2%). 이전 2e-4는 이 ratio를 과소 적용한 값. min-lr도 동일 배율로 올려 **WSD 10:1 감쇠 비율** 보존. **k는 *글로벌* 배치 비율**(GBS 불변=1536)이지 micro-batch-size(6)와 무관 — 숫자 우연 일치 주의. 원본 run 대비 +25% 점프는 200it re-warmup이 0→2.5e-4 램프로 흡수 |
+| `save-interval`·`eval-interval` 10000→5000 | — | 이번 손실의 직접 원인. weights-only 저장이라 빈번 저장 부담 적음 |
+
+#### ⚠️ 처리량 회귀 (2026-05-26) — `moe-shared-expert-overlap`이 범인
+
+stage1_resume이 throughput ~50으로 stage1 대비 급락. 원인은 시도했던 `moe-shared-expert-overlap: true`
+한 줄이었음(되돌림). 이 플래그는 shared expert를 **별도 CUDA 스트림**에 올려
+(`shared_experts.py:120,160,275`) routed-expert 디스패치 A2A와 겹치려 하지만, `train.sh:71`이
+`CUDA_DEVICE_MAX_CONNECTIONS=1`을 하드코딩 → **단일 하드웨어 큐**에서 두 스트림이 **직렬화**됨:
+겹침 이득은 0인데 cross-stream 이벤트 배리어 비용만 **24개 MoE 레이어 × 매 스텝** 누적.
+(YAML에 적혀 있던 "CUDA_DEVICE_MAX_CONNECTIONS=1 유지 → low risk"는 정반대였다.)
+- **`=1`이 강제되는 건 TP>1 또는 CP>1일 때뿐**(`arguments.py:1005,1029`). alpha는 TP=1/CP=1이라
+  `=1`은 표준 레시피에서 복사된 관습이지 정렬상 필요조건이 아님. 이 플래그를 *실제로* 쓰려면
+  `CUDA_DEVICE_MAX_CONNECTIONS`를 8~32로 올리고 mock tokens/sec A/B로 순이득을 확인해야 함.
+- **`micro-batch-size 3→6` / `recompute += core_attn`은 끝내 커밋되지 않았다.** stage1_resume의
+  실제 값은 여전히 MBS=3, `recompute-modules: "layernorm moe"`(= stage1.yaml과 동일). 둘이 함께
+  계획됐으나(core_attn 재계산으로 MBS↑의 메모리 재원 확보) MBS가 3에 머물러 둘 다 무효. 향후
+  실험으로 보류 — MBS=6 적용 시 OOM 점검 필요(OOM이면 4; num_microbatches=192/MBS).
+
+**비채택(단일 노드 EP=8 + dist_muon 제약)**: `tp-comm-overlap`/`overlap-p2p-comm`(TP=1·PP=1 무효),
+`use-distributed-optimizer`/`overlap-param-gather`(Muon 비호환), DeepEP(단일 노드 alltoall이 ~7% 빠름, 기측정),
+`overlap-moe-expert-parallel-comm`·`moe-shared-expert-overlap`(둘 다 `CUDA_DEVICE_MAX_CONNECTIONS>1` 필요 — **다중 노드 전환 시 재검토**).
+**검증**: ① mock 30iter 스모크(throughput이 stage1 수준으로 복귀 확인) → ② 실데이터 짧게(iter 10000 시작·consumed_samples 연속·loss 연속 확인).
+
+### v2 평가 파이프라인 통합 + v1→v2 검증 (2026-05-26 ✅)
+
+iter_0010000(첫 v2 체크포인트) 평가를 위해 수동 3단계(MG→HF 변환 → `validate.sh` → `run_benchmarks.sh`)를 `evaluate.sh` 하나로 통합. **근본 원인**: 같은 모델 config가 3곳(학습 YAML / 변환 `baseline_48L.sh` / `validate.sh` 하드코딩)에 중복되어 drift. 해결: **모든 변환/검증 args를 체크포인트 `common.pt`(ground truth)에서 유도**(`tools/alpha_config.py::load_config_from_checkpoint` + `emit-megatron-flags`), 병렬화(EP)만 런타임 GPU 수에서 유도. 전체 감사는 [`docs/V2_PIPELINE_VERIFICATION.md`](docs/V2_PIPELINE_VERIFICATION.md).
+
+**파이프라인이 잡아낸 3개의 실제 버그** ("crash > silent corruption" — 올바른 플래그를 켜자마자 갭에서 멈춤):
+
+1. **Config drift (stale 변환 경로)**: `scripts/alpha/configs/baseline_48L.sh`가 완전 v1(128 experts, head 32, kv 128, vocab 151936, pattern 49자, softmax)이고 `validate.sh`는 nested-YAML 파싱(flat v2에선 빈 값)이었음. 또 변환기가 **mamba 차원을 아예 안 넘겨** code default 64 ≠ 학습 128. → checkpoint 유도로 일괄 해결. **184 vs 192 / aux-free vs seq_aux_loss drift**도 여기 포함(아래 별도 항목).
+
+2. **HF MoE 라우팅 부정합 (silent benchmark 오염)**: `hf_model/modeling_alpha.py::AlphaSparseMoeBlock`이 **plain softmax + 전역 top-k + no bias**로 라우팅 — 학습은 DSV3(sigmoid + 8×4 group-limited + aux-loss-free `expert_bias` + routed_scaling 2.5). 변환이 처음으로 MoE 단계까지 도달하자 `gate.e_score_correction_bias` 부재로 크래시 → 표면화. **수정**: `DeepseekV3TopkRouter`와 동일하게 재작성 + `gate.e_score_correction_bias` persistent buffer; `configuration_alpha.py`에 `scoring_func/n_group/topk_group/routed_scaling_factor`; `generate_hf_config`가 해당 키 emit; `verify_pipeline.py` Stage 1.5가 대조. (없었으면 모든 벤치마크 수치가 wrong-routing으로 무효)
+
+3. **검증 coverage 갭**: 변환은 14133/14133 weight 일치로 성공했으나 `validate.sh`가 72 MG weight 미비교로 exit 1. `validate_mg_hf_full.py`(변환기와 독립 매핑)에 `router.expert_bias↔gate.e_score_correction_bias`, `shared_experts.gate_weight↔shared_expert_gate.weight` 비교 추가 + transient `router.local_tokens_per_expert` 제외 → exit 0.
+
+**회귀 가드**: `tests/test_alpha_pipeline_config.py`(9개; config↔checkpoint 일치, HF config v2 필드, emit 누락, DSV3 라우팅 동작, stale 경로 grep). `configuration_alpha.py` 및 `test_alpha_tokenizer_eod.py`의 stale `num_experts=184`도 192로 정정(테스트 자체가 drift 피해자였음).
+
 ### EOS designation 통합: chat-end → pre-training EOD 분리 (2026-05-12 preflight ✅)
 - **문제**: alpha v5 tokenizer가 처음에 `eos_token = <|im_end|>` (id 3)으로 설정되어 있었음. 이는 **chat-turn-end marker를 pre-training EOD로도 겸용**하는 것 — frontier convention (Qwen3 / Llama 3 / DSV3가 모두 두 의미를 분리)과 어긋남.
 - **수정 (3개 파일 모두)**: `tokenizer_v5/{tokenizer_config.json, special_tokens_map.json, training_config.yaml}` 모두 `eos_token = <|endoftext|>` (id 0)으로 통일.
@@ -338,7 +503,7 @@ bash train.sh baseline_48L pretrain_auxfree stage1_v5_korean_web
 | `max_position_embeddings` | 32768 | **262144** | `baseline_48L.yaml::max-position-embeddings` |
 | `rope_theta` | 10000.0 | **10000000.0** | frontier 10M (alpha RoPE) |
 | `num_experts_per_tok` | 10 | **8** | `baseline_48L.yaml::moe-router-topk` |
-| `num_experts` | 512 | **184** | `baseline_48L.yaml::num-experts` |
+| `num_experts` | 512 | **192** | `baseline_48L.yaml::num-experts` (2026-05-26: 184→192 정정; 위 §"v2 평가 파이프라인" 참조) |
 | `router_aux_loss_coef` | 0.001 | **1.0e-4** | `baseline_48L.yaml::moe-aux-loss-coeff` (DSV3) |
 
 - **영향 (왜 학습 안전, 배포 위험)**: Stage 1 학습은 Megatron-native config + YAML로 굴러가서 AlphaConfig() 자체를 호출 안 함 → 학습 자체엔 무관. **MG→HF 변환 후** HF/SGLang/vLLM이 `AlphaConfig.from_pretrained` 시 config.json에 없는 키 (예: 옛 checkpoint json) 가 있으면 stale default로 fall back → embedding-table mismatch / wrong topk shape / 잘못된 RoPE 주기 같은 silent corruption.
@@ -561,6 +726,180 @@ python toolkits/pretrain_data_preprocessing/remap_eod.py \
 ```
 
 회귀 테스트 `tests/test_alpha_tokenizer_eod.py` (9개) 는 CI에 통합하면 EOD designation drift / Qwen3 default 회귀 / preprocess 패스 회귀를 영구적으로 차단.
+
+## Stage 2 v5 Re-tokenization (2026-06-26, 완료 ✅)
+
+레거시 Stage-2 blend(`configs/data/arxive/stage2.yaml`의 9-dataset, 옛 Qwen3 vocab
+151,936)를 alpha v5 tokenizer(163,968)로 **전부 재토크나이징**. Stage 1과 동일한
+fast-path 파이프라인을 재사용했고, 결과는 **1.686T tokens / 10 datasets**
+(레거시 9개 + FineWeb2-HQ 2nd half — stage1/stage2 complementary-halves 설계상 추가).
+
+### 결과 & blend config
+
+산출물: `/home/work/Datasets/LL_preprocessed/v5/stage2/<name>/data_text_document.{bin,idx}`.
+Blend: `configs/data/stage2_v5_blend.yaml` (weight-less → Megatron이 `.idx` 크기 비례
+auto-mix; 실측 토큰 비율은 YAML 주석에 기록).
+
+| 데이터셋 | tokens | 비중 | 출처 |
+|---|---|---|---|
+| nemotron_cc_hq/actual | 530.2B | 31.6% | MinIO 복원 |
+| nemotron_cc_hq/qa_pairs | 475.7B | 28.3% | MinIO 복원 → decompress |
+| code/question_answering | 241.1B | 14.4% | 로컬 jsonl |
+| math | 205.0B | 12.2% | 로컬 (Nemotron-CC-Math-v1) |
+| code/code_review | 77.1B | 4.6% | 로컬 |
+| code/rewriting | 77.2B | 4.6% | 로컬 |
+| code/transpilation | 29.3B | 1.7% | 로컬 |
+| code/student_teacher | 25.8B | 1.5% | 로컬 |
+| korean_web | 19.0B | 1.1% | 재사용(remap 3→0) |
+| fineweb2hq | 5.7B | 0.3% | 재사용 2nd half(remap 3→0) |
+| **합계** | **1.686T** | CC-HQ 59.7% / Code 26.7% / Math 12.2% / Korean 1.1% / FineWeb 0.3% | |
+
+학습 시작 (**채택된 기본 방식** — 자연 blend + budget 제한):
+```bash
+bash train.sh baseline_48L <stage2_training_preset> stage2_v5_blend --train-samples 170898438
+```
+(training preset은 `stage2_2`/`stage2_3` 등 별도 선택 — 이 데이터 작업 범위 밖.)
+
+**학습량(token budget) 제어**: 코퍼스 1.680T 전부 돌릴 필요 없이 `--train-samples`로
+원하는 토큰만 학습. seq_length 4096 → `train_samples = tokens / 4096` (0.5T→122.07M,
+0.6T→146.48M, **0.7T→170,898,438**). **iter 직접 지정보다 `--train-samples` 권장** —
+step-wise GBS 스케줄에서 iter당 작업량이 달라져 "iter=토큰"이 깨지므로(GBS-invariant).
+weight-less 자연 blend @ 0.7T는 **모든 소스 0.42 epoch**(반복 0, 코퍼스가 budget의
+2.4배) → CC-HQ 60%/Code 27%/Math 12%/Korean 1% 비율 그대로 (CC-HQ 419B / Code 188B
+/ Math 85B / Korean 7.9B). 이 비율이 적절하면 reweighting 불필요.
+
+### (옵션) Blend 비율 조정 — CC-HQ down-weight
+
+작은 budget에서 curated(math/code/korean) 비중을 자연비율 이상으로 키우고 싶을 때만.
+data-path 각 경로 앞에 명시적 weight를 붙이면 크기와 무관하게 샘플링 비율 지정 가능
+(Megatron normalize; **런타임 검증으로 CC-HQ 40% 반영 확인됨** — weights honored).
+
+**도구**: `tools/compute_blend_weights.py` — CC-HQ를 목표치로 cap하고 남는 몫을
+math/code/korean의 **자연 상대비율대로 재분배**(세 카테고리 내부 믹스 유지 + 동일
+epoch). 토큰 수는 `bin_bytes/4`로 즉시 산출(GPU 불필요).
+```bash
+python tools/compute_blend_weights.py --cap-cchq 40 --budget-t 0.6 \
+  --write configs/data/stage2_v5_blend_cc40.yaml
+```
+산출물 예 `configs/data/stage2_v5_blend_cc40.yaml` (옵션, CC-HQ 40% cap, 0.6T 기준):
+
+| 카테고리 | share | tokens@0.6T | epoch |
+|---|---|---|---|
+| CC-HQ | 40.0% | 240.0B | 0.24 |
+| Code | 40.1% | 240.4B | 0.53 |
+| Math | 18.2% | 109.4B | 0.53 |
+| Korean | 1.7% | 10.2B | 0.53 |
+
+`★ 핵심 트레이드오프 — over-epoch`: 명시적 weight는 크기와 sampling을 분리하므로,
+**작은 데이터셋을 자연 share 이상으로 키우면 epoch>1(반복)** 됨. "CC-HQ cap +
+비례 재분배" 방식은 어느 카테고리도 자연 share를 *초과*하지 않아 0.6T에서 셋 다
+0.53 epoch(<1)로 안전. 반대로 flat 비율(예: Korean 5% 고정)은 Korean(19B뿐)을
+1.5~2.2 epoch로 반복시킴 — `compute_blend_weights.py`의 epoch 표로 항상 확인할 것.
+학습: `bash train.sh baseline_48L <preset> stage2_v5_blend_cc40`.
+
+### Tooling (전부 `toolkits/pretrain_data_preprocessing/`)
+
+레거시 `preprocess_kormo_*.sh`/`preprocess_nemotron_*.sh`는 **재사용 불가**(stale:
+`--patch-tokenizer-type Qwen2Tokenizer`가 fast-only v5에서 크래시, 느린 per-doc 경로,
+옛 250624 backend). 대신 다음을 신규 작성/확장:
+
+| 파일 | 역할 |
+|---|---|
+| `run_stage2_v5.sh` | 정규 레시피. sub-targets: `restore` / `local` / `cchq` / `all` / `<dataset>` |
+| `preprocess_stage2_v5.sh` | 범용 multi-shard FAST 드라이버. 파일 round-robin → P개 `fast_tokenize_v5.py` 병렬 → `merge_indices.py --dtype int32`. 기본 `PROCS=12` ×8 rayon ≈ 110-core cgroup의 96. `AUTO_CLEAN_PARTS=1`로 merge 검증 후 parts 자동 삭제 |
+| `fast_tokenize_v5.py` | `--input-list-file` 추가(멀티 jsonl 파일 → 1 part). parity-preserving |
+| `minio_restore.py` | boto3 다운로더(`preprocess_data_megatron.py`엔 없던 restore). `/home/work/Datasets/LL_datasets/minio_backup.py`를 import해 creds + `_patch_botocore_time` 재사용. **MinIO 서버 clock ~9h skew → time-patch 필수**(없으면 SignatureDoesNotMatch). resumable(size-match skip + `.part` atomic rename) |
+| `tests/preflight_stage2/run_phase_b.py` | Stage-1 Phase B 적응판. **B4가 ~100% doc-end=id 0을 assert**(Stage 1은 pre-injection이라 0을 기대 — 정반대). per-dataset try/except로 non-halting |
+
+### 핵심 발견 (재현 주의)
+
+1. **재사용 v5 데이터는 EOD가 id 3.** `korean_web`·`fineweb2hq`는 2026-05-12 designation
+   수정 *전*(eos=`<|im_end|>` id 3)에 토크나이즈돼 doc 끝이 id 3. Stage 1 데이터는
+   remap됐지만 이 둘은 안 됨. Phase B가 즉시 검출 → **둘 다 `remap_eod.py --old-eod 3
+   --new-eod 0`로 수정 완료**(dry-run이 200k doc-end 전부 id 3 보유를 pre-verify; post-verify
+   200k 전부 id 0 + first/last 100 확인). 신규 토크나이즈 데이터(`--append-eod`)는 id 0
+   직접 부여 → remap 불필요(Stage 1과 달라진 점). **교훈**: 다른 stage/session에서
+   토크나이즈된 v5 `.bin`을 blend에 넣기 전 반드시 EOD(id 0 vs 3)를 Phase B로 확인할 것.
+
+2. **smoke test로는 이 blend를 검증할 수 없음.** `configs/{model,training}/smoke.yaml`은
+   toy preset이고 251125 backend와 **기존 config drift**가 있음: ① GBS=1이 multi-GPU에서
+   `÷ data_parallel_size` 안 나눠짐, ② `moe-router-topk:1`이 `--moe-router-pre-softmax`
+   요구. 둘 다 **dataset 로드 *전* model-build에서 크래시**라 blend와 무관. 데이터 정합성은
+   `BlendedMegatronDataset`를 직접 빌드해 검증함(CPU-only):
+   - `torch.distributed.init_process_group("gloo", rank=0, world_size=1)` 필요
+   - tokenizer stub에 `.eod`(=0) + `.unique_identifiers` property 필요(후자는 cache-key
+     JSON 직렬화용)
+   - 검출 항목: blend auto-weight(= 실측 비율 일치), 샘플 token range <163968,
+     EOD 기반 `reset-position-ids`/`eod-mask-loss` 작동(maxpos<4095, loss_mask cov<1.0)
+   - 결과: 9-source 빌드 + 샘플 조립 OK. 실제 학습은 `baseline_48L`이라 smoke drift 무영향.
+
+### 디스크
+
+검증 완료 후 회수: CC-HQ raw `.jsonl`(actual 2.5T + qa_pairs 2.3T), 모든 `_parts`(~2.4T),
+qa_pairs `.jsonl.zstd`(814G) — **~8TB**. CC-HQ는 MinIO에서 `run_stage2_v5.sh restore`로
+재복원 가능(~3h). **옛 Qwen3 `/home/work/Datasets/LL_preprocessed/mmap/`(8.4T)는
+다른 사용자 소유 — 삭제 금지.** 로컬 raw math/code는 MinIO 백업이 없어 보존.
+
+## Best-fit Packing — 문서 truncation 최소화 (2026-06-30, 구현 ✅)
+
+논문 **"Fewer Truncations Improve Language Modeling"** (arXiv 2404.10830, ICML 2024)의
+**Best-fit Packing (BFP)** 를 offline 전처리로 구현. Megatron-LM은 이 기능을 제공하지 않음
+(기본 `GPTDataset`은 concat-and-chunk로 문서를 seq_length 경계에서 무차별 절단).
+
+### 문제 & 해법
+- **문제**: 학습 시 `GPTDataset`이 모든 문서를 이어붙여 4096씩 자름 → 경계에 걸친 문서가
+  매 sample마다 잘림. (alpha의 `--reset-attention-mask`는 *한 sequence 안*의 cross-doc
+  attention만 막을 뿐 절단 자체는 못 막음 — BFP와 **직교/상보**.)
+- **해법**: 문서 길이 배열만 읽어 **Best-Fit-Decreasing**(segment tree, O(N log L))로 문서를
+  4096 bin에 통째로 packing → 각 bin을 EOD(id 0)로 4096에 padding → **bin 1개 = .idx 문서
+  1개**로 재출력. 학습의 concat-and-chunk가 정확히 bin 경계에서 잘려 문서가 안 잘림
+  (4096 초과 문서만 불가피하게 분할 — 논문도 동일).
+
+### 사용
+```bash
+# stats만 (truncation 감소/fill ratio 확인, 쓰기 없음)
+bash toolkits/pretrain_data_preprocessing/run_stage2_v5.sh pack-dry
+# 전체 10개 데이터셋 packing → /home/work/Datasets/LL_preprocessed/v5/stage2_packed/
+bash toolkits/pretrain_data_preprocessing/run_stage2_v5.sh pack
+# 1개만: bash ... pack code/transpilation   (또는 직접 bestfit_pack.py --input … --output … --dry-run)
+# 학습: data preset을 packed blend으로
+bash train.sh baseline_48L <preset> stage2_v5_blend_packed --train-samples <N>
+```
+
+### 실측 결과 (검증됨)
+| 데이터셋 | fill ratio | truncation(BFP) | baseline doc-splits | 감소 |
+|---|---|---|---|---|
+| fineweb2hq (web) | 99.95% (pad 0.047%) | 380,048 (긴 문서 분할) | 1,395,352 | **−72.8%** |
+| code/transpilation | 99.01% (pad 0.99%) | 0 (4096 초과 문서 없음) | 7,139,834 | **−100%** |
+
+**Loader differential** (실제 `GPTDataset` 경로, fineweb2hq 3000 samples,
+`tests/preflight_stage2/run_pack_loader_check.py`): **bad-truncation
+(whole docs + 잘린 small doc) 82.0% → 0.0%**. ends-on-doc-boundary 0.03% → 72.6%
+(나머지 27.4%는 4096 초과 문서의 *순수 단일-문서 chunk* — fragmentation 아님).
+
+### 핵심 설계 (정합성, helpers.cpp/gpt_dataset.py 소스 대조 검증)
+- **bin capacity = seq_length = 4096 (L+1 아님).** Megatron이 sample당 4097 토큰을 읽어
+  "+1"을 스스로 공급(공유 경계). 4097로 packing하면 정렬이 깨짐.
+- **`add_document(bin_arr, [L])` — 길이 리스트는 단일 원소 `[L]`.** GPTDataset은 *sequence*
+  단위로 자르고 `document_indices`를 무시 → 문서별 길이를 넣으면 packing이 조용히 무효화.
+  (tool에 hard assert.)
+- **pad = EOD(id 0).** `--eod-mask-loss`가 pad 구간 loss를 masking, `--reset-attention-mask`가
+  pad를 격리. 별도 pad id는 masking 안 됨(모델이 pad 예측 학습) → EOD-pad가 유일 정답.
+- **데이터셋별로** 실행. Megatron의 `BlendedDataset`은 한 constituent에서 *통째* sequence를
+  샘플 → per-dataset packing이 blend로 보존. (cross-dataset packing은 blend 비율 오염.)
+- **놓치기 쉬운 점**: 4096 초과 문서의 full-L head chunk는 content로 끝나 1토큰 eod-unmasked
+  leak(fineweb2hq ~0.0066% positions, 논문 수용 범위). `--strict-eod`로 제거 가능(대신 mid-doc
+  false EOD 도입 — 기본은 accept+report). 또 weight-less blend는 dataset별 padding(<1%) 차이로
+  실토큰 비율이 sub-% drift — 정확히 맞추려면 `compute_blend_weights.py`로 명시 weight.
+
+### 도구
+| 파일 | 역할 |
+|---|---|
+| `toolkits/pretrain_data_preprocessing/bestfit_pack.py` | BFP packer (segment-tree BFD + pad-to-L emit + pre/post-verify + round-trip + `--dry-run`/`--strict-eod`). BFD ~0.25M docs/s(pure Python); 대형 셋은 emit가 I/O bound |
+| `run_stage2_v5.sh` `pack`/`pack-dry` sub-target | 10개 blend member 일괄 packing (env `SEQLEN`/`EOD`/`OUT_PACKED`) |
+| `examples/alpha/configs/data/stage2_v5_blend_packed.yaml` | packed blend (stage2_v5_blend의 packed 트리 미러) |
+| `tests/test_bestfit_pack.py` | 16 unit tests (segtree↔brute, BFD↔naive parity, piece coverage, baseline 추정, 실 IndexedDataset round-trip) |
+| `tests/preflight_stage2/run_pack_loader_check.py` | packed vs unpacked GPTDataset loader differential |
 
 ## Related Documentation
 

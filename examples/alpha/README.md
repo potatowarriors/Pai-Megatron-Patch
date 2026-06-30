@@ -315,26 +315,28 @@ bash scripts/run_benchmarks.sh MODEL_PATH \
 - HellaSwag: 75-85%
 - ARC-Challenge: 85-95%
 
-### 고급: Megatron 체크포인트 변환 후 평가
+### 고급: Megatron 체크포인트 변환 후 평가 (통합 파이프라인)
 
-**1. Megatron → HuggingFace 변환**
-```bash
-cd /home/work/vidsearch/repos/project_s/Pai-Megatron-Patch/toolkits/distributed_checkpoints_convertor
+`evaluate.sh` 한 줄로 **MG→HF 변환 → 검증 → 벤치마크**를 수행합니다. 모든 변환/검증
+설정은 체크포인트 `common.pt`(ground truth)에서 자동 유도되고, EP는 GPU 수에서 유도됩니다
+(`--gpus N`; 기본 자동 감지). 자세한 배경은 [`docs/V2_PIPELINE_VERIFICATION.md`](docs/V2_PIPELINE_VERIFICATION.md).
 
-bash scripts/alpha/run_8xH20.sh \
-  baseline_48L \
-  ../../examples/alpha/outputs/alpha_*/checkpoints/iter_0010000 \
-  ../../examples/alpha/outputs/alpha_*/hfmodel \
-  true true bf16
-```
-
-**2. 벤치마크 실행**
 ```bash
 cd /home/work/vidsearch/repos/project_s/Pai-Megatron-Patch/examples/alpha
 
-bash scripts/run_benchmarks.sh \
-  outputs/alpha_baseline_48L_*/hfmodel \
-  "mmlu,hellaswag"
+# 변환 + config/weight 검증 (벤치마크 제외)
+bash evaluate.sh outputs/alpha_baseline_48L_stage1_<TS> --gpus 4
+
+# 변환 + 검증 + 벤치마크
+bash evaluate.sh outputs/alpha_baseline_48L_stage1_<TS> --gpus 4 --benchmark --tasks standard
+```
+
+개별 단계가 필요하면 (변환은 GPU 수 매개변수화 `run_convert.sh`, 검증은 checkpoint 유도):
+```bash
+GPUS=4 bash ../../toolkits/distributed_checkpoints_convertor/scripts/alpha/run_convert.sh \
+  baseline_48L <run_dir> auto true true bf16          # → hfmodel_<iter>
+bash validate.sh <run_dir>/checkpoints/iter_<N> <run_dir>/hfmodel_<N>
+bash scripts/run_benchmarks.sh <run_dir>/hfmodel_<N> "mmlu,hellaswag"
 ```
 
 자세한 변환 가이드는 [**CONVERSION.md**](docs/CONVERSION.md)를 참고하세요.
