@@ -310,7 +310,9 @@ def test_configuration_alpha_defaults_match_baseline_48L():
     )
     assert c.rope_theta == 10_000_000.0, f"rope_theta default drift: {c.rope_theta}"
     assert c.num_experts_per_tok == 8, f"num_experts_per_tok default drift: {c.num_experts_per_tok}"
-    assert c.num_experts == 184, f"num_experts default drift: {c.num_experts}"
+    # baseline_48L.yaml is 192 (184 → 192: "184=8×23, 23 prime"). The default
+    # was previously pinned to the stale 184 — itself a victim of the same drift.
+    assert c.num_experts == 192, f"num_experts default drift: {c.num_experts}"
     assert c.router_aux_loss_coef == 1.0e-4, (
         f"router_aux_loss_coef default drift: {c.router_aux_loss_coef}"
     )

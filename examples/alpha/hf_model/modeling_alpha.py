@@ -223,16 +223,25 @@ class AlphaRMSNorm(nn.Module):
     def __init__(self, dim: int, eps: float = 1e-6):
         super().__init__()
         self.eps = eps
-        self.weight = nn.Parameter(torch.zeros(dim))
+        # Standard RMSNorm (gamma initialised to 1.0). Alpha v2 trains Megatron
+        # with apply-layernorm-1p OFF (layernorm_zero_centered_gamma=False), so
+        # the checkpoint stores *standard* gammas centred on ~1.0 and Megatron
+        # applies `x_norm * gamma`. This must match here — see forward().
+        self.weight = nn.Parameter(torch.ones(dim))
 
     def _norm(self, x):
         return x * torch.rsqrt(x.pow(2).mean(-1, keepdim=True) + self.eps)
 
     def forward(self, x):
         output = self._norm(x.float())
-        # Llama does x.to(float16) * w whilst Alpha is (x * w).to(float16)
-        # See https://github.com/huggingface/transformers/pull/29402
-        output = output * (1.0 + self.weight.float())
+        # Standard RMSNorm: `x_norm * gamma`. Do NOT use the zero-centered
+        # `(1 + gamma)` form inherited from Qwen3-Next — Alpha v2 removed
+        # apply-layernorm-1p, so the trained gammas are standard (≈1.0). Applying
+        # `(1 + gamma)` would scale every norm output by ~1.7–2.5x and corrupt the
+        # forward pass across all layers (weight-only validation can't catch it,
+        # since the converter copies gamma verbatim). Consistent with
+        # AlphaRMSNormGated above, which is also standard.
+        output = output * self.weight.float()
         return output.type_as(x)
 
     def extra_repr(self):
@@ -799,20 +808,73 @@ class AlphaMLP(nn.Module):
 
 
 class AlphaSparseMoeBlock(nn.Module):
+    """DeepSeek-V3-style MoE block (matches alpha baseline_48L training).
+
+    Routing = sigmoid scores + aux-loss-free expert bias (top-k *selection*
+    only) + group-limited routing (n_group × topk_group) + norm + routed
+    scaling. This mirrors `transformers` `DeepseekV3TopkRouter` so the converted
+    HF model routes identically to the Megatron run — a plain softmax/top-k
+    here would silently select different experts and invalidate eval.
+    """
+
     def __init__(self, config):
         super().__init__()
         self.num_experts = config.num_experts
         self.top_k = config.num_experts_per_tok
         self.norm_topk_prob = config.norm_topk_prob
+        self.scoring_func = getattr(config, "scoring_func", "sigmoid")
+        self.n_group = getattr(config, "n_group", 1) or 1
+        self.topk_group = getattr(config, "topk_group", 1) or 1
+        self.routed_scaling_factor = getattr(config, "routed_scaling_factor", 1.0)
 
         # gating
         self.gate = nn.Linear(config.hidden_size, config.num_experts, bias=False)
+        # Aux-loss-free expert bias (DSV3 `e_score_correction_bias`): added to the
+        # routing scores for top-k *selection* only (not the combine weights).
+        # Registered on `self.gate` so the MG→HF converter's copy target
+        # (`gate.e_score_correction_bias`) exists.
+        #
+        # An nn.Parameter (requires_grad=False), not a buffer — matching DeepSeek-V3's
+        # official HF gate — for one concrete reason: Megatron maintains
+        # router.expert_bias in fp32 ("to avoid routing errors when updating the
+        # expert_bias", router.py::_maintain_float32_expert_bias) and the converter
+        # saves it fp32, while the rest of the model is bf16. To keep it fp32 through
+        # a `from_pretrained(torch_dtype=torch.bfloat16)` load we list it in
+        # `_keep_in_fp32_modules_strict` (see AlphaPreTrainedModel) — and that
+        # mechanism only protects *parameters*, not buffers. The selection math in
+        # `_select_experts` already runs in fp32, so this is the faithful dtype.
+        self.gate.e_score_correction_bias = nn.Parameter(
+            torch.zeros(config.num_experts), requires_grad=False
+        )
         self.experts = nn.ModuleList(
             [AlphaMLP(config, intermediate_size=config.moe_intermediate_size) for _ in range(self.num_experts)]
         )
 
         self.shared_expert = AlphaMLP(config, intermediate_size=config.shared_expert_intermediate_size)
         self.shared_expert_gate = torch.nn.Linear(config.hidden_size, 1, bias=False)
+
+    @torch.no_grad()
+    def _select_experts(self, scores: torch.Tensor) -> torch.Tensor:
+        """Group-limited top-k selection with aux-loss-free bias (DSV3)."""
+        scores_for_choice = scores + self.gate.e_score_correction_bias.unsqueeze(0)
+        if self.n_group > 1:
+            num_tokens = scores_for_choice.shape[0]
+            experts_per_group = self.num_experts // self.n_group
+            group_scores = (
+                scores_for_choice.view(num_tokens, self.n_group, experts_per_group)
+                .topk(2, dim=-1)[0]
+                .sum(dim=-1)
+            )  # (tokens, n_group): sum of top-2 expert scores per group
+            group_idx = torch.topk(group_scores, k=self.topk_group, dim=-1, sorted=False)[1]
+            group_mask = torch.zeros_like(group_scores)
+            group_mask.scatter_(1, group_idx, 1)
+            score_mask = (
+                group_mask.unsqueeze(-1)
+                .expand(-1, self.n_group, experts_per_group)
+                .reshape(num_tokens, self.num_experts)
+            )
+            scores_for_choice = scores_for_choice.masked_fill(~score_mask.bool(), 0.0)
+        return torch.topk(scores_for_choice, k=self.top_k, dim=-1, sorted=False)[1]
 
     def forward(self, hidden_states: torch.Tensor) -> torch.Tensor:
         """ """
@@ -821,10 +883,17 @@ class AlphaSparseMoeBlock(nn.Module):
         # router_logits: (batch * sequence_length, n_experts)
         router_logits = self.gate(hidden_states)
 
-        routing_weights = F.softmax(router_logits, dim=1, dtype=torch.float)
-        routing_weights, selected_experts = torch.topk(routing_weights, self.top_k, dim=-1)
+        # DSV3 routing: sigmoid scores, group-limited+biased selection, gather the
+        # ORIGINAL scores (bias excluded from weights), normalize, then scale.
+        if self.scoring_func == "sigmoid":
+            scores = router_logits.sigmoid().to(torch.float32)
+        else:
+            scores = F.softmax(router_logits, dim=-1, dtype=torch.float32)
+        selected_experts = self._select_experts(scores)
+        routing_weights = scores.gather(1, selected_experts)
         if self.norm_topk_prob:
-            routing_weights /= routing_weights.sum(dim=-1, keepdim=True)
+            routing_weights = routing_weights / (routing_weights.sum(dim=-1, keepdim=True) + 1e-20)
+        routing_weights = routing_weights * self.routed_scaling_factor
         # we cast back to the input dtype
         routing_weights = routing_weights.to(hidden_states.dtype)
 
@@ -965,6 +1034,12 @@ class AlphaPreTrainedModel(PreTrainedModel):
     _supports_flash_attn_2 = True
     _supports_sdpa = True
     _keys_to_ignore_on_load_unexpected = [r"^mtp.*"]
+    # Keep the aux-loss-free router bias in fp32 even when the model is loaded in
+    # bf16 (`from_pretrained(torch_dtype=torch.bfloat16)`). The plain
+    # `_keep_in_fp32_modules` list only fires for fp16; the `_strict` variant also
+    # covers bf16. Matches MG (router.expert_bias is fp32) so routing is faithful
+    # at inference and the MG↔HF weight validator compares fp32-vs-fp32 exactly.
+    _keep_in_fp32_modules_strict = ["e_score_correction_bias"]
     _can_record_outputs = {
         "router_logits": OutputRecorder(AlphaSparseMoeBlock, index=1),
         "hidden_states": AlphaDecoderLayer,

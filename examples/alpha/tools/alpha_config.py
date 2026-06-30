@@ -91,12 +91,21 @@ class MoEConfig:
     router_topk: int = 8
     router_load_balancing_type: str = "aux_loss"
     aux_loss_coeff: float = 0.001
-    router_score_function: str = "softmax"
+    router_score_function: str = "sigmoid"  # alpha baseline is DSV3 sigmoid routing
     router_dtype: str = "fp32"
     grouped_gemm: bool = True
     permute_fusion: bool = True
     router_fusion: bool = True
     shared_expert_intermediate_size: int = 768
+    # DSV3 group-limited routing + aux-loss-free bias (Optional → emitted only
+    # when the source config actually carries them; checkpoint always does).
+    shared_expert_gate: bool = False
+    token_dispatcher_type: str = "alltoall"
+    router_num_groups: Optional[int] = None
+    router_group_topk: Optional[int] = None
+    router_topk_scaling_factor: Optional[float] = None
+    router_enable_expert_bias: bool = False
+    router_bias_update_rate: Optional[float] = None
 
 
 @dataclass
@@ -147,6 +156,13 @@ class ModelConfig:
     padded_vocab_size: int = 163968
     tokenizer_type: str = "HuggingFaceTokenizer"
     tokenizer_path: str = ""
+
+    # Sequence + parallelism (needed to build the Megatron skeleton for
+    # conversion/validation; parallelism here is the *training* topology — the
+    # convert/validate launchers override EP from the runtime GPU count).
+    seq_length: int = 4096
+    max_position_embeddings: int = 262144
+    expert_model_parallel_size: int = 1
 
     # Cached pattern (computed lazily)
     _pattern_cache: Optional[str] = field(default=None, repr=False)
@@ -284,6 +300,13 @@ def _flat_to_nested(flat: Dict) -> Dict:
         'moe-permute-fusion': 'permute_fusion',
         'moe-router-fusion': 'router_fusion',
         'moe-shared-expert-intermediate-size': 'shared_expert_intermediate_size',
+        'moe-shared-expert-gate': 'shared_expert_gate',
+        'moe-token-dispatcher-type': 'token_dispatcher_type',
+        'moe-router-num-groups': 'router_num_groups',
+        'moe-router-group-topk': 'router_group_topk',
+        'moe-router-topk-scaling-factor': 'router_topk_scaling_factor',
+        'moe-router-enable-expert-bias': 'router_enable_expert_bias',
+        'moe-router-bias-update-rate': 'router_bias_update_rate',
     }
     # Hybrid flags
     hybrid_renames = {
@@ -348,12 +371,19 @@ def load_config(config_name: str) -> ModelConfig:
         router_topk=moe_data.get("router_topk", 8),
         router_load_balancing_type=moe_data.get("router_load_balancing_type", "aux_loss"),
         aux_loss_coeff=moe_data.get("aux_loss_coeff", 0.001),
-        router_score_function=moe_data.get("router_score_function", "softmax"),
+        router_score_function=moe_data.get("router_score_function", "sigmoid"),
         router_dtype=moe_data.get("router_dtype", "fp32"),
         grouped_gemm=moe_data.get("grouped_gemm", True),
         permute_fusion=moe_data.get("permute_fusion", True),
         router_fusion=moe_data.get("router_fusion", True),
         shared_expert_intermediate_size=moe_data.get("shared_expert_intermediate_size", 768),
+        shared_expert_gate=moe_data.get("shared_expert_gate", False),
+        token_dispatcher_type=moe_data.get("token_dispatcher_type", "alltoall"),
+        router_num_groups=moe_data.get("router_num_groups"),
+        router_group_topk=moe_data.get("router_group_topk"),
+        router_topk_scaling_factor=moe_data.get("router_topk_scaling_factor"),
+        router_enable_expert_bias=moe_data.get("router_enable_expert_bias", False),
+        router_bias_update_rate=moe_data.get("router_bias_update_rate"),
     )
 
     # Parse token config
@@ -394,7 +424,137 @@ def load_config(config_name: str) -> ModelConfig:
         ),
         padded_vocab_size=model_data.get("padded_vocab_size", 163968),
         tokenizer_type=model_data.get("tokenizer_type", "HuggingFaceTokenizer"),
-        tokenizer_path=model_data.get("tokenizer_path", ""),
+        tokenizer_path=model_data.get("tokenizer_model", model_data.get("tokenizer_path", "")),
+        seq_length=model_data.get("seq_length", 4096),
+        max_position_embeddings=model_data.get("max_position_embeddings", 262144),
+        expert_model_parallel_size=model_data.get("expert_model_parallel_size", 1),
+    )
+
+
+# ============================================================================
+# Config Loading — from a Megatron checkpoint (ground truth)
+# ============================================================================
+
+
+def _find_common_pt(ckpt_dir: str) -> Path:
+    """Resolve the `common.pt` (Megatron args namespace) for a checkpoint.
+
+    Accepts any of:
+      - an `iter_NNNNNNN/` directory (contains common.pt directly)
+      - a run dir or its `checkpoints/` dir (resolves latest via
+        `latest_checkpointed_iteration.txt`)
+    """
+    p = Path(ckpt_dir)
+    direct = p / "common.pt"
+    if direct.exists():
+        return direct
+
+    # Walk to the checkpoints/ dir if a run dir was passed.
+    ckpt_root = p / "checkpoints" if (p / "checkpoints").is_dir() else p
+    latest = ckpt_root / "latest_checkpointed_iteration.txt"
+    if latest.exists():
+        iteration = int(latest.read_text().strip())
+        cand = ckpt_root / f"iter_{iteration:07d}" / "common.pt"
+        if cand.exists():
+            return cand
+
+    raise FileNotFoundError(
+        f"Could not locate common.pt under {ckpt_dir!r}. Pass an iter_NNNNNNN "
+        f"directory, a checkpoints/ directory, or a run output directory."
+    )
+
+
+def load_config_from_checkpoint(ckpt_dir: str) -> ModelConfig:
+    """Build a ModelConfig from a Megatron checkpoint's `common.pt` args.
+
+    This is the *ground-truth* source: it reflects exactly what the run was
+    launched with, immune to post-hoc edits of the model/training YAMLs. The
+    returned ModelConfig is shape-identical to `load_config(yaml)`, so all
+    downstream generators (generate_hf_config / emit_megatron_flags / ...) work
+    unchanged. Requires Megatron on PYTHONPATH to unpickle the args namespace.
+    """
+    import os as _os
+
+    import torch  # local import: only needed for the checkpoint path
+
+    _os.environ.setdefault("TORCH_FORCE_NO_WEIGHTS_ONLY_LOAD", "true")
+    common_pt = _find_common_pt(ckpt_dir)
+    ckpt = torch.load(common_pt, map_location="cpu", weights_only=False)
+    if "args" not in ckpt:
+        raise KeyError(f"'args' namespace not found in {common_pt}")
+    a = vars(ckpt["args"])
+
+    def g(key, default=None):
+        return a.get(key, default)
+
+    hybrid = HybridConfig(
+        attention_ratio=g("hybrid_attention_ratio", 0.125),
+        mlp_ratio=g("hybrid_mlp_ratio", 0.5),
+        override_pattern=g("hybrid_override_pattern"),
+        mamba_state_dim=g("mamba_state_dim", 128),
+        mamba_head_dim=g("mamba_head_dim", 128),
+        mamba_num_groups=g("mamba_num_groups", 16),
+        mamba_num_heads=g("mamba_num_heads", 32),
+    )
+
+    moe = MoEConfig(
+        num_experts=g("num_experts", 0) or 0,
+        moe_ffn_hidden_size=g("moe_ffn_hidden_size", 0) or 0,
+        router_topk=g("moe_router_topk", 8),
+        router_load_balancing_type=g("moe_router_load_balancing_type", "aux_loss"),
+        aux_loss_coeff=g("moe_aux_loss_coeff", 0.0) or 0.0,
+        router_score_function=g("moe_router_score_function", "softmax"),
+        router_dtype=g("moe_router_dtype") or "fp32",
+        grouped_gemm=bool(g("moe_grouped_gemm", True)),
+        shared_expert_intermediate_size=g("moe_shared_expert_intermediate_size", 0) or 0,
+        shared_expert_gate=bool(g("moe_shared_expert_gate", False)),
+        token_dispatcher_type=g("moe_token_dispatcher_type", "alltoall"),
+        router_num_groups=g("moe_router_num_groups"),
+        router_group_topk=g("moe_router_group_topk"),
+        router_topk_scaling_factor=g("moe_router_topk_scaling_factor"),
+        router_enable_expert_bias=bool(g("moe_router_enable_expert_bias", False)),
+        router_bias_update_rate=g("moe_router_bias_update_rate"),
+    )
+
+    # Token IDs are an alpha-v5 designation (EOS/EOD=0, no BOS, PAD=1); they are
+    # not stored in the Megatron args namespace. The defaults encode that and are
+    # guarded by tests/test_alpha_tokenizer_eod.py against drift.
+    tokens = TokenConfig()
+
+    # Megatron stores `--disable-bias-linear` as `add_bias_linear=False`.
+    disable_bias = not g("add_bias_linear", True)
+
+    return ModelConfig(
+        name="alpha-baseline",
+        num_layers=g("num_layers"),
+        hidden_size=g("hidden_size"),
+        ffn_hidden_size=g("ffn_hidden_size"),
+        num_attention_heads=g("num_attention_heads"),
+        kv_channels=g("kv_channels"),
+        group_query_attention=bool(g("group_query_attention", True)),
+        num_query_groups=g("num_query_groups", 1),
+        hybrid=hybrid,
+        moe=moe,
+        tokens=tokens,
+        normalization=g("normalization", "RMSNorm"),
+        norm_epsilon=g("norm_epsilon", 1e-6),
+        qk_layernorm=bool(g("qk_layernorm", False)),
+        apply_layernorm_1p=bool(g("apply_layernorm_1p", False)),
+        activation="swiglu" if g("swiglu", False) else "gelu",
+        attention_dropout=g("attention_dropout", 0.0),
+        hidden_dropout=g("hidden_dropout", 0.0),
+        disable_bias_linear=disable_bias,
+        position_embedding_type=g("position_embedding_type", "rope"),
+        use_rotary_position_embeddings=g("position_embedding_type", "rope") == "rope",
+        rotary_base=g("rotary_base", 10000000),
+        rotary_percent=g("rotary_percent", 1.0),
+        untie_embeddings_and_output_weights=bool(g("untie_embeddings_and_output_weights", True)),
+        padded_vocab_size=g("padded_vocab_size"),
+        tokenizer_type=g("tokenizer_type", "HuggingFaceTokenizer"),
+        tokenizer_path=g("tokenizer_model", "") or "",
+        seq_length=g("seq_length", 4096),
+        max_position_embeddings=g("max_position_embeddings", 262144),
+        expert_model_parallel_size=g("expert_model_parallel_size", 1),
     )
 
 
@@ -530,6 +690,92 @@ def generate_convert_args(config: ModelConfig) -> Dict[str, str]:
     }
 
 
+def emit_megatron_flags(config: ModelConfig) -> List[str]:
+    """Emit the complete Megatron CLI flags that define the model *skeleton*,
+    one shell token per element, for building the model to load a checkpoint
+    (conversion) or to compare weights (validation).
+
+    Deliberately omits parallelism (TP/PP/EP): the convert/validate launchers
+    inject those from the runtime GPU count (EP=#GPU), independent of the
+    training topology — torch_dist reshards experts on load. Returned as
+    individual tokens so the caller can `readarray -t` without word-splitting
+    or glob-expanding the `*` in the hybrid pattern.
+    """
+    pattern = config.get_pattern()
+    moe = config.moe
+
+    flags: List[str] = [
+        # Core architecture
+        "--num-layers", str(config.num_layers),
+        "--hidden-size", str(config.hidden_size),
+        "--ffn-hidden-size", str(config.ffn_hidden_size),
+        "--num-attention-heads", str(config.num_attention_heads),
+        "--kv-channels", str(config.kv_channels),
+        "--num-query-groups", str(config.num_query_groups),
+        # Hybrid (Mamba + Attention)
+        "--is-hybrid-model",
+        "--hybrid-attention-ratio", str(config.hybrid.attention_ratio),
+        "--hybrid-mlp-ratio", str(config.hybrid.mlp_ratio),
+        "--hybrid-override-pattern", pattern,
+        "--mamba-state-dim", str(config.hybrid.mamba_state_dim),
+        "--mamba-head-dim", str(config.hybrid.mamba_head_dim),
+        "--mamba-num-groups", str(config.hybrid.mamba_num_groups),
+        "--mamba-num-heads", str(config.hybrid.mamba_num_heads),
+        # MoE
+        "--num-experts", str(moe.num_experts),
+        "--moe-router-topk", str(moe.router_topk),
+        "--moe-ffn-hidden-size", str(moe.moe_ffn_hidden_size),
+        "--moe-shared-expert-intermediate-size", str(moe.shared_expert_intermediate_size),
+        "--moe-router-score-function", str(moe.router_score_function),
+        "--moe-token-dispatcher-type", str(moe.token_dispatcher_type),
+        # RoPE / norm / activation
+        "--position-embedding-type", config.position_embedding_type,
+        "--rotary-base", str(config.rotary_base),
+        "--rotary-percent", str(config.rotary_percent),
+        "--normalization", config.normalization,
+        "--norm-epsilon", str(config.norm_epsilon),
+        # Sequence + vocab
+        "--seq-length", str(config.seq_length),
+        "--max-position-embeddings", str(config.max_position_embeddings),
+        "--padded-vocab-size", str(config.padded_vocab_size),
+        # Tokenizer
+        "--tokenizer-type", config.tokenizer_type,
+    ]
+
+    if config.group_query_attention:
+        flags += ["--group-query-attention"]
+    if config.moe.grouped_gemm:
+        flags += ["--moe-grouped-gemm"]
+    if config.moe.shared_expert_gate:
+        flags += ["--moe-shared-expert-gate"]
+    if config.qk_layernorm:
+        flags += ["--qk-layernorm"]
+    if config.activation == "swiglu":
+        flags += ["--swiglu"]
+    if config.disable_bias_linear:
+        flags += ["--disable-bias-linear"]
+    if config.untie_embeddings_and_output_weights:
+        flags += ["--untie-embeddings-and-output-weights"]
+
+    # DSV3 group-limited routing + aux-loss-free expert bias: emit only when the
+    # source actually carried them (checkpoint always does; model-only YAML may not).
+    if moe.router_num_groups is not None:
+        flags += ["--moe-router-num-groups", str(moe.router_num_groups)]
+    if moe.router_group_topk is not None:
+        flags += ["--moe-router-group-topk", str(moe.router_group_topk)]
+    if moe.router_topk_scaling_factor is not None:
+        flags += ["--moe-router-topk-scaling-factor", str(moe.router_topk_scaling_factor)]
+    if moe.router_enable_expert_bias:
+        flags += ["--moe-router-enable-expert-bias"]
+        if moe.router_bias_update_rate is not None:
+            flags += ["--moe-router-bias-update-rate", str(moe.router_bias_update_rate)]
+
+    if config.tokenizer_path:
+        flags += ["--tokenizer-model", config.tokenizer_path]
+
+    return flags
+
+
 def generate_hf_config(config: ModelConfig) -> Dict:
     """Generate HuggingFace config.json content."""
     num_hf_layers = config.num_layers // 2
@@ -557,7 +803,7 @@ def generate_hf_config(config: ModelConfig) -> Dict:
     dense_mlp_mg_indices = [i for i, c in enumerate(pattern) if c == CHAR_DENSE_MLP]
     mlp_only_layers = sorted(set(idx // 2 for idx in dense_mlp_mg_indices))
 
-    return {
+    hf: Dict = {
         "architectures": ["AlphaForCausalLM"],
         "attention_dropout": config.attention_dropout,
         "auto_map": {
@@ -578,11 +824,20 @@ def generate_hf_config(config: ModelConfig) -> Dict:
         "linear_num_key_heads": config.hybrid.mamba_num_groups,
         "linear_num_value_heads": config.hybrid.mamba_num_heads,
         "linear_value_head_dim": config.hybrid.mamba_head_dim,
-        "max_position_embeddings": 262144,
+        "max_position_embeddings": config.max_position_embeddings,
         "mlp_only_layers": mlp_only_layers,
         "model_type": "alpha",
         "moe_intermediate_size": config.moe.moe_ffn_hidden_size,
         "norm_topk_prob": True,
+        # DSV3 routing (must match training; aux-loss-free bias is in the weights).
+        "scoring_func": config.moe.router_score_function,
+        "n_group": config.moe.router_num_groups if config.moe.router_num_groups is not None else 8,
+        "topk_group": config.moe.router_group_topk if config.moe.router_group_topk is not None else 4,
+        "routed_scaling_factor": (
+            config.moe.router_topk_scaling_factor
+            if config.moe.router_topk_scaling_factor is not None
+            else 2.5
+        ),
         "num_attention_heads": config.num_attention_heads,
         "num_experts": config.moe.num_experts,
         "num_experts_per_tok": config.moe.router_topk,
@@ -602,6 +857,14 @@ def generate_hf_config(config: ModelConfig) -> Dict:
         "use_sliding_window": False,
         "vocab_size": config.padded_vocab_size,
     }
+
+    # Alpha has no BOS (bos_token is null in tokenizer_config.json). Omit the
+    # key entirely rather than emitting `null`, so HF/SGLang/vLLM never treat a
+    # stale id as a sentinel (see alpha_config.py token-default notes).
+    if hf["bos_token_id"] is None:
+        del hf["bos_token_id"]
+
+    return hf
 
 
 def generate_convert_script(config: ModelConfig) -> str:
@@ -673,18 +936,47 @@ VOCAB_SIZE={config.padded_vocab_size}
 # ============================================================================
 
 
+def _resolve_config(args) -> ModelConfig:
+    """Resolve a ModelConfig from either a checkpoint (ground truth, preferred
+    for MG→HF and validation) or a named YAML (HF→MG fallback / inspection)."""
+    from_ckpt = getattr(args, "from_checkpoint", None)
+    if from_ckpt:
+        return load_config_from_checkpoint(from_ckpt)
+    config_name = getattr(args, "config_name", None)
+    if not config_name:
+        raise SystemExit(
+            "error: provide a config name (e.g. baseline_48L) or --from-checkpoint <dir>"
+        )
+    return load_config(config_name)
+
+
+def cmd_emit_megatron_flags(args):
+    """Emit Megatron model-skeleton flags (one token per line) for convert/validate."""
+    config = _resolve_config(args)
+    flags = emit_megatron_flags(config)
+    text = "\n".join(flags)
+    if args.output:
+        with open(args.output, "w") as f:
+            f.write(text + "\n")
+        print(f"✅ Megatron flags written to {args.output}")
+    else:
+        print(text)
+    return 0
+
+
 def cmd_validate(args):
     """Validate configuration."""
-    config = load_config(args.config_name)
+    config = _resolve_config(args)
+    label = getattr(args, "from_checkpoint", None) or getattr(args, "config_name", None) or "config"
     errors = validate_config(config)
 
     if errors:
-        print(f"❌ Validation FAILED for {args.config_name}:")
+        print(f"❌ Validation FAILED for {label}:")
         for error in errors:
             print(f"  - {error}")
         return 1
     else:
-        print(f"✅ Validation PASSED for {args.config_name}")
+        print(f"✅ Validation PASSED for {label}")
 
         # Print summary
         pattern = config.get_pattern()
@@ -704,7 +996,7 @@ def cmd_validate(args):
 
 def cmd_generate_train_args(args):
     """Generate training arguments."""
-    config = load_config(args.config_name)
+    config = _resolve_config(args)
     train_args = generate_train_args(config)
 
     if args.output:
@@ -718,7 +1010,7 @@ def cmd_generate_train_args(args):
 
 def cmd_generate_convert_args(args):
     """Generate conversion arguments."""
-    config = load_config(args.config_name)
+    config = _resolve_config(args)
     convert_args = generate_convert_args(config)
 
     if args.output:
@@ -734,7 +1026,7 @@ def cmd_generate_convert_args(args):
 
 def cmd_generate_hf_config(args):
     """Generate HuggingFace config.json."""
-    config = load_config(args.config_name)
+    config = _resolve_config(args)
     hf_config = generate_hf_config(config)
 
     if args.output:
@@ -750,7 +1042,7 @@ def cmd_generate_hf_config(args):
 
 def cmd_generate_convert_script(args):
     """Generate conversion bash script."""
-    config = load_config(args.config_name)
+    config = _resolve_config(args)
     script = generate_convert_script(config)
 
     if args.output:
@@ -799,35 +1091,54 @@ def main():
     )
     subparsers = parser.add_subparsers(dest="command", help="Available commands")
 
+    def add_source_args(p, *, with_output=True):
+        """Common source selectors: a named YAML or a checkpoint (ground truth)."""
+        p.add_argument(
+            "config_name",
+            nargs="?",
+            help="Config name (e.g., baseline_48L). Omit when using --from-checkpoint.",
+        )
+        p.add_argument(
+            "--from-checkpoint",
+            help="Derive config from a Megatron checkpoint's common.pt (iter dir, "
+            "checkpoints/ dir, or run output dir). Ground truth; preferred for MG→HF.",
+        )
+        if with_output:
+            p.add_argument("--output", "-o", help="Output file path")
+
     # validate
     p_validate = subparsers.add_parser("validate", help="Validate configuration")
-    p_validate.add_argument("config_name", help="Config name (e.g., baseline_48L)")
+    add_source_args(p_validate, with_output=False)
     p_validate.set_defaults(func=cmd_validate)
+
+    # emit-megatron-flags (skeleton flags for convert/validate; one token/line)
+    p_emit = subparsers.add_parser(
+        "emit-megatron-flags",
+        help="Emit Megatron model-skeleton flags (one token/line) for convert/validate",
+    )
+    add_source_args(p_emit)
+    p_emit.set_defaults(func=cmd_emit_megatron_flags)
 
     # generate-train-args
     p_train = subparsers.add_parser("generate-train-args", help="Generate training arguments")
-    p_train.add_argument("config_name", help="Config name (e.g., baseline_48L)")
-    p_train.add_argument("--output", "-o", help="Output file path")
+    add_source_args(p_train)
     p_train.set_defaults(func=cmd_generate_train_args)
 
     # generate-convert-args
     p_convert = subparsers.add_parser("generate-convert-args", help="Generate conversion arguments")
-    p_convert.add_argument("config_name", help="Config name (e.g., baseline_48L)")
-    p_convert.add_argument("--output", "-o", help="Output file path")
+    add_source_args(p_convert)
     p_convert.set_defaults(func=cmd_generate_convert_args)
 
     # generate-hf-config
     p_hf = subparsers.add_parser("generate-hf-config", help="Generate HuggingFace config.json")
-    p_hf.add_argument("config_name", help="Config name (e.g., baseline_48L)")
-    p_hf.add_argument("--output", "-o", help="Output file path")
+    add_source_args(p_hf)
     p_hf.set_defaults(func=cmd_generate_hf_config)
 
     # generate-convert-script
     p_script = subparsers.add_parser(
         "generate-convert-script", help="Generate conversion bash script"
     )
-    p_script.add_argument("config_name", help="Config name (e.g., baseline_48L)")
-    p_script.add_argument("--output", "-o", help="Output file path")
+    add_source_args(p_script)
     p_script.set_defaults(func=cmd_generate_convert_script)
 
     # sync

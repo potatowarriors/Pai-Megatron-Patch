@@ -2,12 +2,19 @@
 
 Alpha 모델의 HuggingFace ↔ Megatron 체크포인트 변환 도구입니다.
 
+> **⚠️ 2026-05-26 업데이트**: 변환기는 이제 **GPU 수에 무관한 `run_convert.sh`**를 씁니다
+> (EP=#GPU, 모델 flags는 체크포인트 `common.pt`에서 유도). 아래 예시의 `run_8xH20.sh` /
+> `run_4xGPU.sh`는 `GPUS=8` / `GPUS=4`로 `run_convert.sh`를 호출하는 **back-compat shim**이라
+> 그대로 동작하지만, 신규 사용은 `[GPUS=N] bash scripts/alpha/run_convert.sh ...` 권장.
+> end-to-end(변환→검증→벤치마크)는 `examples/alpha/evaluate.sh`. 상세: 상위
+> [CLAUDE.md](../../CLAUDE.md) 및 [V2_PIPELINE_VERIFICATION.md](../../../../examples/alpha/docs/V2_PIPELINE_VERIFICATION.md).
+
 ## 개요
 
 Alpha는 Qwen3-Next Mamba Hybrid 아키텍처 기반의 모델입니다:
 
 - **48 Megatron layers → 24 HF layers** (2:1 mapping)
-- **128 experts** with Top-8 routing
+- **192 experts** with Top-8 routing (DSV3 group-limited 8×4 + expert bias)
 - **Hybrid pattern**: GatedDeltaNet + Full Attention
 - **TP=1 constraint**: Mamba layers require Tensor Parallelism = 1
 

@@ -101,8 +101,8 @@ class AlphaConfig(PretrainedConfig):
             Intermediate size of the shared expert.
         num_experts_per_tok (`int`, *optional*, defaults to 8):
             Number of selected experts per token (matches `moe-router-topk` in baseline_48L.yaml).
-        num_experts (`int`, *optional*, defaults to 184):
-            Number of routed experts (DSV3-tuned for ~15B; 23 experts/GPU at EP=8).
+        num_experts (`int`, *optional*, defaults to 192):
+            Number of routed experts (DSV3-tuned for ~15B; 24 experts/GPU at EP=8).
         norm_topk_prob (`bool`, *optional*, defaults to `True`):
             Whether to normalize the topk probabilities.
         output_router_logits (`bool`, *optional*, defaults to `False`):
@@ -179,10 +179,16 @@ class AlphaConfig(PretrainedConfig):
         moe_intermediate_size=512,
         shared_expert_intermediate_size=512,
         num_experts_per_tok=8,
-        num_experts=184,
+        num_experts=192,
         norm_topk_prob=True,
         output_router_logits=False,
         router_aux_loss_coef=1.0e-4,
+        # DSV3-style routing (matches baseline_48L training): sigmoid score +
+        # group-limited routing + aux-loss-free expert bias + topk scaling.
+        scoring_func="sigmoid",
+        n_group=8,
+        topk_group=4,
+        routed_scaling_factor=2.5,
         mlp_only_layers=[],
         layer_types=None,
         **kwargs,
@@ -240,6 +246,10 @@ class AlphaConfig(PretrainedConfig):
         self.norm_topk_prob = norm_topk_prob
         self.output_router_logits = output_router_logits
         self.router_aux_loss_coef = router_aux_loss_coef
+        self.scoring_func = scoring_func
+        self.n_group = n_group
+        self.topk_group = topk_group
+        self.routed_scaling_factor = routed_scaling_factor
         self.mlp_only_layers = mlp_only_layers
 
     # ── SGLang compatibility properties ──────────────────────────

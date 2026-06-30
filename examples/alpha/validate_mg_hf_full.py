@@ -128,7 +128,17 @@ def compare_tensors(
     threshold: float = 0.01,
     note: str = ""
 ) -> WeightComparison:
-    """Compare two tensors and return comparison result."""
+    """Compare two tensors and return comparison result.
+
+    Strict tolerance on purpose: the converter copies weights bit-for-bit (no
+    arithmetic) at their trained dtype, so every faithful comparison is exact
+    (max_diff ≈ 0) — bf16 weight vs bf16 weight, and fp32 buffer vs fp32 buffer.
+    The one tensor MG keeps in fp32, ``router.expert_bias``, is saved fp32 by the
+    converter and kept fp32 on load via the HF model's
+    ``_keep_in_fp32_modules_strict`` (see hf_model/modeling_alpha.py), so it must
+    be compared fp32-vs-fp32 and matches exactly. A nonzero max_diff here means a
+    real conversion/precision regression — do not relax this to paper over it.
+    """
     # Move to same device if needed
     if mg_tensor.device != hf_tensor.device:
         hf_tensor = hf_tensor.to(mg_tensor.device)
@@ -819,6 +829,22 @@ def compare_mlp_layer(
         layer_cmp.comparisons.append(cmp)
         result.compared_mg_weights.add(f"{mg_prefix}.mlp.router.weight")
 
+        # Aux-loss-free expert bias (DSV3): MG router.expert_bias ↔ HF
+        # gate.e_score_correction_bias. Present only when the run enabled
+        # --moe-router-enable-expert-bias (alpha v2 baseline does).
+        mg_expert_bias = getattr(mg_mlp.router, "expert_bias", None)
+        if mg_expert_bias is not None and hasattr(hf_mlp.gate, "e_score_correction_bias"):
+            cmp = compare_tensors(
+                mg_expert_bias.data,
+                hf_mlp.gate.e_score_correction_bias.data,
+                f"{mg_prefix}.mlp.router.expert_bias",
+                f"{hf_prefix}.mlp.gate.e_score_correction_bias",
+                threshold,
+                note="DSV3 aux-loss-free expert bias",
+            )
+            layer_cmp.comparisons.append(cmp)
+            result.compared_mg_weights.add(f"{mg_prefix}.mlp.router.expert_bias")
+
         # Experts - MG uses TEGroupedMLP with weight{idx} attributes
         # We're running with EP=1 for validation (single GPU), so all experts are local
         mg_experts = mg_mlp.experts
@@ -923,6 +949,21 @@ def compare_mlp_layer(
             )
             layer_cmp.comparisons.append(cmp)
             result.compared_mg_weights.add(f"{mg_prefix}.mlp.shared_experts.linear_fc2.weight")
+
+            # Shared-expert gate: MG shared_experts.gate_weight ↔ HF
+            # shared_expert_gate.weight (sigmoid gate on the shared expert).
+            mg_shared_gate = getattr(mg_shared, "gate_weight", None)
+            if mg_shared_gate is not None and hasattr(hf_mlp, "shared_expert_gate"):
+                cmp = compare_tensors(
+                    mg_shared_gate.data.reshape(-1),
+                    hf_mlp.shared_expert_gate.weight.data.reshape(-1),
+                    f"{mg_prefix}.mlp.shared_experts.gate_weight",
+                    f"{hf_prefix}.mlp.shared_expert_gate.weight",
+                    threshold,
+                    note="Shared expert gate",
+                )
+                layer_cmp.comparisons.append(cmp)
+                result.compared_mg_weights.add(f"{mg_prefix}.mlp.shared_experts.gate_weight")
 
     else:
         # === Dense MLP ===
@@ -1231,7 +1272,11 @@ def main():
         # Filter out known patterns that are expected to differ
         # - TEGroupedMLP uses dynamic weight{idx} attributes, not in named_parameters
         # - _extra_state is TE internal state
-        filtered_unchecked = {w for w in unchecked if not w.endswith('._extra_state')}
+        # - local_tokens_per_expert is a transient routing-statistics buffer used
+        #   only for aux-loss-free bias updates during training; it has no HF
+        #   counterpart and is not a convertible weight.
+        _ignore_suffixes = ('._extra_state', '.local_tokens_per_expert')
+        filtered_unchecked = {w for w in unchecked if not w.endswith(_ignore_suffixes)}
         filtered_phantom = {w for w in phantom_weights if not (
             '.weight' in w and any(f'weight{i}' in w for i in range(512)) or
             w.endswith('._extra_state')

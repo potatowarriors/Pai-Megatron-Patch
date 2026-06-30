@@ -242,13 +242,21 @@ class MG2HFSynchronizer(_MG2HFSynchronizer):
         )
 
         # Copy bias
+        # NOTE: dormant for Alpha (attention_bias=False / add_qkv_bias unset), so this
+        # path is currently never taken. Two fixes vs the original code:
+        #   1. read from `linear_qgkv` (4-way Q|Gate|K|V), not `linear_qkv` — the
+        #      latter does not exist on gated attention and would AttributeError.
+        #   2. the Q bias must get the same gate-interleave transpose the weight path
+        #      applies above (reshape→transpose(1,2)→flatten) before splitting into
+        #      [Q,Gate] per head; the plain split below is INCOMPLETE. Apply the
+        #      weight-path reshape to `q_proj_bias` before enabling add_qkv_bias.
         if self.args.add_qkv_bias:
-            attn_proj_bias = attn.linear_qkv.bias.reshape(
+            attn_proj_bias = attn.linear_qgkv.bias.reshape(
                 (num_query_groups // tp, (2 + num_querys_per_group * 2)*dim, -1)
             )
             q_proj_bias, k_proj_bias, v_proj_bias = torch.split(
-                attn_proj_bias, 
-                [2*num_querys_per_group*dim, dim, dim], 
+                attn_proj_bias,
+                [2*num_querys_per_group*dim, dim, dim],
                 dim=1
             )
             self.copy(q_proj_bias, hf_attn.q_proj.bias, param_type=ParamType.QKV_B)

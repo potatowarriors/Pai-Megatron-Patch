@@ -17,42 +17,55 @@ distributed_checkpoints_convertor/
 │
 └── scripts/
     └── alpha/
-        ├── run_8xH20.sh        # Main conversion script
-        └── configs/            # Model configs (baseline_48L.sh)
+        ├── run_convert.sh      # Main conversion script (GPU-agnostic; EP=#GPU)
+        ├── run_8xH20.sh        # back-compat shim → run_convert.sh (GPUS=8)
+        ├── run_4xGPU.sh        # back-compat shim → run_convert.sh (GPUS=4)
+        └── configs/            # baseline_48L.sh (vestigial; flags now from common.pt)
 ```
 
 ## Quick Commands
+
+> **Alpha converter is now GPU-count agnostic** — use `run_convert.sh`. The model
+> skeleton flags for MG→HF are derived from the checkpoint's own `common.pt`
+> (ground truth) via `examples/alpha/tools/alpha_config.py emit-megatron-flags`,
+> not a hand-maintained `configs/baseline_48L.sh`. EP = GPU count (TP=PP=1);
+> torch_dist reshards an EP=8-trained checkpoint to any EP on load. The old
+> `run_8xH20.sh` / `run_4xGPU.sh` are thin shims (`GPUS=8` / `GPUS=4`).
+> For end-to-end convert→validate→benchmark, prefer `examples/alpha/evaluate.sh`.
 
 ### Alpha: Megatron → HuggingFace
 ```bash
 cd toolkits/distributed_checkpoints_convertor
 
-# Standard conversion
-bash scripts/alpha/run_8xH20.sh baseline_48L /mcore/path /hf/output true true bf16
+# Auto mode (detect latest checkpoint). GPUS auto-detected; override with GPUS=N.
+GPUS=4 bash scripts/alpha/run_convert.sh baseline_48L /training/outputs auto true true bf16
 
-# Auto mode (detect latest checkpoint)
-bash scripts/alpha/run_8xH20.sh baseline_48L /training/outputs auto true true bf16
+# Specific iteration
+GPUS=4 bash scripts/alpha/run_convert.sh baseline_48L /training/outputs auto:50000 true true bf16
 
-# Auto mode (specific iteration)
-bash scripts/alpha/run_8xH20.sh baseline_48L /training/outputs auto:50000 true true bf16
+# Explicit paths
+bash scripts/alpha/run_convert.sh baseline_48L /mcore/iter_dir /hf/output true true bf16
 ```
 
 ### Alpha: HuggingFace → Megatron
 ```bash
-bash scripts/alpha/run_8xH20.sh baseline_48L /hf/path /mcore/output false true bf16
+# HF→MG has no checkpoint to read, so flags come from the baseline_48L YAML.
+bash scripts/alpha/run_convert.sh baseline_48L /hf/path /mcore/output false true bf16
 ```
 
 ## Script Arguments
 
 ```bash
-bash scripts/alpha/run_8xH20.sh \
-  <MODEL_SIZE>      # Config name (e.g., baseline_48L)
+[GPUS=N] bash scripts/alpha/run_convert.sh \
+  <MODEL_SIZE>      # Config name (e.g., baseline_48L); structural flags come from
+                    #   the checkpoint for MG→HF, from this YAML for HF→MG
   <LOAD_DIR>        # Input checkpoint path (or training output dir for auto)
-  <SAVE_DIR>        # Output path ('auto' generates timestamped dir)
+  <SAVE_DIR>        # Output path ('auto' / 'auto:ITER' → hfmodel_<iter>)
   <MG2HF>           # true = MG→HF, false = HF→MG
   <USE_GPU>         # true = GPU conversion (fast), false = CPU only
   <PRECISION>       # bf16, fp16, or fp32
   [HF_DIR]          # (Optional) HF reference for config.json
+# Env GPUS: number of GPUs (default: auto-detect). EP=GPUS; num_experts % GPUS must be 0.
 ```
 
 ## Alpha Weight Mapping
