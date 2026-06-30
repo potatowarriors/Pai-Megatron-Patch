@@ -1,0 +1,124 @@
+# PROFILE preset — short, fresh-init run for nsys / throughput analysis on H100×4.
+#
+# Pair with the half-depth model and any data preset:
+#     bash train.sh analysis_24L profile mock              # pure compute/comm
+#     NSYS=1 bash train.sh analysis_24L profile mock       # + nsys timeline capture
+#     NSYS=1 bash train.sh analysis_24L profile stage1_v5_blend   # + real dataloader
+#
+# This is NOT a training recipe — it runs a handful of iters from random init
+# (no --load, no real LR schedule, no checkpoint save, no eval) purely to make
+# the steady-state forward/backward/optimizer kernels observable. To keep the
+# nsys trace small, Megatron's --profile opens a cudaProfilerApi capture window
+# only for iters [profile-step-start, profile-step-end); train.sh's NSYS=1
+# wrapper sets nsys --capture-range=cudaProfilerApi so ONLY that window lands in
+# the .nsys-rep. Everything else (MoE routing, Muon, recompute, fusions, bf16,
+# attention backend) is copied verbatim from stage1_resume.yaml so the profiled
+# kernels match the real run.
+
+# ── Parallelism (4-GPU debug node: EP=4, DP=4) ─────────────────────────────
+# Production is EP=8/DP=8 on 8×H100. Here world=4 -> EP=4 (experts sharded
+# 4-way) and DP=4 for the dense/mamba/attention params. A2A + grad-sync are
+# half-volume vs production but structurally identical. 192 % 4 == 0 -> ok.
+tensor-model-parallel-size: 1
+pipeline-model-parallel-size: 1
+expert-model-parallel-size: 4
+expert-tensor-parallel-size: 1
+context-parallel-size: 1
+
+# ── Batch (small GBS -> fast iters, but enough microbatches to see the loop) ─
+# DP=4, MBS=3 -> num_microbatches = GBS / (DP*MBS) = 96/12 = 8. Eight fwd/bwd
+# microbatches per iter is plenty to observe grad-accum + overlap-grad-reduce
+# without bloating the trace. Bump micro-batch-size to 6 here to profile the
+# documented "bigger MoE GEMM / fewer A2A" experiment (must divide GBS/DP=24).
+micro-batch-size: 3
+global-batch-size: 96
+
+# ── Run length + profiler capture window (iterations) ──────────────────────
+# 16 iters total; skip the first ~10 (cuBLAS/cuDNN autotune, allocator + CUDA
+# graph warmup, Muon momentum warmup) then capture 3 steady-state steps.
+train-iters: 16
+profile: true
+profile-step-start: 10
+profile-step-end: 13
+profile-ranks: "0 1 2 3"          # SPACE-separated string (NOT a YAML list) — nargs='+'
+
+# ── LR (irrelevant to kernel profiling; just a stable constant) ────────────
+lr: 2.5e-4
+min-lr: 2.5e-5
+lr-decay-style: constant
+lr-warmup-iters: 2
+clip-grad: 1.0
+
+# ── Activation checkpointing (match production so recompute cost is visible) ─
+recompute-granularity: selective
+recompute-modules: "layernorm moe"
+
+# ── MoE routing (DSV3-strict: aux-loss-free + complementary seq_aux_loss) ──
+moe-router-load-balancing-type: seq_aux_loss
+moe-router-score-function: sigmoid
+moe-router-enable-expert-bias: true
+moe-router-bias-update-rate: 0.001
+moe-token-dispatcher-type: alltoall
+
+# ── Optimizer (Muon — profile the Newton-Schulz orthogonalization cost) ────
+optimizer: dist_muon
+weight-decay: 0.1
+adam-beta1: 0.9
+adam-beta2: 0.95
+muon-momentum: 0.95
+muon-use-nesterov: true
+muon-num-ns-steps: 5
+muon-scale-mode: spectral
+muon-fp32-matmul-prec: medium
+muon-tp-mode: blockwise
+muon-extra-scale-factor: 0.2
+init-method-std: 0.008
+
+# ── QK-Clip (Muon stabilization, requires TE >= 2.9.0) ─────────────────────
+qk-clip: true
+qk-clip-alpha: 0.5
+qk-clip-threshold: 100
+log-max-attention-logit: true
+
+# ── LayerNorm WD (Qwen3-Next/Qwen3.5 official recipe) ──────────────────────
+no-weight-decay-cond-type: apply_wd_to_qk_layernorm
+
+# ── Document boundary handling (alpha hybrid recipe) ───────────────────────
+reset-position-ids: false
+reset-attention-mask: true
+eod-mask-loss: true
+
+# ── Precision ──────────────────────────────────────────────────────────────
+bf16: true
+
+# ── Checkpointing / eval: DISABLED for profiling ───────────────────────────
+# save-interval > train-iters so no checkpoint is written (train.sh still
+# passes --save <dir>, but it never triggers). eval-interval > train-iters so
+# the profile window is never polluted by a validation pass.
+save-interval: 100000
+no-save-optim: true
+ckpt-format: torch_dist
+eval-iters: 1
+eval-interval: 100000
+
+# ── Logging / runtime ──────────────────────────────────────────────────────
+log-interval: 1
+log-timers-to-tensorboard: true
+log-memory-to-tensorboard: true
+log-throughput: true              # TFLOP/s/GPU per iter — the cheap first-look metric
+timing-log-level: 2               # full per-iter breakdown (fwd/bwd/batch-gen/optimizer/...)
+timing-log-option: minmax         # min/max across ranks -> free straggler signal
+tensorboard-queue-size: 1
+distributed-timeout-minutes: 60
+manual-gc: true
+manual-gc-interval: 5
+
+# ── Performance knobs (match production timeline) ──────────────────────────
+overlap-grad-reduce: true
+attention-backend: auto
+cross-entropy-loss-fusion: true
+cross-entropy-fusion-impl: te
+
+# NOTE: no wandb-project here on purpose -> train.sh won't require
+# --wandb-exp-name and won't log a throwaway profiling run. If WANDB_API_KEY is
+# exported in your shell, run with WANDB_MODE=disabled to be safe.

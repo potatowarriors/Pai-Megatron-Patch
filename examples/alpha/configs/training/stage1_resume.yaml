@@ -1,0 +1,192 @@
+# Stage 1 RESUME from iter 10k + throughput optimizations.
+#
+# Why this preset exists (2026-05-26):
+#   A compute-session failure interrupted the Stage 1 run. The run reached
+#   iter ~16k but the only checkpoint on disk is iter 10000 (save-interval was
+#   10000). We resume from iter 10000 and, while at it, fold in throughput
+#   optimizations that the original launch did not have.
+#
+# This is a *continuation* of the same Stage 1 (same model, same dataset). The
+# DATA position carries over via consumed_train_samples (loaded from the ckpt).
+# The LR SCHEDULE does NOT carry over: a no-save-optim checkpoint has no
+# scheduler state, so the scheduler clock restarts at 0 on resume (see the
+# "CRITICAL" note in the schedule section). We therefore re-express the WSD
+# schedule over the *remaining* token budget, like the Stage 2 transitions do.
+# `stage1.yaml` is left untouched as the canonical from-scratch recipe.
+#
+# Launch:
+#   bash train.sh baseline_48L stage1_resume stage1_v5_blend
+#
+# Delta vs stage1.yaml — ACTUALLY APPLIED (4 changes):
+#   1. load + no-load-optim          — resume weights from the 10k checkpoint
+#   2. LR schedule reframed           — short re-warmup + decay over remaining
+#                                       budget (scheduler clock resets to 0)
+#   3. LR bump 2e-4 -> 2.5e-4         — √k batch-scaling (min-lr 2e-5 -> 2.5e-5)
+#   4. save/eval-interval 10000->5000 — never lose more than 5k iters again
+#
+# Tried-and-NOT-kept (do not re-add without verification — see inline notes):
+#   - moe-shared-expert-overlap: true  → REVERTED. Caused the ~50 throughput
+#       regression (serializes under CUDA_DEVICE_MAX_CONNECTIONS=1). See § MoE routing.
+#   - micro-batch-size 3 -> 6 / recompute-modules += core_attn → NEVER APPLIED.
+#       Planned together but not committed; the values below stay at 3 / "layernorm
+#       moe" (identical to stage1.yaml). Left as a documented future experiment.
+
+# ── Sample (token-based) schedule ──────────────────────────────────────────
+# CRITICAL — the LR scheduler clock RESETS to 0 on this resume.
+# The 10k checkpoint was saved with no-save-optim=true, so it contains NO
+# opt_param_scheduler state (checkpointing.py:848 gates the scheduler save
+# behind `not no_save_optim`). On load, get_optimizer_param_scheduler() builds
+# a fresh scheduler with num_steps=0 and there is NO code path that re-seeds
+# num_steps from the (correctly loaded) consumed_train_samples. So the LR
+# schedule restarts from zero at the resume point — exactly like the Stage 2
+# transitions (stage2_2.yaml: "--no-load-optim ... fresh cosine schedule").
+#
+# Therefore the schedule keys below describe the REMAINING segment, measured
+# from num_steps=0 at iter 10,000 — NOT the absolute from-scratch budget.
+# Mirrors the Stage 2-2 recipe: short re-warmup + decay span = remaining work.
+#   resume @ iter 10,000  = 15,360,000 consumed samples
+#   absolute stop @ iter 71,526 (train-samples, unchanged) → 61,526 iters left
+#   remaining = 61,526 × 1536 = 94,503,936 samples  ← scheduler clock 0→here
+#
+# WSD on this segment: warmup(200) → stable → cosine cooldown(last 6,358 iters).
+#   anneal start (scheduler) = 94,503,936 − 9,765,888 = 84,738,048 (= 55,168 it)
+#                            → absolute iter 65,168; reaches min_lr at iter 71,526.
+# All values are exact integer multiples of GBS=1536.
+train-samples: 109863936          # ABSOLUTE stop = iter 71,526 (UNCHANGED; stop is absolute)
+lr-warmup-samples: 307200         # SHORT re-warmup: 200 iters × 1536 (was 1,907; tunable)
+lr-decay-samples: 94503936        # = remaining 61,526 iters × 1536 (NOT 109.86M — scheduler clock)
+lr-wsd-decay-samples: 9765888     # = 6,358 iters × 1536 → 40.001B tok cooldown (unchanged)
+
+# ── LR ──────────────────────────────────────────────────────────────────────
+# √k batch-scaling: ref GBS=256→lr=1e-4 (Stage 2-2); GBS=1536 → k=1536/256=6 →
+# √6 × 1e-4 ≈ 2.449e-4, rounded to a clean 2.5e-4. (Supersedes the earlier
+# 2.0e-4, which under-scaled.) k is the GLOBAL-batch ratio, not micro-batch-size.
+# The +25% jump vs the original run is absorbed by the 200-iter re-warmup.
+lr: 2.5e-4
+min-lr: 2.5e-5               # 10:1 WSD decay ratio preserved
+lr-decay-style: WSD
+lr-wsd-decay-style: cosine
+
+# ── Parallelism ─────────────────────────────────────────────────────────────
+# TP=1 (Mamba), PP=1, EP=8 (single node 8×GPU → DP=8). UNCHANGED.
+tensor-model-parallel-size: 1
+pipeline-model-parallel-size: 1
+expert-model-parallel-size: 8
+expert-tensor-parallel-size: 1
+context-parallel-size: 1
+
+# NOT APPLIED — kept at stage1.yaml's value (3). A larger MBS (6) was planned to
+# get bigger MoE grouped-GEMMs + fewer A2A dispatches (GBS stays 1536, so
+# num_microbatches = 192/MBS; MBS must divide 192: 3->64, 6->32, 4->48; loss/grad
+# unchanged). It was never committed and needs an OOM check first (drop to 4 if the
+# iter-30 mock smoke OOMs). Stays 3 here so this resume matches stage1 exactly.
+micro-batch-size: 3
+global-batch-size: 1536           # DO NOT CHANGE — WSD token budget depends on it
+
+# ── Activation checkpointing ───────────────────────────────────────────────
+# NOT APPLIED — kept at stage1.yaml's value ("layernorm moe"). Adding core_attn
+# (recompute attention, 6 layers/12.5%) was planned only to free activation memory
+# for the MBS=6 above; since MBS stayed 3, there is no reason to add it. Identical
+# to stage1.yaml.
+recompute-granularity: selective
+recompute-modules: "layernorm moe"
+
+# ── MoE routing (DSV3-strict: aux-loss-free + complementary seq_aux_loss) ─
+# UNCHANGED from stage1.yaml.
+moe-router-load-balancing-type: seq_aux_loss
+moe-router-score-function: sigmoid
+moe-router-enable-expert-bias: true
+moe-router-bias-update-rate: 0.001
+moe-token-dispatcher-type: alltoall
+
+# RESUME #2 (REVERTED 2026-05-26): moe-shared-expert-overlap was the cause of the
+# ~50 throughput regression and has been removed. It schedules the shared expert
+# onto a separate CUDA stream (shared_experts.py:120,160,275) expecting overlap with
+# the routed-expert dispatch A2A — but train.sh:71 hardcodes
+# CUDA_DEVICE_MAX_CONNECTIONS=1, so the single hardware queue SERIALIZES the two
+# streams: zero overlap gain, plus cross-stream event-barrier overhead on every one
+# of the 24 MoE layers, every step. (The earlier "CUDA_DEVICE_MAX_CONNECTIONS=1 →
+# low risk" note was backwards.) Megatron's =1 requirement (arguments.py:1029) only
+# applies when TP>1 or CP>1; alpha is TP=1/CP=1 so =1 is just a copied convention.
+# To actually use this flag, CUDA_DEVICE_MAX_CONNECTIONS would need raising (8–32)
+# AND a mock tokens/sec A/B to confirm net gain — out of scope for this resume.
+
+# ── Optimizer (Muon) ───────────────────────────────────────────────────────
+# UNCHANGED. Note: no-save-optim means every resume rebuilds Muon momentum via
+# warmup regardless, so adopting the perf knobs above adds no extra numerical
+# discontinuity beyond a normal resume.
+optimizer: dist_muon
+weight-decay: 0.1
+adam-beta1: 0.9
+adam-beta2: 0.95
+muon-momentum: 0.95
+muon-use-nesterov: true
+muon-num-ns-steps: 5
+muon-scale-mode: spectral
+muon-fp32-matmul-prec: medium
+muon-tp-mode: blockwise
+muon-extra-scale-factor: 0.2
+init-method-std: 0.008
+clip-grad: 1.0
+
+# ── QK-Clip (Muon stabilization, requires TE >= 2.9.0) ────────────────────
+qk-clip: true
+qk-clip-alpha: 0.5
+qk-clip-threshold: 100
+log-max-attention-logit: true
+
+# ── LayerNorm WD (Qwen3-Next/Qwen3.5 official recipe) ─────────────────────
+no-weight-decay-cond-type: apply_wd_to_qk_layernorm
+
+# ── Document boundary handling (alpha hybrid recipe) ──────────────────────
+# UNCHANGED — see stage1.yaml for the full rationale (Mamba ignores masks,
+# RoPE relative-position invariance, PackedSeqParams incompatibility).
+reset-position-ids: false
+reset-attention-mask: true
+eod-mask-loss: true
+
+# ── Precision ──────────────────────────────────────────────────────────────
+bf16: true
+
+# ── Checkpointing / RESUME ──────────────────────────────────────────────────
+# RESUME #1: resume from the 10k checkpoint. `--load` auto-selects iter_0010000
+# via latest_checkpointed_iteration.txt (=10000). no-load-optim is REQUIRED
+# because the checkpoint has no optimizer state (no-save-optim was on). We do
+# NOT set `finetune` — that would reset consumed_train_samples to 0 and replay
+# data from the start. Omitting it preserves consumed_train_samples (15.36M),
+# so the data position and WSD schedule continue seamlessly from iter 10k.
+# `--save` is derived by train.sh to a fresh timestamped dir (source not
+# overwritten); subsequent saves land at 15000, 20000, ...
+load: /home/work/vidsearch/repos/project_s/Pai-Megatron-Patch/examples/alpha/outputs/alpha_baseline_48L_stage1_20260512_170157/checkpoints
+no-load-optim: true
+
+# RESUME #5: save-interval 10000 -> 5000. This is the fix for the root cause of
+# this restart (lost iters 10k→16k). no-save-optim keeps each save to
+# weights-only, so 2× more frequent saving is cheap.
+save-interval: 5000
+no-save-optim: true
+ckpt-format: torch_dist
+
+# ── Eval ───────────────────────────────────────────────────────────────────
+eval-iters: 3
+eval-interval: 5000
+
+# ── Logging / runtime ──────────────────────────────────────────────────────
+log-interval: 1
+log-timers-to-tensorboard: true
+log-memory-to-tensorboard: true
+log-validation-ppl-to-tensorboard: true
+log-throughput: true              # used for the throughput A/B in Verification
+tensorboard-queue-size: 1
+distributed-timeout-minutes: 60
+manual-gc: true
+manual-gc-interval: 5
+
+# ── Performance knobs ──────────────────────────────────────────────────────
+overlap-grad-reduce: true         # already on in stage1.yaml; kept
+attention-backend: auto
+cross-entropy-loss-fusion: true
+cross-entropy-fusion-impl: te
+
+# ── WANDB ──────────────────────────────────────────────────────────────────
+wandb-project: alpha-pretraining

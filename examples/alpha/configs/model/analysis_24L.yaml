@@ -1,0 +1,96 @@
+# Alpha ANALYSIS 24L model — half-depth twin of baseline_48L for 4-GPU profiling.
+#
+# Purpose: throughput / nsys analysis on the H100×4 *debugging* node (NOT the
+# 8×H100 training node). Halving the layer count (48 -> 24) keeps a structurally
+# faithful copy of the production architecture — same hidden/FFN/head dims, same
+# MoE recipe, same hybrid block ratio — at ~half the param + activation memory,
+# so it builds fast and iterates quickly for profiling.
+#
+# WHAT TRANSFERS to the real 48L/EP8 run (per-GPU work is GPU-count-invariant):
+#   - GatedDeltaNet chunk-scan kernel shapes & efficiency
+#   - per-rank MoE grouped-GEMM behaviour, attention/MLP fusion, recompute cost
+#   - dataloader (batch-generator) timing
+# WHAT DOES NOT transfer 1:1 (see configs/training/profile.yaml, EP=4):
+#   - EP all-to-all *volume* (4-way vs 8-way) and DP grad-sync volume
+#   - per-rank expert COUNT: 192 experts / EP=4 = 48 experts/rank, vs 24 under
+#     EP=8. MoE grouped-GEMMs here are ~2× the production per-rank size. Read
+#     the MoE timeline for *structure/overlap*, not absolute GEMM duration.
+#
+# Identical to baseline_48L.yaml EXCEPT:
+#   - num-layers 48 -> 24
+#   - hybrid-override-pattern truncated to 3 repeats of the 8-layer block
+#     "M-M-M-*-" (was 6). Preserves the exact M/MoE/Attn mix and 0.125 attn ratio:
+#       24 layers = M(9) + -(12 MoE) + *(3 Attn).
+# Everything else is byte-for-byte baseline_48L so the kernels match.
+
+# ── Architecture ───────────────────────────────────────────────────────────
+num-layers: 24
+hidden-size: 2048
+ffn-hidden-size: 8192
+num-attention-heads: 16
+kv-channels: 256
+
+# Group Query Attention (head_dim=256 uniform; Q upcast: 16 heads × 256 = 4096)
+group-query-attention: true
+num-query-groups: 2
+
+# ── MoE (DSV3-style routing on Qwen3.5 expert dim) ─────────────────────────
+num-experts: 192                  # UNCHANGED. 192 % EP(4) == 0 -> 48 experts/rank.
+moe-ffn-hidden-size: 512          # Qwen3.5 expert dim
+moe-router-topk: 8
+moe-aux-loss-coeff: 1.0e-4        # DSV3 best practice
+moe-router-dtype: fp32
+moe-grouped-gemm: true
+moe-permute-fusion: true
+moe-router-fusion: true
+moe-shared-expert-intermediate-size: 512   # Qwen3.5 shared expert dim
+moe-shared-expert-gate: true
+
+# DSV3 group-limited routing: 8 groups × 24 experts/group, token sees top-4 groups.
+moe-router-num-groups: 8
+moe-router-group-topk: 4
+moe-router-topk-scaling-factor: 2.5
+
+# NOTE: moe-router-load-balancing-type / score-function / enable-expert-bias /
+# bias-update-rate live in the *training* preset (configs/training/profile.yaml).
+
+# ── Hybrid (Mamba + Attention) ─────────────────────────────────────────────
+is-hybrid-model: true
+hybrid-attention-ratio: 0.125
+hybrid-mlp-ratio: 0.5
+# 24 layers: M(9) + -(12 MoE) + *(3 Attn) = 24. M=GatedDeltaNet, -=MoE, *=Attention.
+# = 3 × the 8-layer block "M-M-M-*-" (baseline_48L uses 6 × the same block).
+hybrid-override-pattern: "M-M-M-*-M-M-M-*-M-M-M-*-"
+mamba-state-dim: 128
+mamba-head-dim: 128
+mamba-num-groups: 16
+mamba-num-heads: 32
+
+# ── Normalization & activation ─────────────────────────────────────────────
+normalization: RMSNorm
+norm-epsilon: 1.0e-6
+qk-layernorm: true
+swiglu: true
+attention-dropout: 0.0
+hidden-dropout: 0.0
+disable-bias-linear: true
+
+# ── Positional encoding (RoPE) ─────────────────────────────────────────────
+position-embedding-type: rope
+use-rotary-position-embeddings: true
+rotary-base: 10000000
+rotary-percent: 0.25
+
+# ── Sequence length ────────────────────────────────────────────────────────
+seq-length: 4096
+max-position-embeddings: 262144
+
+# ── Tokenizer & vocab ──────────────────────────────────────────────────────
+untie-embeddings-and-output-weights: true
+padded-vocab-size: 163968
+tokenizer-type: HuggingFaceTokenizer
+tokenizer-model: /home/work/vidsearch/repos/project_s/Pai-Megatron-Patch/examples/alpha/tokenizer_v5
+
+# ── Backend wiring ─────────────────────────────────────────────────────────
+use-mcore-models: true
+transformer-impl: transformer_engine

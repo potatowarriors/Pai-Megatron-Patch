@@ -68,7 +68,11 @@ if $SMOKE_RUN; then
 fi
 
 # ── Megatron-required env ──────────────────────────────────────────────────
-export CUDA_DEVICE_MAX_CONNECTIONS=1
+# CUDA_DEVICE_MAX_CONNECTIONS: number of HW launch queues. Megatron defaults to 1
+# (required only for TP>1 / CP>1 deterministic overlap). Alpha is TP=1/CP=1, so it
+# can be raised to overlap the EP all-to-all with expert GEMM — overridable here
+# for throughput A/B (see docs/throughput_optimization.md lever 1). Default stays 1.
+export CUDA_DEVICE_MAX_CONNECTIONS=${CUDA_DEVICE_MAX_CONNECTIONS:-1}
 export TORCH_FORCE_NO_WEIGHTS_ONLY_LOAD=true
 
 # ── PyTorch / NCCL tuning ──────────────────────────────────────────────────
@@ -206,10 +210,39 @@ echo "=============================================="
 
 LOG_FILE="$LOG_DIR/train_${TIMESTAMP}.log"
 
+# ── Optional Nsight Systems wrapper (opt-in: NSYS=1 bash train.sh ...) ──────
+# Wraps the launch in `nsys profile`. We use --capture-range=cudaProfilerApi so
+# nsys only records the window Megatron opens via cudaProfilerStart/Stop (driven
+# by --profile / --profile-step-start / --profile-step-end in the training
+# preset). That keeps the .nsys-rep to the few steady-state steps you care about
+# instead of the whole run. Pair with a preset that sets --profile (e.g.
+# configs/training/profile.yaml); without it nsys captures an empty window.
+#   -s none      : no CPU sampling (lighter, fewer artifacts)
+#   -t nvtx,cuda : trace Megatron's NVTX region labels + CUDA kernels/NCCL
+# Open the resulting .nsys-rep in the Nsight Systems GUI to read the timeline.
+NSYS_PREFIX=()
+if [[ "${NSYS:-0}" == "1" ]]; then
+    if ! command -v nsys >/dev/null 2>&1; then
+        echo "ERROR: NSYS=1 but 'nsys' not found in PATH." >&2
+        exit 1
+    fi
+    NSYS_OUT="$LOG_DIR/nsys_${RUN_NAME}"
+    NSYS_PREFIX=(nsys profile
+        -s none
+        -t nvtx,cuda
+        -o "$NSYS_OUT"
+        --capture-range=cudaProfilerApi
+        --capture-range-end=stop
+        --force-overwrite true)
+    echo "  nsys:           ON  ->  ${NSYS_OUT}.nsys-rep"
+    echo "=============================================="
+fi
+
 # ── Launch ─────────────────────────────────────────────────────────────────
 # Run with `python -m torch.distributed.run` rather than the `torchrun` shim
 # (system shims often hardcode #!/usr/bin/python and bypass our venv).
-exec python3 -m torch.distributed.run \
+# "${NSYS_PREFIX[@]}" expands to nothing when NSYS is unset (no-op wrapper).
+exec "${NSYS_PREFIX[@]}" python3 -m torch.distributed.run \
     --nnodes "$NUM_NODES" \
     --node_rank "$NODE_RANK" \
     --nproc_per_node "$GPUS_PER_NODE" \
