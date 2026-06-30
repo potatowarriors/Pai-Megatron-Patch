@@ -135,6 +135,56 @@ if __name__ == "__main__":
     _training_mod.clip_qk = _hybrid_clip_qk
     # ─────────────────────────────────────────────────────────────────────
 
+    # ── FP8 GDN-exclusion: keep Mamba/GatedDeltaNet layers in bf16 ─────────
+    # A global --fp8-format autocast quantizes EVERY TE linear GEMM — including
+    # the GatedDeltaNet in_proj/out_proj (the gateway GEMMs feeding the delta-rule
+    # recurrence). Alpha runs the Pai *custom* GDN which, unlike upstream
+    # megatron/core/ssm/gated_delta_net.py, has NO fp8 alignment guard → SSM fp8 is
+    # unproven. Low-risk path: FP8 only the attention ('*') and MoE ('-') layers;
+    # force the GDN 'M' layers to bf16.
+    #
+    # Hook: get_fp8_context() returns nullcontext (bf16) whenever
+    # is_first_last_bf16_layer(config, layer_no) is True. We extend that predicate
+    # to also return True for 'M' positions of hybrid_override_pattern. Per-layer
+    # bf16 requires a NON-delayed recipe (blockwise/tensorwise/mxfp8) — upstream
+    # asserts delayed+per-layer-bf16 is unsupported, so pair this with
+    # --fp8-recipe blockwise. When fp8 is OFF, get_fp8_context short-circuits and
+    # never calls this predicate → strict no-op for bf16 runs.
+    import megatron.core.fp8_utils as _fp8_utils
+
+    _orig_is_first_last_bf16_layer = _fp8_utils.is_first_last_bf16_layer
+    _gdn_bf16_state = {"mset": None, "logged": False}
+
+    def _gdn_bf16_layer_set():
+        """Global layer indices that must stay bf16 = 'M' (GDN) positions."""
+        if _gdn_bf16_state["mset"] is None:
+            try:
+                from megatron.training import get_args
+                pattern = getattr(get_args(), "hybrid_override_pattern", None) or ""
+            except Exception:
+                pattern = ""
+            _gdn_bf16_state["mset"] = {i for i, c in enumerate(pattern) if c == "M"}
+        return _gdn_bf16_state["mset"]
+
+    def _alpha_is_first_last_bf16_layer(config, layer_no):
+        # Preserve upstream first/last-layers-bf16 behavior.
+        if _orig_is_first_last_bf16_layer(config, layer_no):
+            return True
+        if layer_no is None or layer_no < 0:
+            return False
+        mset = _gdn_bf16_layer_set()
+        if mset and not _gdn_bf16_state["logged"]:
+            print_rank_0(
+                f"[alpha-fp8] GDN/Mamba 'M' layers forced to bf16 under FP8: "
+                f"{len(mset)}/{getattr(config, 'num_layers', '?')} "
+                f"(attention '*' + MoE '-' layers run FP8)"
+            )
+            _gdn_bf16_state["logged"] = True
+        return layer_no in mset
+
+    _fp8_utils.is_first_last_bf16_layer = _alpha_is_first_last_bf16_layer
+    # ─────────────────────────────────────────────────────────────────────
+
     # ── LayerNorm WD: apply_wd_to_all_layernorm ────────────────────────
     # Upstream get_no_weight_decay_cond only supports 'apply_wd_to_qk_layernorm'
     # (q/k_layernorm only). For Stage 2+ ablation we want WD on ALL standard
