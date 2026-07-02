@@ -866,16 +866,37 @@ bash toolkits/pretrain_data_preprocessing/run_stage2_v5.sh pack
 bash train.sh baseline_48L <preset> stage2_v5_blend_packed --train-samples <N>
 ```
 
-### 실측 결과 (검증됨)
-| 데이터셋 | fill ratio | truncation(BFP) | baseline doc-splits | 감소 |
-|---|---|---|---|---|
-| fineweb2hq (web) | 99.95% (pad 0.047%) | 380,048 (긴 문서 분할) | 1,395,352 | **−72.8%** |
-| code/transpilation | 99.01% (pad 0.99%) | 0 (4096 초과 문서 없음) | 7,139,834 | **−100%** |
+### 실측 결과 — 전체 10개 완료 (2026-07-02 ✅, `stage2_packed/`)
+| 데이터셋 | fill | 감소 | 크기 |
+|---|---|---|---|
+| fineweb2hq | 99.95% | −72.8% | 22 G |
+| korean_web | 99.99% | −78.5% | 72 G |
+| code/transpilation | 99.01% | −100% | 111 G |
+| code/student_teacher | 99.05% | −100% | 98 G |
+| code/code_review | 99.95% | −99.5% | 289 G |
+| code/rewriting | 99.78% | −100% | 290 G |
+| math | 99.69% | −82.5% | 770 G |
+| code/question_answering | 99.08% | −100% | 911 G |
+| nemotron_cc_hq/actual | 100.00% | −81.0% | 2.0 T |
+| nemotron_cc_hq/qa_pairs | 99.81% | −100% | 1.8 T |
+| **합계** | **전부 ≥99%** | code −100% / web·math·CC-HQ-actual −73~82% (긴 문서 잔존) | **6.2 TiB** |
+
+각 셋 자체 post-verify(전부 4096 / 토큰 보존 / round-trip 20/20) 통과 + 두 CC-HQ는 독립
+재로드로 bins·토큰 재확인(actual 129,442,937 / qa 116,351,363 bins). 학습: `train.sh
+baseline_48L <preset> stage2_v5_blend_packed --train-samples N`.
 
 **Loader differential** (실제 `GPTDataset` 경로, fineweb2hq 3000 samples,
 `tests/preflight_stage2/run_pack_loader_check.py`): **bad-truncation
 (whole docs + 잘린 small doc) 82.0% → 0.0%**. ends-on-doc-boundary 0.03% → 72.6%
 (나머지 27.4%는 4096 초과 문서의 *순수 단일-문서 chunk* — fragmentation 아님).
+
+### emit 성능 — threaded prefetch (`--emit-threads`, 기본 48)
+emit 병목은 소스 `.bin`에서 bin 멤버 문서를 **무작위로 읽는 NFS latency**(대역폭 아님).
+`os.pread`(syscall이 GIL 해제)로 read 48개 동시 발행해 latency를 숨기고, 쓰기는 메인
+스레드에서 순서대로 → **출력 byte-identical**(회귀 테스트로 잠금). 실측: cchq_actual
+**8,183 bins/s = serial(~1,000) 대비 ~8.2×**(단독). 병렬 2개 동시엔 합계 쓰기 ~132 MB/s로
+수렴(그 시점 병목 = NFS write 대역폭). **대형 셋 필수** — 없으면 CC-HQ가 각 ~30h+, 있으면
+두 개 병렬로 ~반나절.
 
 ### 핵심 설계 (정합성, helpers.cpp/gpt_dataset.py 소스 대조 검증)
 - **bin capacity = seq_length = 4096 (L+1 아님).** Megatron이 sample당 4097 토큰을 읽어

@@ -73,6 +73,8 @@ import argparse
 import os
 import sys
 import time
+from collections import deque
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 import numpy as np
@@ -292,6 +294,11 @@ def main():
     p.add_argument("--verify-samples", type=int, default=20,
                    help="Number of emitted bins to round-trip verify against the source "
                         "(0 to skip). Default 20.")
+    p.add_argument("--emit-threads", type=int, default=48,
+                   help="Concurrent reader threads for the emit phase. Emit is NFS "
+                        "random-read latency-bound, so parallel os.pread hides it (big "
+                        "speedup on large shards). Writes stay ordered on the main thread "
+                        "so output is byte-identical to --emit-threads 1. Default 48.")
     p.add_argument("--megatron-path",
                    default="/home/work/vidsearch/repos/project_s/Pai-Megatron-Patch/"
                            "backends/megatron/Megatron-LM-251125",
@@ -401,42 +408,80 @@ def main():
     print(f"[bestfit_pack] emitting {total_bins:,} bins -> {out_prefix}.{{bin,idx}}", flush=True)
     builder = indexed_dataset.IndexedDatasetBuilder(out_bin, dtype=dtype)
 
-    def emit_bin(token_arrays):
-        """Concatenate piece token arrays, pad to exactly cap with EOD, write as ONE seq."""
-        arr = np.concatenate(token_arrays) if len(token_arrays) > 1 else token_arrays[0]
+    # Emit is NFS random-read latency-bound. Read each bin's member docs via
+    # os.pread (releases the GIL -> true parallel reads) on a shared read-only fd,
+    # assemble+pad in worker threads, and write ORDERED on the main thread so the
+    # output is byte-identical to a serial emit. Byte offsets come from the .idx
+    # sequence_pointers, exactly mirroring IndexedDataset.get().
+    src_fd = os.open(in_prefix + ".bin", os.O_RDONLY)
+    seq_ptr = np.asarray(ds.index.sequence_pointers)   # int64 byte offsets
+    itemsize = np.dtype(dtype).itemsize
+    pdoc, poff, plen = pool["doc"], pool["off"], pool["len"]
+    fdoc, foff, flen = full["doc"], full["off"], full["len"]
+
+    def _read(doc, off, length):
+        nbytes = int(length) * itemsize
+        buf = os.pread(src_fd, nbytes, int(seq_ptr[int(doc)]) + int(off) * itemsize)
+        return np.frombuffer(buf, dtype=dtype)
+
+    def build_pool_bin(members):
+        parts = [_read(pdoc[m], poff[m], plen[m]) for m in members]
+        arr = np.concatenate(parts) if len(parts) > 1 else parts[0]
         fill_n = arr.shape[0]
         assert fill_n <= cap, f"bin overflow {fill_n} > {cap}"
         if fill_n < cap:
+            # pad to exactly cap with EOD (masked by --eod-mask-loss)
             arr = np.concatenate([arr, np.full(cap - fill_n, eod, dtype=dtype)])
-        assert arr.shape[0] == cap
-        # CRITICAL invariant: single-element length list so GPTDataset treats the
-        # whole bin as one sequence (it ignores document_indices).
-        builder.add_document(arr, [cap])
+        return arr
 
+    def build_full_bin(j):
+        return _read(fdoc[j], foff[j], flen[j])   # exactly cap tokens, no pad
+
+    def ordered_results(build_fn, arg_iter, window, ex):
+        """Yield build_fn(arg) in submission order, keeping `window` reads in flight."""
+        futs = deque()
+        for _ in range(window):
+            try:
+                futs.append(ex.submit(build_fn, next(arg_iter)))
+            except StopIteration:
+                break
+        while futs:
+            r = futs.popleft().result()
+            try:
+                futs.append(ex.submit(build_fn, next(arg_iter)))
+            except StopIteration:
+                pass
+            yield r
+
+    n_threads = max(1, args.emit_threads)
+    window = n_threads * 4
     t0 = time.time()
     written = 0
-    # pool bins: group pool pieces by bin id (stable argsort -> contiguous groups)
-    if item_bin.shape[0] > 0:
-        sort_idx = np.argsort(item_bin, kind="stable")
-        sorted_bin = item_bin[sort_idx]
-        # group boundaries where bin id changes
-        starts = np.concatenate(([0], np.where(np.diff(sorted_bin) != 0)[0] + 1))
-        ends = np.concatenate((starts[1:], [sort_idx.shape[0]]))
-        for gi in range(starts.shape[0]):
-            members = sort_idx[starts[gi]:ends[gi]]
-            arrays = [ds.get(int(pool["doc"][m]), int(pool["off"][m]), int(pool["len"][m]))
-                      for m in members]
-            emit_bin(arrays)
-            written += 1
-            if written % 2_000_000 == 0:
-                print(f"    emitted {written:,}/{total_bins:,}  "
-                      f"{written/(time.time()-t0)/1e3:.0f}K bins/s", flush=True)
-    # full bins: one piece each (already cap-long, no pad)
-    for j in range(n_full_bins):
-        arr = ds.get(int(full["doc"][j]), int(full["off"][j]), int(full["len"][j]))
-        emit_bin([arr])
-        written += 1
+    with ThreadPoolExecutor(max_workers=n_threads) as ex:
+        # pool bins: group pool pieces by bin id (stable argsort -> contiguous groups)
+        if item_bin.shape[0] > 0:
+            sort_idx = np.argsort(item_bin, kind="stable")
+            sorted_bin = item_bin[sort_idx]
+            starts = np.concatenate(([0], np.where(np.diff(sorted_bin) != 0)[0] + 1))
+            ends = np.concatenate((starts[1:], [sort_idx.shape[0]]))
+            pool_args = (sort_idx[starts[gi]:ends[gi]] for gi in range(starts.shape[0]))
+            for arr in ordered_results(build_pool_bin, pool_args, window, ex):
+                assert arr.shape[0] == cap
+                # CRITICAL invariant: single-element length list so GPTDataset treats
+                # the whole bin as one sequence (it ignores document_indices).
+                builder.add_document(arr, [cap])
+                written += 1
+                if written % 2_000_000 == 0:
+                    print(f"    emitted {written:,}/{total_bins:,}  "
+                          f"{written/(time.time()-t0)/1e3:.0f}K bins/s", flush=True)
+        # full bins: one piece each (already cap-long, no pad)
+        if n_full_bins > 0:
+            for arr in ordered_results(build_full_bin, iter(range(n_full_bins)), window, ex):
+                assert arr.shape[0] == cap
+                builder.add_document(arr, [cap])
+                written += 1
 
+    os.close(src_fd)
     builder.finalize(out_idx)
     print(f"[bestfit_pack]   emitted {written:,} bins in {time.time()-t0:.1f}s")
     assert written == total_bins, (written, total_bins)
