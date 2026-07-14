@@ -51,6 +51,24 @@ sync-DP의 통신 병목을 우회하는 파일럿. 구현: `../diloco_patch.py`
 뒤짐. 이는 DiLoCo 고유 결함이 아니라 LR 스케줄을 1536 기준으로 둔 채 유효 배치를
 3072로 키운 표준 대배치 비용. 채택 시 LR/스케줄을 유효 배치 기준으로 재조정할 것.
 
+## v2: overlapped sync + dense dedup (2026-07-14, MuLoCo repo 참고)
+
+facebookresearch/MuLoCo의 torchft(`fragment_sync_delay`) 방식을 이식한 개선판.
+mock 스모크(H=6, τ=2, 15 iter)로 검증:
+
+- **overlapped sync (`DILOCO_TAU`>0)**: 스냅샷만 메인 스레드(D2H ~3초), allreduce+
+  outer 계산은 워커 스레드에서 compute와 병행, τ스텝 뒤 **additive correction**으로
+  적용(지연 구간의 로컬 진행 보존). wire 40초가 완전히 은닉되어 적용 스텝의 step
+  time이 일반 스텝과 동일(57.5초). **노출 비용 sync당 ~6.4초(snap+apply) →
+  H=30 기준 +0.35%** (v1 blocking은 +10.6%였음).
+  τ>0에서는 replica가 τ-구간 로컬 진행만큼 합법적으로 다르므로 divergence 가드는
+  θ_global(결정적 CPU fp32) 기준으로 검사. τ=0이면 v1과 동일한 동기 방식(bit-일치).
+- **dense dedup**: Megatron 마커 `param.allreduce==False`로 expert 판별. dense
+  279개 텐서(1.53B)는 노드 내 DP-동일하므로 local_rank0 페어만 wire 전송, 나머지
+  rank에는 기본 그룹 NCCL broadcast(NVLink)로 배포. wire 볼륨 53→32GB.
+- 주의: v2의 τ>0 변형은 mechanics 검증만 완료(품질은 Streaming DiLoCo 문헌 근거).
+  장기 채택 전 τ∈{0,2,5} 짧은 loss A/B 권장.
+
 ## 미해결/후속
 
 - **H 스윕** (30 vs 100): sync 오버헤드 3.1%→0.9%; MoE expert drift 상한 확인
