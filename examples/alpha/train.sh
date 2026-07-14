@@ -87,6 +87,17 @@ export NCCL_DEBUG="${NCCL_DEBUG:-VERSION}"
 export NVTE_NORM_FWD_USE_CUDNN=1
 export NVTE_NORM_BWD_USE_CUDNN=1
 export NVTE_ALLOW_NONDETERMINISTIC_ALGO=1
+
+# ── cuDNN preload (TE 2.9 fused-attn max_logit → QK-Clip 필수) ─────────────
+# NGC 25.03 이미지의 시스템 cuDNN 9.8에는 return_max_logit 그래프 엔진이 없어
+# 학습 첫 step에서 "No valid engine configs" 크래시. pip nvidia-cudnn-cu12(>=9.11,
+# 검증은 9.24)를 설치해 두면 여기서 전체 서브라이브러리를 LD_PRELOAD로 선제 로드.
+# LD_LIBRARY_PATH만으로는 TE RUNPATH 탓에 main(9.24)/sub(9.8) lib이 섞여
+# CUDNN_STATUS_SUBLIBRARY_LOADING_FAILED가 남 — PRELOAD가 결정적 해법 (2026-07-13).
+CUDNN_PIP_LIB=/usr/local/lib/python3.12/dist-packages/nvidia/cudnn/lib
+if [ -d "$CUDNN_PIP_LIB" ]; then
+    export LD_PRELOAD="$(ls "$CUDNN_PIP_LIB"/*.so.9 | tr '\n' ':' | sed 's/:$//')${LD_PRELOAD:+:$LD_PRELOAD}"
+fi
 # NOTE: NVTE_FLASH_ATTN / NVTE_FUSED_ATTN intentionally NOT exported.
 #   --attention-backend=auto in YAML lets TE pick the right backend
 #   (fused for QK-Clip return_max_logit, flash otherwise). Globally pinning
@@ -248,7 +259,7 @@ exec "${NSYS_PREFIX[@]}" python3 -m torch.distributed.run \
     --nproc_per_node "$GPUS_PER_NODE" \
     --master_addr "$MASTER_ADDR" \
     --master_port "$MASTER_PORT" \
-    "$ALPHA_DIR/pretrain_alpha.py" \
+    "${PRETRAIN_SCRIPT:-$ALPHA_DIR/pretrain_alpha.py}" \
     "${MODEL_FLAGS[@]}" \
     "${TRAINING_FLAGS[@]}" \
     "${DATA_FLAGS[@]}" \
