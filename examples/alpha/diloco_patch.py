@@ -190,6 +190,13 @@ def _setup(st, model, optimizer):
     ok, lo, hi = _pair_minmax_equal(st.pg, float(meta.sum()))
     assert ok, f"param layout mismatch across nodes: {lo} != {hi}"
 
+    if os.environ.get("DILOCO_DATA_SHARD", "0") == "1":
+        # disjoint sharding requires ONE shared global order -> identical seeds
+        from megatron.training import get_args
+        ok, lo, hi = _pair_minmax_equal(st.pg, float(get_args().seed))
+        assert ok, (f"DILOCO_DATA_SHARD=1 requires the SAME --seed on both nodes "
+                    f"(shared global shuffle order), got {lo} vs {hi}")
+
     if _try_load_outer_state(st):
         # resumed: each node loaded its own Megatron checkpoint; do NOT broadcast
         # params (would erase node1's resumed replica / tau-window state). Just
@@ -321,11 +328,57 @@ def _apply_outer(st, optimizer):
             f"[diloco] theta divergence detected: {stats['lo']} != {stats['hi']}")
 
 
+def _install_data_shard():
+    """DILOCO_DATA_SHARD=1: exact disjoint data sharding across nodes.
+
+    Both nodes MUST use the same seed (guarded in _setup): they then share one
+    global shuffled sample order, and node r takes positions world*i + r — the
+    same semantics as standard sync-DP splitting a global batch across ranks.
+    Zero duplication, zero omission (vs the seed-split mode, which duplicates
+    ~17% of the corpus over a full 0.7T-per-node budget).
+
+    The underlying train dataset is built with world x the requested samples so
+    each node's shard still covers its full --train-samples budget.
+    """
+    import megatron_patch.data as _MPD
+    world = int(os.environ.get("DILOCO_WORLD", "2"))
+    rank = int(os.environ["DILOCO_RANK"])
+    orig_provider = _MPD.train_valid_test_datasets_provider
+
+    class _ShardView(torch.utils.data.Dataset):
+        def __init__(self, ds):
+            self.ds = ds
+        def __len__(self):
+            return len(self.ds) // world
+        def __getitem__(self, idx):
+            return self.ds[world * int(idx) + rank]
+        def __getattr__(self, name):          # passthrough for Megatron attrs
+            return getattr(self.ds, name)
+
+    def provider(train_val_test_num_samples, *args, **kwargs):
+        sizes = list(train_val_test_num_samples)
+        sizes[0] = sizes[0] * world
+        train, valid, test = orig_provider(sizes, *args, **kwargs)
+        print(f"[diloco] data shard: node {rank}/{world} takes positions "
+              f"{world}*i+{rank} of a shared global order "
+              f"(underlying len {len(train)} -> shard len {len(train) // world})",
+              flush=True)
+        return _ShardView(train), valid, test
+
+    for attr in ("is_distributed",):
+        if hasattr(orig_provider, attr):
+            setattr(provider, attr, getattr(orig_provider, attr))
+    _MPD.train_valid_test_datasets_provider = provider
+
+
 def install():
     """Wrap megatron.training.training.train_step with the DiLoCo outer loop."""
     global _state
     import megatron.training.training as _T
     orig = _T.train_step
+
+    if os.environ.get("DILOCO_DATA_SHARD", "0") == "1":
+        _install_data_shard()
 
     def train_step_diloco(*args, **kwargs):
         global _state

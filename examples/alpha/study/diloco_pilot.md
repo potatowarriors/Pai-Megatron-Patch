@@ -160,3 +160,16 @@ X=1노드 vs Y=DiLoCo(H=30, τ=2, node1 seed 분리).
 DILOCO_RANK=0 ... bash train.sh baseline_48L stage1 stage1_v5_blend   # main1
 DILOCO_RANK=1 ... bash train.sh baseline_48L stage1 stage1_v5_blend --seed 4321  # sub1
 ```
+
+## 데이터 소비 모드 (2026-07-15 추가)
+
+| 모드 | 방식 | 용도 |
+|---|---|---|
+| 기본 (seed 분리) | 노드별 다른 셔플 seed — node0가 1노드 기준선과 bit-비교 가능 | **A/B 실험 전용** (풀 예산 시 ~17% 중복) |
+| **`DILOCO_DATA_SHARD=1`** | 동일 seed의 단일 전역 셔플 순서를 node r이 `world*i+r` 위치로 분할 — sync-DP의 배치 분할과 동일 의미론, **중복 0/누락 0** | **프로덕션 필수** |
+
+샤드 모드는 언더라잉 데이터셋을 world× 크기로 빌드해 노드당 --train-samples 예산을
+정확히 커버하고(스모크 실측: 219.7M→109.87M = 예산 일치), 동일-seed를 페어 검증으로
+강제하며(다른 seed면 즉시 assert), iter 1부터 노드별 loss가 갈리는 것으로 분할 동작을
+확인했다. 트릴리언 스케일에서 seed-분리의 17% 중복 = 수십 GPU-일 낭비이므로 최종
+학습은 반드시 샤드 모드로.
