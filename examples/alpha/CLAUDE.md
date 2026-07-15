@@ -137,7 +137,9 @@ configs/
 ├── model/baseline_48L.yaml          # Architecture + tokenizer_v5 + DSV3 MoE routing
 ├── model/smoke.yaml                 # 2-layer toy model for smoke tests (uses tokenizer_v5)
 ├── training/pretrain_auxfree.yaml   # Stage 1 from-scratch, aux-loss-free routing (DSV3-aligned)
-├── training/stage2_2.yaml           # Stage 2-2 cosine (DSV3 routing: seq_aux_loss + sigmoid + bias)
+├── training/stage2_2.yaml           # Stage 2-2 cosine (DSV3 routing: seq_aux_loss + sigmoid + bias) — 실패한 v1 레시피, 참조용
+├── training/stage2_ab.yaml          # ★ v2 stage2 A/B: stage1 레시피 + GBS 3072 + LR 2.5e-5 연속 + ckpt 71526 finetune
+├── training/stage1_optsave.yaml     # stage1 − no-save-optim (optimizer state 포함 저장; resume 테스트/장기 런용)
 ├── training/stage2_3.yaml           # Stage 2-3 (4× LR, DSV3 routing)
 ├── training/smoke.yaml              # 2-iter, no-Muon smoke
 ├── data/stage1_v5_blend.yaml        # ★ v5 Stage 1 blend (DCLM+Korean+FW2HQ, ~466B)
@@ -221,6 +223,9 @@ max-position-embeddings: 262144
 | `sglang/sglang_alpha_model.py` | SGLang model adapter (mlp_only_layers support) |
 | `../../backends/sglang/setup.sh` | SGLang backend setup (patch + adapter install) |
 | `scripts/setup_wandb.sh` | Sourced by train.sh to set `WANDB_API_KEY` (smoke/mock 시 auto-override됨) |
+| `diloco_patch.py` | **DiLoCo 2노드 코어**: train_step 래핑, 페어별 Gloo sync, outer Nesterov, τ-오버랩, dense dedup, outer-state 저장/복원, 데이터 샤딩. 검증 기록은 `study/diloco_pilot.md` |
+| `pretrain_alpha_diloco.py` | DiLoCo 엔트리 (diloco_patch 설치 후 pretrain_alpha 실행; train.sh `PRETRAIN_SCRIPT` env로 주입) |
+| `launch_diloco.sh` | 2노드 런처 (env knob·데이터 모드·resume 규칙은 파일 헤더 주석) |
 
 ## Troubleshooting
 
@@ -246,6 +251,12 @@ fla 0.4.1** (TE stays 2.9.0). Newer versions (triton 3.7, mamba-ssm 2.3.2, fla
 Canonical pins + rationale: `../../../setup_pai_megatron_env_with_deepep.sh` (repo
 parent dir) Steps 8/9/11/14b — mamba-ssm must be **built from git** (PyPI sdist
 lacks `csrc/`); sudo is passwordless on the analysis node.
+
+**2노드 H100 클러스터(Backend.AI NGC 25.03)는 `setup_pai_megatron_env_multinode.sh`
+사용** (repo 부모 디렉토리; PIP_CONSTRAINT 우회 + canonical pin + cuDNN 9.24 +
+TE wheel 노드 간 재사용 — Known Issues "2노드 환경 셋업" 참조). 추가 런타임 요건
+둘은 train.sh가 자동 처리: cuDNN 9.24 LD_PRELOAD(QK-Clip fused-attn),
+`NCCL_MAX_NCHANNELS=16`(optimizer-state resume).
 
 ## Profiling & Throughput Optimization
 
@@ -292,6 +303,56 @@ Artifacts: model preset `configs/model/analysis_24L.yaml`, training preset
 See the guide for the full A/B table and the **mid-training application protocol**
 (scheduling-only changes apply at checkpoint resume; dynamics-changing ones wait
 for a stage boundary).
+
+## Multi-Node Training — DiLoCo (2-node, IB 없음) (2026-07-13~15 검증 ✅)
+
+이 클러스터(Backend.AI, H100×8 ×2노드)는 **InfiniBand가 없다** (HCA는 보이지만 전부
+admin-Disabled; 노드 간 실효 ~1 GB/s TCP/VXLAN, `study/netbench/`로 측정). sync-DP는
+bf16 grad-reduce + GBS 3072에서도 **1.15×**에 그친다(실측; GBS 256이면 1노드보다 느림).
+해법은 **DiLoCo** (arXiv:2311.08105; Muon inner 호환은 MuLoCo arXiv:2505.23725):
+노드별 독립 단일노드 Megatron 인스턴스가 H스텝 로컬 학습 후 pseudo-gradient를 평균
+(outer Nesterov lr 0.7/μ 0.9) — 노드 간 통신이 스텝 경로에서 사라진다.
+**전체 실측·검증 기록: [`study/diloco_pilot.md`](study/diloco_pilot.md)** (필독).
+
+### Quick Start
+
+```bash
+# 프로덕션 (완전 서로소 데이터 샤딩 — 필수):
+DILOCO_DATA_SHARD=1 DILOCO_H=30 DILOCO_TAU=2 \
+  bash launch_diloco.sh <tag> baseline_48L <training_preset> <data_preset> [extra...]
+
+# A/B 실험 (seed 분리 — node0가 1노드 기준선과 bit-비교 가능; 풀 예산 시 ~17% 중복):
+DILOCO_H=30 bash launch_diloco.sh <tag> baseline_48L stage1 stage1_v5_blend --exit-interval 500
+
+# resume: 각 노드가 자기 체크포인트를 로드해야 함
+NODE0_ARGS="--load <node0 ckpt>" NODE1_ARGS="--load <node1 ckpt>" DILOCO_DATA_SHARD=1 ... bash launch_diloco.sh ...
+```
+
+구현: `diloco_patch.py`(코어) + `pretrain_alpha_diloco.py`(엔트리, train.sh
+`PRETRAIN_SCRIPT` env로 주입) + `launch_diloco.sh`(2노드 런처, env knob 문서는 파일 헤더).
+
+### 검증 요약 (상세는 study/diloco_pilot.md)
+
+| 항목 | 결과 |
+|---|---|
+| from-scratch 500-iter A/B vs 역사적 stage1 | 동일 iter −0.44 loss (2× 데이터), sync 16/16 일치 |
+| v2 overlap (τ>0) + dense dedup | 노출 오버헤드 +10.6% → **+0.35%** (H=30) |
+| H=5 vs H=30 | **교차 발견**: H↓≠sync-DP 근접 — H와 outer lr/μ는 결합, H 변경 시 재튜닝 필요 |
+| **full-state resume** (optim state 포함) | 2노드 ckpt→1노드 인계 포함 PASSED, 3중 bit-일치 검증 |
+| stage2 레짐 (성숙 모델, LR 2.5e-5, GBS 3072) | 1노드와 동률(무해), step +1%로 2× 토큰 |
+| 데이터 샤딩 (`DILOCO_DATA_SHARD=1`) | 단일 전역 순서의 `world*i+r` 분할, 중복 0 (스모크 검증) |
+
+### 규칙/함정
+
+1. **프로덕션은 `DILOCO_DATA_SHARD=1` 필수** — 동일 seed 강제(페어 assert). seed-split은 A/B 전용.
+2. **H를 바꾸면 outer lr/μ 재튜닝** — H=5에서 문헌 기본값(0.7/0.9)은 초반 우세 후 역전됨.
+3. 체크포인트 저장 시 pending sync는 자동 드레인됨; outer state(θ+momentum, fp32
+   ~27GB/rank)는 `<save>/diloco_outer/iter_N/`에 동봉되어 resume 시 자동 복원.
+   1노드 인계 시에는 자동 무시(순수 Megatron 로드).
+4. wire 시간은 NFS/시간대에 따라 40~130초(주간 최대 408초@GBS3072 관측) 요동 —
+   τ는 wire p99 기준으로 (H=30이면 τ=2~3 권장).
+5. 2노드 실행엔 반드시 `NCCL_SOCKET_IFNAME=eth0 NCCL_IB_DISABLE=1 GLOO_SOCKET_IFNAME=eth0`
+   (런처가 자동 설정).
 
 ## Training Plan (Long-term)
 
@@ -372,6 +433,48 @@ bash train.sh baseline_48L pretrain_auxfree stage1_v5_korean_web
 4. resume 관련 키는 모두 training preset YAML 안에 평면적으로 (`load:`, `finetune:`, `no-load-optim:`) — 셸이 조건부로 끼워넣지 않음
 
 ## Known Issues & Fixes
+
+### NGC 25.03에서 QK-Clip fused-attn 크래시 — cuDNN 9.8에 max_logit 엔진 없음 (2026-07-13 ✅)
+
+- **증상**: 학습 첫 step에서 `cuDNN Error: No valid engine configs for Matmul_MUL_GEN_INDEX_..._Matmul_`.
+  기본 attention은 통과하는데 **`return_max_logit=True`(QK-Clip 경로)만 실패**.
+- **원인**: TE 2.9의 max-logit fused-attn 그래프 엔진이 cuDNN 9.11+에만 존재. NGC 25.03은
+  9.8. TE의 backend 선택기는 이 케이스에 cudnn 버전 게이트가 없어(utils.py — thd/fp8만
+  거름) 폴백 대신 런타임 크래시.
+- **수정**: `pip install --no-deps nvidia-cudnn-cu12==9.24.0.43` (**--no-deps 필수** —
+  의존성으로 딸려오는 cublas 12.9가 환경을 깨뜨림) + train.sh가 pip cuDNN 발견 시 전체
+  서브라이브러리를 **LD_PRELOAD** (LD_LIBRARY_PATH만으로는 TE RUNPATH 탓에 9.24/9.8이
+  섞여 `CUDNN_STATUS_SUBLIBRARY_LOADING_FAILED`). 멀티노드 셋업 스크립트가 자동 설치.
+
+### Optimizer-state resume이 첫 collective에서 크래시 — NCCL comm-init OOM (2026-07-15 ✅)
+
+- **증상**: `--load`로 optimizer state까지 실은 resume이 `Failed to CUDA calloc async N bytes`
+  (N은 4~608B로 미미)로 사망. fresh 학습은 정상. **DiLoCo 무관 — 순수 Megatron도 재현.**
+- **원인**: NCCL 2.25 기본 64채널의 comm당 GPU 버퍼가 크고, Megatron은 comm이 많다.
+  fresh는 optim state가 첫 step 이후 생성되어 comm 초기화가 저메모리 구간에서 일어나지만,
+  resume은 로드된 state + 비동기 in-flight 할당 위에서 지연 초기화 comm들이 일제히 버퍼를
+  요구 → NCCL 'out of memory'. 판별 근거: `CUDA_LAUNCH_BLOCKING=1`이면 통과 + NCCL_DEBUG.
+- **수정**: **`NCCL_MAX_NCHANNELS=16`** (train.sh 기본값) — comm 버퍼 4× 절감, step time
+  무손실(60.7s vs 61.1s). 검증: 3개 독립 resume의 iter-13 loss **bit-identical**.
+
+### DiLoCo: 저장 시점에 pending sync 살아있으면 저장 크래시 (2026-07-14 ✅)
+
+- **증상**: `--exit-interval`(또는 save-interval)이 H의 배수일 때 마지막 sync가 시작만 된 채
+  (τ>0, 미적용) torch_dist 저장의 NCCL gather가 `unhandled cuda error`로 사망. 100% 재현.
+- **수정**: diloco_patch의 save 훅이 pending sync를 **join+apply 후 저장**(드레인). 부수
+  효과로 체크포인트가 일관된 outer 상태를 담음. 같은 시기 수정: τ-apply의 파라미터별 GPU
+  임시버퍼(→allocator 단편화)를 per-dtype 영구 scratch 버퍼로 대체.
+
+### 2노드 환경 셋업: NGC 25.03의 PIP_CONSTRAINT·TE 서브모듈 순서 (2026-07-13 ✅)
+
+- 기존 `setup_pai_megatron_env.sh`가 이 이미지에서 3중 드리프트로 연쇄 실패: ① TE upstream
+  main의 서브모듈 구성 변경(checkout *후* `git submodule update` 필요), ② 이미지 전역
+  `PIP_CONSTRAINT=/etc/pip/constraint.txt`가 명시 핀과 충돌(importlib-metadata/packaging/
+  **transformer-engine 자체**), ③ mamba-ssm/fla 미고정 설치가 현 PyPI 최신(triton 3.7
+  강제)을 끌어옴. → **`setup_pai_megatron_env_multinode.sh`** (repo 부모 디렉토리) 사용:
+  선별적 `env -u PIP_CONSTRAINT`, canonical pin(mamba v2.2.6.post3 git 빌드, fla==0.4.1),
+  `NVTE_CUDA_ARCHS=90`(빌드 30분+→3분), TE wheel을 workspace에 보존(타 노드 재빌드 생략),
+  cuDNN 9.24 설치 포함. 원본 스크립트는 참조용 무수정 보존.
 
 ### MG↔HF weight 검증이 `expert_bias` 1개에서 지속 실패 — fp32 router bias 다운캐스트 (2026-06-15 ✅)
 

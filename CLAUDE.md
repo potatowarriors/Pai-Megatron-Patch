@@ -112,6 +112,9 @@ bash run_mcore_{model}.sh <ENV> <MODEL_SIZE> <BATCH_SIZE> <GLOBAL_BATCH_SIZE> <L
 ## Custom Training Features (Alpha Stage1)
 
 Three non-upstream features added on Megatron-LM-251125 for Alpha Stage1 pre-training.
+(4번째 비-upstream 기능인 **DiLoCo 2노드 학습** — IB 없는 클러스터용 저통신 분산 — 은
+`megatron_patch`/submodule이 아니라 `examples/alpha/diloco_patch.py`에 살며,
+[`examples/alpha/CLAUDE.md`](examples/alpha/CLAUDE.md) § Multi-Node Training 참조.)
 
 ### 1. Step-wise Global Batch Size Schedule
 
