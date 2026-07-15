@@ -13,5 +13,9 @@ sys.path.insert(0, _HERE)
 
 import diloco_patch  # noqa: E402
 
-diloco_patch.install()
+if os.environ.get("DILOCO_UNSHARD_RESUME", "0") == "1":
+    # plain single-node continuation of a sharded 2-node run (counter fixup only)
+    diloco_patch.install_unshard_resume()
+else:
+    diloco_patch.install()
 runpy.run_path(os.path.join(_HERE, "pretrain_alpha.py"), run_name="__main__")

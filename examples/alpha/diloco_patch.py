@@ -371,6 +371,57 @@ def _install_data_shard():
     _MPD.train_valid_test_datasets_provider = provider
 
 
+def install_unshard_resume():
+    """DILOCO_UNSHARD_RESUME=1: continue a DILOCO_DATA_SHARD=1 pair run on ONE node.
+
+    A sharded 2-node run's checkpoint stores LOCAL counters (consumed samples,
+    iteration, scheduler position = N x GBS), but the pair jointly consumed
+    world x that from the shared global order. On a plain single-node
+    continuation all THREE coupled counters must be multiplied by world:
+      (a) consumed_train_samples  -> data resumes at the true global position
+          (no duplication of the last half, no omission of the odd shard)
+      (b) opt_param_scheduler.num_steps -> LR reflects globally consumed tokens
+      (c) iteration (+ fp-op counter) -> the train-samples budget terminates
+          correctly instead of overshooting by the 2-node phase's volume
+    This mode installs NO DiLoCo machinery — the continuation is plain Megatron.
+    """
+    world = int(os.environ.get("DILOCO_WORLD", "2"))
+    import megatron.training.checkpointing as _C
+    import megatron.training.training as _T
+    orig_load = _C.load_checkpoint
+
+    def load_unshard(model, optimizer, opt_param_scheduler, *a, **k):
+        iteration, num_fp_ops = orig_load(model, optimizer, opt_param_scheduler, *a, **k)
+        if iteration == 0:
+            return iteration, num_fp_ops       # fresh start — nothing to unshard
+        from megatron.training import get_args
+        from megatron.core.num_microbatches_calculator import update_num_microbatches
+        args = get_args()
+        old_consumed = args.consumed_train_samples
+        args.consumed_train_samples *= world
+        if getattr(args, "skipped_train_samples", 0):
+            args.skipped_train_samples *= world
+        update_num_microbatches(consumed_samples=args.consumed_train_samples,
+                                verbose=False)
+        if opt_param_scheduler is not None:
+            opt_param_scheduler.num_steps *= world
+        new_iter = iteration * world
+        args.iteration = new_iter
+        load_dir = getattr(args, "load", "") or ""
+        if not os.path.isdir(os.path.join(load_dir, "diloco_outer")):
+            print("[diloco] unshard WARNING: checkpoint has no diloco_outer/ — "
+                  "is this really a DILOCO_DATA_SHARD checkpoint?", flush=True)
+        print(f"[diloco] unshard resume (world={world}): iteration {iteration}->"
+              f"{new_iter}, consumed {old_consumed}->{args.consumed_train_samples}, "
+              f"scheduler num_steps x{world}", flush=True)
+        return new_iter, num_fp_ops * world
+
+    _C.load_checkpoint = load_unshard
+    _T.load_checkpoint = load_unshard
+    print(f"[diloco] unshard-resume mode installed (world={world}) — "
+          f"plain single-node continuation of a sharded pair run", flush=True)
+
+
 def install():
     """Wrap megatron.training.training.train_step with the DiLoCo outer loop."""
     global _state
