@@ -69,6 +69,75 @@ mock 스모크(H=6, τ=2, 15 iter)로 검증:
 - 주의: v2의 τ>0 변형은 mechanics 검증만 완료(품질은 Streaming DiLoCo 문헌 근거).
   장기 채택 전 τ∈{0,2,5} 짧은 loss A/B 권장.
 
+## H=5/τ=1 500-iter A/B (2026-07-14) — 교차(crossover) 발견
+
+동일 프로토콜로 H=5(τ=1, overlapped) 실행. 3-way 비교 (같은 iteration 기준):
+
+| iter | A(1노드) | B(H=30,τ=0) | C(H=5,τ=1) | C−B |
+|---|---|---|---|---|
+| 120 | 9.650 | 9.129 | 7.682 | **−1.45** |
+| 300 | 5.859 | 5.452 | 5.240 | −0.21 |
+| 400 | 5.100 | 4.646 | 4.692 | +0.05 |
+| 500 | 4.541 | 4.101 | 4.286 | **+0.18** |
+
+- **교차 패턴**: H=5가 초반(~350 iter)에 크게 앞서다 이후 H=30에 역전당함 — "실효
+  outer step이 큰" 구성의 전형적 시그니처 (빠른 초기 하강, 정련 구간 손해).
+- 원인 해석: outer lr 0.7/μ 0.9는 H 수십~수백용 문헌값. H=5에서는 momentum 누적
+  (정상상태 이득 1/(1−μ)=10×)이 더 상관된 스텝들에 걸려 실효 구동력이 커짐.
+  τ=1 staleness도 창(5스텝)의 20%로 상대적으로 큼.
+- **결론**: H는 "sync-DP 근접 다이얼"이 아니라 outer optimizer의 실효 세기와 결합된
+  변수. H를 바꾸면 outer lr/μ 재튜닝 필요. **채택 후보는 H=30 유지** (+τ=2~3).
+- 처리량 관찰: 주간 NFS 혼잡 시 wire 68~89초 → τ=1 창(60초) 초과로 sync당 ~10초
+  노출 + **데이터 로더 자체가 55→78초로 열화** (전날 야간 런도 동일 패턴 후 회복;
+  DiLoCo 무관, 공유 스토리지 시간대 변동 — 2달 런 계획에 반영할 것).
+- 저장 크래시 재발(500 iter 완주 후 exit-save에서): τ-apply가 apply당 파라미터별
+  GPU 임시버퍼를 할당(~100회 누적)해 allocator 단편화 → **영구 per-dtype scratch
+  버퍼로 apply의 GPU 할당 제거** (수정 완료). 학습 데이터는 무손실.
+
+## Full-state resume 검증 (2026-07-15) — 2노드→1노드 인계 시나리오 PASSED
+
+요건: **optimizer state 포함 저장 → 정확한 resume** (재워밍업 폴백 배제; 2노드→1노드
+자원 축소 대비). `configs/training/stage1_optsave.yaml` (stage1 − no-save-optim).
+
+- **환경 버그 발견 (DiLoCo 무관 — 순수 Megatron도 재현)**: optimizer state를 실은
+  resume이 첫 collective에서 `Failed to CUDA calloc async N bytes` (NCCL WARN 'out of
+  memory'). 원인: NCCL 2.25 기본 64채널의 comm당 GPU 버퍼가 크고, resume은 로드된
+  optim state + 비동기 in-flight 할당 위에서 지연 초기화 comm들이 일제히 버퍼를 요구
+  → OOM. fresh는 optim state가 첫 step 이후 생기므로 회피. `CUDA_LAUNCH_BLOCKING=1`
+  통과(= 레이스/순서 문제)와 NCCL_DEBUG의 'out of memory'가 결정 근거.
+- **수정: `NCCL_MAX_NCHANNELS=16`** (train.sh 기본값으로 반영) — comm 버퍼 4× 절감,
+  step time 무손실(60.7s vs 61.1s). + diloco_patch의 resume 워밍업(그룹/coalesced).
+- **드레인 규칙**: 저장 시점에 pending sync 워커가 살아 있으면 저장의 NCCL gather가
+  재현성 있게 크래시 → save 훅이 pending을 join+apply 후 저장 (체크포인트가 일관된
+  outer 상태를 담는 부수 효과).
+- **outer state 영속화**: 매 저장마다 rank별 `<save>/diloco_outer/iter_N/`에
+  θ_global+momentum(fp32, ~27GB/rank, 저장 ~140s). resume 시 자동 로드 + 페어 checksum
+  검증, 초기 broadcast 생략. 1노드 인계 시에는 자동 무시됨.
+- **판정 수치**: 독립적인 세 resume(1노드 blocking / 1노드 ch16 / 2노드 DiLoCo)의
+  **iter-13 loss가 bit-identical (11.85106)** — 모델+optim+스케줄러+RNG+데이터 위치가
+  완전 복원됨을 한 숫자로 증명. 저장 시점 궤적과의 연속성 ✓, 스파이크 없음.
+
+## Stage2 레짐 A/B (2026-07-15) — 성숙 모델·저LR에서 무해성 확인
+
+계획된 stage2 = stage1 레시피 + stage2 packed blend + GBS 3072, stage1 최종 ckpt
+(71,526)에서 finetune, LR은 stage1 종료값 2.5e-5 연속 (`stage2_ab.yaml`). 200 iter,
+X=1노드 vs Y=DiLoCo(H=30, τ=2, node1 seed 분리).
+
+| iter | X(1노드) | Y(DiLoCo) | Y−X |
+|---|---|---|---|
+| 1–30 | 1.979→1.955 | 동일(±0.0000) | 첫 sync(32) 전 내부 대조군 |
+| 100 | 1.8251 | 1.8351 | +0.010 |
+| 200 | 1.7901 | 1.7860 | **−0.004** |
+
+- **동률(101–200 평균 +0.002)**: 이 저LR 구간 200 iter에서는 2× 데이터 이득이
+  가시화되지 않음(기대와 일치 — from-scratch의 −0.44는 고LR 급하강 구간의 효과).
+  초반 +0.01 교란 후 회복→역전: averaging 무해.
+- **비용**: step 133.0s vs 131.6s (+1%) — 같은 벽시계로 2× 토큰 처리.
+- stage2 조건 특이사항: packed blend 스트리밍이 무거워 wire 273~408s로 증가
+  (τ=2 창 266s 초과분 ~4.4s/step 노출). H=30 주기(4000s) 대비 여전히 10%.
+- 해석: 중반 레짐에서 DiLoCo는 "무해 + 공짜 2× 데이터". 이득의 가시화는 장기
+  누적 또는 유효배치 2×에 맞춘 LR 상향(√2)에서 기대 — 채택 판단은 이 프레임으로.
+
 ## 미해결/후속
 
 - **H 스윕** (30 vs 100): sync 오버헤드 3.1%→0.9%; MoE expert drift 상한 확인
