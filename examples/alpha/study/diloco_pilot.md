@@ -173,3 +173,14 @@ DILOCO_RANK=1 ... bash train.sh baseline_48L stage1 stage1_v5_blend --seed 4321 
 강제하며(다른 seed면 즉시 assert), iter 1부터 노드별 loss가 갈리는 것으로 분할 동작을
 확인했다. 트릴리언 스케일에서 seed-분리의 17% 중복 = 수십 GPU-일 낭비이므로 최종
 학습은 반드시 샤드 모드로.
+
+## 토폴로지 전환: 2노드 샤드 → 1노드 인계 (2026-07-15, DILOCO_UNSHARD_RESUME ✅)
+
+샤드 체크포인트의 카운터는 **로컬**(N×GBS)이지만 페어는 전역 순서에서 world×를 소비했다.
+naive resume 시: 래퍼 없으면 직전 절반 중복 / 래퍼 유지하면 홀수 샤드 영구 누락.
+`DILOCO_UNSHARD_RESUME=1`(순수 1노드 런에 적용)이 load_checkpoint를 감싸 세 결합
+카운터를 ×world 보정: ① consumed(데이터 전역 위치) ② scheduler num_steps(LR 위치)
+③ iteration+fp-ops(예산·종료). 검증(2노드 12 iter → 1노드 재개 6 iter): consumed
+18432→36864, **재개 첫 LR 2.621919e-6 = 2e-4×38400/2929152 정확 일치**(스케줄러 보정의
+산술 증명; 미보정이면 1.36e-6), loss 연속·스파이크 없음·정상 종료. WSD stable 구간
+전환이 가장 안전(LR 상수라 스케줄 위상 오차에 둔감). 역방향(1→2)은 ÷world + 샤드 on.

@@ -139,7 +139,7 @@ configs/
 ├── training/pretrain_auxfree.yaml   # Stage 1 from-scratch, aux-loss-free routing (DSV3-aligned)
 ├── training/stage2_2.yaml           # Stage 2-2 cosine (DSV3 routing: seq_aux_loss + sigmoid + bias) — 실패한 v1 레시피, 참조용
 ├── training/stage2_ab.yaml          # ★ v2 stage2 A/B: stage1 레시피 + GBS 3072 + LR 2.5e-5 연속 + ckpt 71526 finetune
-├── training/stage1_optsave.yaml     # stage1 − no-save-optim (optimizer state 포함 저장; resume 테스트/장기 런용)
+├── training/arxive/stage1_optsave.yaml  # stage1 − no-save-optim (optimizer state 포함 저장; resume 테스트용 — arxive로 이동됨)
 ├── training/stage2_3.yaml           # Stage 2-3 (4× LR, DSV3 routing)
 ├── training/smoke.yaml              # 2-iter, no-Muon smoke
 ├── data/stage1_v5_blend.yaml        # ★ v5 Stage 1 blend (DCLM+Korean+FW2HQ, ~466B)
@@ -353,6 +353,15 @@ NODE0_ARGS="--load <node0 ckpt>" NODE1_ARGS="--load <node1 ckpt>" DILOCO_DATA_SH
    τ는 wire p99 기준으로 (H=30이면 τ=2~3 권장).
 5. 2노드 실행엔 반드시 `NCCL_SOCKET_IFNAME=eth0 NCCL_IB_DISABLE=1 GLOO_SOCKET_IFNAME=eth0`
    (런처가 자동 설정).
+6. **2노드→1노드 축소**: 샤드 체크포인트의 카운터는 로컬(N×GBS)이므로 naive resume은
+   직전 절반 중복 또는 홀수 샤드 영구 누락. 반드시 unshard 모드 사용:
+   ```bash
+   PRETRAIN_SCRIPT=$ALPHA/pretrain_alpha_diloco.py DILOCO_UNSHARD_RESUME=1 DILOCO_WORLD=2 \
+     bash train.sh baseline_48L <preset> <data> --load <node0_ckpt>
+   ```
+   consumed/스케줄러/iteration 세 카운터를 ×world 보정 (검증: 재개 첫 LR이
+   전역 위치 산식과 유효숫자 6자리 일치). WSD stable 구간에서 전환하는 것이 가장 안전.
+   역방향(1→2노드 확장)은 같은 규칙의 역(÷world + 샤드 래퍼 on).
 
 ## Training Plan (Long-term)
 
