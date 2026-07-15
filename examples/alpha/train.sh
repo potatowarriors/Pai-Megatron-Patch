@@ -82,6 +82,14 @@ export TORCH_FORCE_NO_WEIGHTS_ONLY_LOAD=true
 export PYTORCH_CUDA_ALLOC_CONF="expandable_segments:True"
 export NCCL_GRAPH_REGISTER=0
 export NCCL_DEBUG="${NCCL_DEBUG:-VERSION}"
+# NCCL_MAX_NCHANNELS=16: REQUIRED for optimizer-state resume on this cluster.
+# NCCL 2.25's default 64 channels allocate large per-communicator GPU buffers;
+# on resume the loaded optimizer state fills memory BEFORE the lazily-created
+# communicators initialize -> "Failed to CUDA calloc async" (NCCL 'out of
+# memory') in the first collectives. 16 channels quarter that footprint with
+# no measured step-time cost (60.7s vs 61.1s baseline; NVLink still saturates).
+# Fresh runs are unaffected either way. Validated 2026-07-15 (diloco_pilot.md).
+export NCCL_MAX_NCHANNELS="${NCCL_MAX_NCHANNELS:-16}"
 
 # ── Transformer Engine (cuDNN-accelerated norms; deterministic off) ───────
 export NVTE_NORM_FWD_USE_CUDNN=1

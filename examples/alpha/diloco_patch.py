@@ -69,6 +69,7 @@ class _State:
         self.inner_step = 0
         self.outer_step_count = 0
         self.pending = None     # in-flight sync: dict(snap, thread, stats, apply_at)
+        self.scratch = {}       # per-dtype persistent GPU staging buffers (apply path)
 
 
 def _log(st, msg):
@@ -129,6 +130,48 @@ def _named_params(model_chunks):
     return out
 
 
+def _outer_state_path(save_dir, iteration, node_rank, local_rank):
+    return os.path.join(save_dir, "diloco_outer", f"iter_{iteration:07d}",
+                        f"node{node_rank}_rank{local_rank}.pt")
+
+
+def _save_outer_state(st, iteration):
+    """Persist theta_global + outer momentum next to the Megatron checkpoint."""
+    from megatron.training import get_args
+    args = get_args()
+    if not getattr(args, "save", None) or st is None or st.theta is None:
+        return
+    t0 = time.time()
+    path = _outer_state_path(args.save, iteration, st.node_rank, st.local_rank)
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    torch.save({"names": [n for n, _ in st.owned], "theta": st.theta,
+                "momentum": st.momentum, "H": st.H, "tau": st.tau}, path)
+    _log(st, f"outer state saved for iter {iteration} ({time.time() - t0:.1f}s)")
+
+
+def _try_load_outer_state(st):
+    """On resume (--load), restore theta/momentum from the latest saved state."""
+    from megatron.training import get_args
+    args = get_args()
+    load_dir = getattr(args, "load", None)
+    if not load_dir:
+        return False
+    base = os.path.join(load_dir, "diloco_outer")
+    if not os.path.isdir(base):
+        _log(st, "resume WITHOUT diloco outer state (none found) — "
+                 "theta:=params, outer momentum resets (re-warms in a few syncs)")
+        return False
+    latest = sorted(os.listdir(base))[-1]
+    path = os.path.join(base, latest, f"node{st.node_rank}_rank{st.local_rank}.pt")
+    blob = torch.load(path, map_location="cpu", weights_only=False)
+    assert blob["names"] == [n for n, _ in st.owned], \
+        "diloco outer state param layout mismatch — wrong checkpoint or config"
+    st.theta = blob["theta"]
+    st.momentum = blob["momentum"]
+    _log(st, f"outer state restored from {latest} (H was {blob['H']}, tau {blob['tau']})")
+    return True
+
+
 def _setup(st, model, optimizer):
     """First-call init: pair group, cross-node weight broadcast, snapshots."""
     t0 = time.time()
@@ -147,19 +190,62 @@ def _setup(st, model, optimizer):
     ok, lo, hi = _pair_minmax_equal(st.pg, float(meta.sum()))
     assert ok, f"param layout mismatch across nodes: {lo} != {hi}"
 
-    # broadcast node0 weights so both replicas start bit-identical
-    # (D2H in the param's own dtype, cast on CPU — GPU-side dtype temps
-    #  fragment the allocator and break torch_dist checkpoint save)
-    with torch.no_grad():
-        for _, p in st.params:
-            buf = p.data.detach().cpu().to(torch.float32)
-            _bcast_pair(st.pg, buf, root=0)
-            p.data.copy_(buf.to(p.dtype))
-    torch.cuda.empty_cache()
-    optimizer.reload_model_params()
-
-    st.theta = [p.data.detach().cpu().to(torch.float32) for _, p in st.owned]
-    st.momentum = [torch.zeros_like(t) for t in st.theta]
+    if _try_load_outer_state(st):
+        # resumed: each node loaded its own Megatron checkpoint; do NOT broadcast
+        # params (would erase node1's resumed replica / tau-window state). Just
+        # verify both nodes restored the same theta_global.
+        s = sum(float(t.sum(dtype=torch.float64)) for t in st.theta)
+        ok, lo, hi = _pair_minmax_equal(st.pg, s)
+        assert ok, f"resumed theta_global differs across nodes: {lo} != {hi}"
+        # Checkpoint load (incl. full optimizer state) fills the GPU before the
+        # LAZILY-initialized NCCL groups grab their cudaMallocAsync pool pages —
+        # the first MoE all_reduce then dies with "Failed to CUDA calloc async
+        # N bytes" (N tiny; the pool cannot get pages, and it is separate from
+        # PyTorch's allocator so empty_cache alone does not help). Warm every
+        # parallel group NOW: activations don't exist yet, so this is the
+        # lowest-memory point after load. Fresh runs never hit this because
+        # optimizer state materializes only after the first forward.
+        torch.cuda.empty_cache()
+        from megatron.core import mpu
+        warm = torch.ones(1, device="cuda")
+        for getter in ("get_data_parallel_group", "get_tensor_model_parallel_group",
+                       "get_pipeline_model_parallel_group", "get_model_parallel_group",
+                       "get_expert_model_parallel_group", "get_expert_tensor_parallel_group",
+                       "get_expert_data_parallel_group", "get_context_parallel_group"):
+            try:
+                g = getattr(mpu, getter)()
+                dist.all_reduce(warm.clone(), group=g)
+            except Exception:
+                pass
+        # also warm the coalesced-allreduce path (the bucketed grad sync uses
+        # torch.distributed._coalescing_manager, which performs its own lazy
+        # NCCL allocations — rt_b3 crashed exactly in its __exit__). Megatron's
+        # start_grad_sync() asserts outside fwd-bwd, so mimic the path directly
+        # with tiny tensors on the same groups.
+        from torch.distributed import _coalescing_manager
+        for getter in ("get_data_parallel_group", "get_expert_data_parallel_group"):
+            try:
+                g = getattr(mpu, getter)()
+                with _coalescing_manager(group=g, async_ops=False):
+                    for _ in range(2):
+                        dist.all_reduce(warm.clone(), group=g)
+            except Exception as e:
+                _log(st, f"coalesced warmup ({getter}) skipped: {type(e).__name__}")
+        torch.cuda.synchronize()
+        _log(st, "resume: NCCL parallel groups + coalesced-allreduce path warmed")
+    else:
+        # fresh start: broadcast node0 weights so both replicas start
+        # bit-identical (D2H in the param's own dtype, cast on CPU — GPU-side
+        # dtype temps fragment the allocator and break torch_dist save)
+        with torch.no_grad():
+            for _, p in st.params:
+                buf = p.data.detach().cpu().to(torch.float32)
+                _bcast_pair(st.pg, buf, root=0)
+                p.data.copy_(buf.to(p.dtype))
+        torch.cuda.empty_cache()
+        optimizer.reload_model_params()
+        st.theta = [p.data.detach().cpu().to(torch.float32) for _, p in st.owned]
+        st.momentum = [torch.zeros_like(t) for t in st.theta]
     _log(st, f"setup done in {time.time() - t0:.1f}s: owned {len(st.owned)} params "
              f"({sum(p.numel() for _, p in st.owned) / 1e9:.2f}B; dense dedup: "
              f"{len(st.dense)} dense on lr0 pair only), H={st.H}, tau={st.tau}, "
@@ -208,8 +294,17 @@ def _apply_outer(st, optimizer):
             if st.tau == 0:
                 p.data.copy_(th.to(p.dtype))     # exact, replicas bit-identical
             else:
-                # additive correction keeps the tau-window local progress
-                p.data.add_((th - sn).to(p.device, p.dtype))
+                # additive correction keeps the tau-window local progress.
+                # Stage through a persistent per-dtype GPU buffer: per-apply GPU
+                # temporaries fragmented the allocator over ~100 applies and
+                # broke the torch_dist save's NCCL gather (2026-07-14).
+                corr = (th - sn).to(p.dtype).view(-1)          # CPU, param dtype
+                buf = st.scratch.get(p.dtype)
+                if buf is None or buf.numel() < corr.numel():
+                    buf = torch.empty(corr.numel(), dtype=p.dtype, device=p.device)
+                    st.scratch[p.dtype] = buf
+                buf[: corr.numel()].copy_(corr)                # H2D, no alloc
+                p.data.view(-1).add_(buf[: corr.numel()])
         # distribute lr0's dense result to local ranks 1-7 (NVLink, default group)
         for _, p in st.dense:
             dist.broadcast(p.data, src=0)
@@ -260,3 +355,20 @@ def install():
             print("[diloco] DILOCO_SKIP_SAVE=1 — checkpoint save skipped", flush=True)
         _T.save_checkpoint_and_time = _skip_save
         print("[diloco] checkpoint saving DISABLED (DILOCO_SKIP_SAVE=1)", flush=True)
+    else:
+        # piggyback the DiLoCo outer state (theta_global + outer momentum) onto
+        # every Megatron checkpoint save, enabling exact resume of the outer loop
+        orig_save = _T.save_checkpoint_and_time
+        def _save_with_outer_state(iteration, *args, **kwargs):
+            st = _state
+            if st is not None and st.pending is not None:
+                # Drain the in-flight sync BEFORE saving: (a) the checkpoint then
+                # captures a consistent post-apply outer state, and (b) every save
+                # crash observed so far ("NCCL Error 1" in the save's gather)
+                # occurred exactly when a pending worker was alive during save.
+                _log(st, "draining in-flight outer sync before checkpoint save")
+                _apply_outer(st, args[1])   # args: (model, optimizer, ...)
+            out = orig_save(iteration, *args, **kwargs)
+            _save_outer_state(_state, iteration)
+            return out
+        _T.save_checkpoint_and_time = _save_with_outer_state
