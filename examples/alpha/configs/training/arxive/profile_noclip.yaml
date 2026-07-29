@@ -1,0 +1,103 @@
+# PROFILE preset variant — QK-Clip / max-logit logging DISABLED.
+#
+# Purpose: attention-backend A/B (fused vs flash-FA2/FA3). TE 2.9 hard-disables
+# ALL FlashAttention backends when return_max_logit=True (utils.py "Filter:
+# Return max_logit"), and Megatron sets return_max_logit whenever qk-clip OR
+# log-max-attention-logit is on (extensions/transformer_engine.py:1023-1028).
+# So flash runs require both flags off; the fused-noclip control run isolates
+# the QK-Clip cost itself. Pick the backend per run from the CLI:
+#     bash train.sh analysis_24L profile_noclip mock --attention-backend fused
+#     bash train.sh analysis_24L profile_noclip mock --attention-backend flash
+# Everything except the QK-Clip block is verbatim configs/training/profile.yaml.
+
+# ── Parallelism (4-GPU debug node: EP=4, DP=4) ─────────────────────────────
+tensor-model-parallel-size: 1
+pipeline-model-parallel-size: 1
+expert-model-parallel-size: 4
+expert-tensor-parallel-size: 1
+context-parallel-size: 1
+
+# ── Batch (small GBS -> fast iters, but enough microbatches to see the loop) ─
+micro-batch-size: 3
+global-batch-size: 96
+
+# ── Run length + profiler capture window (iterations) ──────────────────────
+train-iters: 16
+profile: true
+profile-step-start: 10
+profile-step-end: 13
+profile-ranks: "0 1 2 3"          # SPACE-separated string (NOT a YAML list) — nargs='+'
+
+# ── LR (irrelevant to kernel profiling; just a stable constant) ────────────
+lr: 2.5e-4
+min-lr: 2.5e-5
+lr-decay-style: constant
+lr-warmup-iters: 2
+clip-grad: 1.0
+
+# ── Activation checkpointing (match production so recompute cost is visible) ─
+recompute-granularity: selective
+recompute-modules: "layernorm moe"
+
+# ── MoE routing (DSV3-strict: aux-loss-free + complementary seq_aux_loss) ──
+moe-router-load-balancing-type: seq_aux_loss
+moe-router-score-function: sigmoid
+moe-router-enable-expert-bias: true
+moe-router-bias-update-rate: 0.001
+moe-token-dispatcher-type: alltoall
+
+# ── Optimizer (Muon — profile the Newton-Schulz orthogonalization cost) ────
+optimizer: dist_muon
+weight-decay: 0.1
+adam-beta1: 0.9
+adam-beta2: 0.95
+muon-momentum: 0.95
+muon-use-nesterov: true
+muon-num-ns-steps: 5
+muon-scale-mode: spectral
+muon-fp32-matmul-prec: medium
+muon-tp-mode: blockwise
+muon-extra-scale-factor: 0.2
+init-method-std: 0.008
+
+# ── QK-Clip: DISABLED (the whole point of this preset — see header) ────────
+# qk-clip / qk-clip-alpha / qk-clip-threshold / log-max-attention-logit omitted.
+
+# ── LayerNorm WD (Qwen3-Next/Qwen3.5 official recipe) ──────────────────────
+no-weight-decay-cond-type: apply_wd_to_qk_layernorm
+
+# ── Document boundary handling (alpha hybrid recipe) ───────────────────────
+reset-position-ids: false
+reset-attention-mask: true
+eod-mask-loss: true
+
+# ── Precision ──────────────────────────────────────────────────────────────
+bf16: true
+
+# ── Checkpointing / eval: DISABLED for profiling ───────────────────────────
+save-interval: 100000
+no-save-optim: true
+ckpt-format: torch_dist
+eval-iters: 1
+eval-interval: 100000
+
+# ── Logging / runtime ──────────────────────────────────────────────────────
+log-interval: 1
+log-timers-to-tensorboard: true
+log-memory-to-tensorboard: true
+log-throughput: true              # TFLOP/s/GPU per iter — the cheap first-look metric
+timing-log-level: 2               # full per-iter breakdown (fwd/bwd/batch-gen/optimizer/...)
+timing-log-option: minmax         # min/max across ranks -> free straggler signal
+tensorboard-queue-size: 1
+distributed-timeout-minutes: 60
+manual-gc: true
+manual-gc-interval: 5
+
+# ── Performance knobs (match production timeline) ──────────────────────────
+overlap-grad-reduce: true
+attention-backend: auto
+cross-entropy-loss-fusion: true
+cross-entropy-fusion-impl: te
+
+# NOTE: no wandb-project here on purpose -> train.sh won't require
+# --wandb-exp-name and won't log a throwaway profiling run.
