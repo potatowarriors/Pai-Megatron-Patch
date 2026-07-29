@@ -161,7 +161,13 @@ run_eval() {
     echo "   N-shot: $num_fewshot"
     echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 
-    accelerate launch --multi_gpu --num_processes=$NUM_GPUS --main_process_port 29501 \
+    # --multi_gpu는 2+ 프로세스 전용 — 단일 GPU(NUM_GPUS=1)에서는 빼야 함
+    local MULTI_GPU_FLAG=""
+    if [ "$NUM_GPUS" -gt 1 ]; then
+        MULTI_GPU_FLAG="--multi_gpu"
+    fi
+
+    accelerate launch $MULTI_GPU_FLAG --num_processes=$NUM_GPUS --main_process_port 29501 \
         ${SCRIPT_DIR}/eval_wrapper.py \
         --model hf \
         --model_args pretrained=$model_path,trust_remote_code=True,dtype=bfloat16 \

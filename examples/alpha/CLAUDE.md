@@ -485,6 +485,26 @@ bash train.sh baseline_48L pretrain_auxfree stage1_v5_korean_web
   `NVTE_CUDA_ARCHS=90`(빌드 30분+→3분), TE wheel을 workspace에 보존(타 노드 재빌드 생략),
   cuDNN 9.24 설치 포함. 원본 스크립트는 참조용 무수정 보존.
 
+### A100 단일-GPU 벤치 환경: modelopt 몽키패치·typing_extensions·--multi_gpu 3중 이슈 (2026-07-22 ✅)
+
+- A100(Ampere) 박스에서 evaluate.sh 경로만 밟는 3중 이슈 — 셋 다 H100 멀티노드에서는
+  미노출. ① NGC 번들 `nvidia-modelopt`가 import 시 transformers `from_pretrained`를
+  구버전 시그니처로 몽키패치 → 핀 4.57.0.dev0과 충돌(TypeError). 유입은 Megatron
+  `checkpointing.py`의 guarded import → **modelopt 제거**(alpha 미사용; `sudo -E env -u
+  PIP_CONSTRAINT /usr/local/bin/pip uninstall --break-system-packages ...` — 일반
+  `sudo pip`은 Debian pip+PEP 668에 막힘). ② lm-eval 0.4.12가 `typing_extensions>=4.13`
+  (`TypedDict extra_items`) 요구 → 업그레이드. ③ `run_benchmarks.sh`의
+  `accelerate launch --multi_gpu` 하드코딩이 NUM_GPUS=1에서 즉사하는데 **exit 0 무음
+  실패** → NUM_GPUS>1 조건부로 패치. 성공 판정은 `eval_results/results_*.json` 존재로.
+- 환경 셋업은 `setup_pai_megatron_env_A100_v2.sh`(repo 부모, NVTE_CUDA_ARCHS=80 —
+  workspace 루트의 TE wheel은 **sm_90 전용이라 A100 재사용 금지**, 아치별 캐시
+  `te_wheels_sm80/` 사용). DiLoCo per-node ckpt 벤치는 unshard 보정 불필요(순수 Megatron
+  로드가 outer state 무시). 상세·stage2 벤치 기록(node0 iter7120·iter10000):
+  [`docs/A100_SINGLE_GPU_EVAL.md`](docs/A100_SINGLE_GPU_EVAL.md)
+- (07-27) ①②는 A100_v2 스크립트 **Step 13.5로 내장** — 수동 조치 불필요. 세션
+  재생성(재부팅) 시 전체 복원 runbook: repo 부모의 `RESTORE_AFTER_REBOOT.md`
+  (환경 = 스크립트 1회 + TE wheel 캐시, Gemma 서빙 = `reboot_restore/restore_gemma_serving.sh`).
+
 ### MG↔HF weight 검증이 `expert_bias` 1개에서 지속 실패 — fp32 router bias 다운캐스트 (2026-06-15 ✅)
 
 - **증상**: `evaluate.sh` Stage 2 (`validate_mg_hf_full.py`)가 `✗ WEIGHT MISMATCH DETECTED`로 exit 1. 요약은 **`14180/14181 matched` — 정확히 1개 비교만 실패**. coverage 갭(unchecked 24 / phantom 48)은 전부 filtered=0이라 실패 원인이 아니고, 실패한 1개는 layer 0의 `router.expert_bias ↔ gate.e_score_correction_bias`. iter가 진행될수록 **악화**(bias가 단조 누적).
