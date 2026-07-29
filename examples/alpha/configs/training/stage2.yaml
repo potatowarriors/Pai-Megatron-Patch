@@ -1,0 +1,244 @@
+# Stage 2 PRODUCTION — continual pre-training on the v5 packed blend.
+#
+# This is the production sibling of stage2_ab.yaml. stage2_ab.yaml IS the
+# "PLANNED stage2" recipe (stage1 recipe + packed blend + GBS 3072 + finetune
+# from the completed stage1 checkpoint at iter 71,526) with exactly ONE A/B-only
+# deviation: a 100-iter short warmup so the ~200-iter comparison window reaches
+# peak LR. This preset reverts that single deviation to the production choice
+# and re-scopes the token budget for the multi-node run. Everything else is
+# byte-identical to stage2_ab.yaml (= the stage1 recipe).
+#
+# ── Deltas vs stage2_ab.yaml (7 changes; all else identical) ────────────────
+#   1. lr-warmup-samples 307,200 -> 2,930,688   (A/B short window -> stage1's
+#        full ~12B-token warmup; production choice per stage2_ab.yaml header).
+#   2. train-samples 170,898,438 -> 73,242,624  (re-scoped: see § Budget below).
+#   3. save/eval-interval 10,000 -> 2,000        (production-safety cadence,
+#        stage1_resume precedent "never lose much").
+#   4. lr 2.5e-5 -> 7.5e-5 (min-lr 2.5e-6 -> 7.5e-6)  (higher continuation LR
+#        for the 2×-effective-batch DiLoCo regime; see § LR).
+#   5. + rampup-batch-size: GBS ramps 1536 -> 3072 over the first 30% of training
+#        (start at stage1's GBS, grow into stage2's; see § Batch-size ramp-up).
+#   6. no-save-optim true -> false               (save full optim+scheduler state
+#        for seamless bit-identical crash resume; see § Checkpointing).
+#   7. load + finetune -> pretrained-checkpoint   (crash-safe auto-resume by
+#        re-running the same command; see § Stage transition).
+#
+# ── Multi-node execution: DiLoCo (this cluster has NO InfiniBand) ────────────
+# This preset is a NORMAL single-node Megatron training preset — DiLoCo is
+# applied by the LAUNCHER, not by this file. The cross-node algorithm, data
+# sharding, and outer optimizer all live in env knobs consumed by
+# launch_diloco.sh (see CLAUDE.md "Multi-Node Training — DiLoCo" and
+# study/diloco_pilot.md). Launch the production run with:
+#
+#   DILOCO_CKPT_DIR=$PWD/outputs/diloco_stage2 \
+#   DILOCO_DATA_SHARD=1 DILOCO_H=30 DILOCO_TAU=2 \
+#     bash launch_diloco.sh stage2 baseline_48L stage2 stage2_v5_blend_packed
+#
+#   • DILOCO_DATA_SHARD=1 is MANDATORY for production — one shared global
+#     shuffle order split as world*i+r → 0 overlap / 0 gap across the 2 nodes
+#     (seed-split is A/B-only and wastes ~17% to duplication at scale).
+#   • H=30 / TAU=2 are the pilot-validated production values (sync overhead
+#     ~10% of an H window in the heavy packed-blend streaming regime).
+#   • Crash-safe resume: RE-RUN THE EXACT SAME COMMAND. Per-node stable dirs
+#     (DILOCO_CKPT_DIR/node{0,1}/checkpoints) make the first launch fall back to
+#     the stage1 pretrained-checkpoint (fresh start) and every later launch
+#     full-state-resume from the stage2 checkpoint (Muon optim + scheduler + RNG
+#     via no-save-optim=false; DiLoCo outer state θ+momentum auto-restores from
+#     <load>/diloco_outer/). No --load overrides, no finetune toggling — see the
+#     § Stage transition and § Checkpointing sections below.
+#
+# ── Budget: --train-samples is PER-NODE in shard mode ───────────────────────
+# In DILOCO_DATA_SHARD=1 the two nodes consume DISJOINT halves of one global
+# order, so cluster-total tokens = world × train-samples × seq_length. Target =
+# 0.6T total tokens over the 2-node cluster:
+#
+#   total 0.6T tok / 2 nodes            = 0.3T tok/node
+#   per-node iters = 0.3e12 / (3072×4096) = 23,842 iters   (GBS=3072, seq=4096)
+#   train-samples  = 23,842 × 3072        = 73,242,624 samples/node
+#     → 300.00B tok/node × 2 = 600.00B ≈ 0.6T total unique (0.36 epoch of the
+#       1.686T packed corpus; no repetition, weight-less natural blend).
+#
+# WSD schedule (per-node; both nodes run it in lockstep, sync every H steps):
+#   warmup: 0            → 2,930,688   (=  12.00B tok; LR linear 0→7.5e-5)
+#   stable: 2,930,688    → 66,723,840  (= 261.30B tok; flat 7.5e-5)
+#   decay:  66,723,840   → 73,242,624  (=  26.70B tok; cosine 7.5e-5→7.5e-6)
+#   total:  73,242,624 samples/node    (= 300.00B tok/node)
+# The GBS ramp-up (1536→3072) runs ORTHOGONALLY over the first 30% (0 →
+# 21,970,944 samples): it spans the warmup + the early stable phase and is NOT
+# tied to the LR warmup (see § Batch-size ramp-up).
+# Sample values are exact multiples of GBS=3072. Iter counts = budget/3072 =
+# 23,842 NOMINAL; because the ramp's early iters consume <3072 samples, the run
+# takes ~+12% more iters (~26.8k). The SAMPLE schedule is unchanged — LR/budget
+# are sample-driven and survive the GBS ramp (num_microbatches_calculator).
+
+# ── Sample (token-based) schedule ──────────────────────────────────────────
+train-samples: 73242624           # PER-NODE; ×2 nodes = 0.6T total (see § Budget)
+lr-warmup-samples: 2930688        # 954 iters @ GBS 3072 → 12.00B tok (stage1's full warmup)
+lr-decay-samples: 73242624        # WSD full scope (= train-samples)
+lr-wsd-decay-samples: 6518784     # 2,122 iters → 26.70B tok cooldown (~8.9% of budget; stage1 ratio)
+
+# ── LR: 7.5e-5 peak (3× stage1's ENDING LR of 2.5e-5, measured at iter 71,526 in
+# the stage1_resume tensorboard). The finetune resets the scheduler clock to 0,
+# so the full 12B-token warmup ramps 0→7.5e-5, then the WSD tail decays to 7.5e-6
+# (10:1 decay ratio convention preserved). The higher-than-continuation LR suits
+# the DiLoCo regime — 2-node outer-averaging behaves like a ~2× effective batch,
+# and the GBS ramp-up below lands at 3072, so √k batch-scaling motivates a peak
+# above the 2.5e-5 stage1 endpoint. The batch-size ramp is INTENTIONALLY longer
+# than the LR warmup (30% vs 4%): after warmup the model trains at full 7.5e-5
+# while GBS keeps climbing (1728→3072), so the growing batch acts like an implicit
+# LR decay (Smith et al. 2018, "Don't Decay the LR, Increase the Batch Size") —
+# higher gradient noise early, tapering as GBS grows. ────────────────────────
+lr: 7.5e-5
+min-lr: 7.5e-6
+lr-decay-style: WSD
+lr-wsd-decay-style: cosine
+
+# ── Parallelism (single-node instance per DiLoCo node; formerly h100x8.yaml) ─
+tensor-model-parallel-size: 1
+pipeline-model-parallel-size: 1
+expert-model-parallel-size: 8
+expert-tensor-parallel-size: 1
+context-parallel-size: 1
+micro-batch-size: 3
+global-batch-size: 3072            # TARGET / max GBS (ramp-up ceiling below)
+
+# ── Batch-size ramp-up (Megatron --rampup-batch-size; nargs='*' → space-string) ─
+# Start at stage1's GBS (1536) and grow to stage2's target (3072) over the FIRST
+# 30% of training, easing the stage1→stage2 transition (the model is mature and
+# was trained at GBS 1536). A long ramp with fixed peak LR front-loads gradient
+# noise that then tapers as GBS grows (Smith et al. 2018 — batch-size increase ≈
+# implicit LR decay). Format: "<start> <increment> <rampup-samples>".
+#   • start 1536, target 3072 → diff 1536 must be divisible by increment.
+#   • increment 96 → 16 steps (1536,1632,…,3072); every step is a multiple of
+#     micro_batch_size × data_parallel_size = 3 × 8 = 24 (required by the
+#     num-microbatches consistency check, num_microbatches_calculator.py:523).
+#   • rampup-samples 21,970,944 = 30.0% of the 73,242,624/node budget (= 90.0B
+#     tok/node; 16 increments × 447 iters-worth @ GBS 3072). PER-NODE, like every
+#     sample count in this file. GBS hits 3072 at 30%; the WSD cooldown only
+#     begins at 91%, so the whole stable+decay tail runs at full GBS 3072.
+# DiLoCo-safe: data sharding is a sample-index remap (world*i+rank), independent
+# of GBS — verified against diloco_patch.py::_install_data_shard. Both nodes run
+# the identical ramp in lockstep (same consumed_samples trajectory).
+# Emitted as a space-separated STRING so train.sh's yaml_to_flags passes three
+# argv tokens (a YAML list would comma-join and break argparse nargs='*').
+rampup-batch-size: "1536 96 21970944"
+
+# ── Activation checkpointing ───────────────────────────────────────────────
+recompute-granularity: selective
+recompute-modules: "layernorm moe"
+
+# ── MoE routing (DSV3-strict: aux-loss-free + complementary seq_aux_loss) ─
+# Full DeepSeek-V3 alignment per paper Section 2.1.2:
+#   • PRIMARY: aux-loss-free strategy via expert bias updates
+#     (moe-router-enable-expert-bias=true, bias-update-rate=0.001)
+#   • COMPLEMENTARY: sequence-wise auxiliary balance loss with extremely
+#     small coefficient (moe-aux-loss-coeff=1.0e-4 in baseline_48L.yaml).
+#   • Sigmoid score + group-limited routing (8 groups × top-4) + topk-scaling
+#     2.5 from baseline_48L.yaml round out the DSV3 routing recipe.
+moe-router-load-balancing-type: seq_aux_loss
+moe-router-score-function: sigmoid
+moe-router-enable-expert-bias: true
+moe-router-bias-update-rate: 0.001
+moe-token-dispatcher-type: alltoall
+
+# ── Optimizer (Muon) ───────────────────────────────────────────────────────
+optimizer: dist_muon
+weight-decay: 0.1   # Moonshot Muon paper recommendation
+adam-beta1: 0.9
+adam-beta2: 0.95
+muon-momentum: 0.95
+muon-use-nesterov: true       # store_true: emitted only when true (Nesterov bug auto-fixed)
+muon-num-ns-steps: 5
+muon-scale-mode: spectral
+muon-fp32-matmul-prec: medium
+muon-tp-mode: blockwise
+muon-extra-scale-factor: 0.2
+init-method-std: 0.008
+clip-grad: 1.0
+
+# ── QK-Clip (Muon stabilization, requires TE >= 2.9.0) ────────────────────
+qk-clip: true
+qk-clip-alpha: 0.5
+qk-clip-threshold: 100
+log-max-attention-logit: true
+
+# ── LayerNorm WD (Qwen3-Next/Qwen3.5 official recipe) ─────────────────────
+# WD only on QK layernorm γ; other layernorms excluded. Same semantic as
+# Megatron-MoE-ModelZoo Qwen3-Next-80B-A3B `--no-weight-decay-cond-type qwen3_next`.
+no-weight-decay-cond-type: apply_wd_to_qk_layernorm
+
+# ── Document boundary handling (alpha hybrid recipe) ──────────────────────
+# reset-attention-mask + eod-mask-loss handle doc boundaries; reset-position-ids
+# is INTENTIONALLY OFF for the alpha hybrid (Mamba ignores masks + RoPE relative-
+# position invariance + PackedSeqParams incompatibility). See stage1.yaml for the
+# full rationale. The packed blend keeps EOD = id 0 as the pad token.
+reset-position-ids: false
+reset-attention-mask: true
+eod-mask-loss: true
+
+# ── Precision ──────────────────────────────────────────────────────────────
+bf16: true
+
+# ── Checkpointing ──────────────────────────────────────────────────────────
+# 2,000-iter cadence (vs stage2_ab's 10,000): production-safety, in the spirit
+# of stage1_resume's "never lose much".
+#
+# no-save-optim is FALSE (was true in stage2_ab/stage1): each save now persists
+# the full Muon optimizer + LR-scheduler + RNG state so a post-crash resume is
+# SEAMLESS and bit-identical (validated in study/diloco_pilot.md "full-state
+# resume, 3중 bit-일치"; the NCCL-OOM-on-resume crash is fixed by train.sh's
+# NCCL_MAX_NCHANNELS=16). With no-save-optim=true the scheduler is NOT saved
+# (checkpointing.py:848) → resume restarts the LR clock at 0 and mis-scopes the
+# WSD schedule — the exact problem stage1_resume.yaml had to hand-patch. DiLoCo
+# also persists its outer state to <save>/diloco_outer/iter_N/ (θ+momentum,
+# ~27GB/rank, ~140s/save) and drains any pending sync before saving (fixed
+# 2026-07-14). Cost: each save grows ~31GB → ~150GB (weights+optim); ~13 saves
+# over the run ≈ 7 TB total, well within the 39 TB free. Megatron does NOT
+# auto-rotate persistent checkpoints — prune old iter_* dirs manually if disk
+# gets tight (keep the SAME iterations on BOTH nodes for a valid DiLoCo resume).
+save-interval: 2000
+no-save-optim: false
+ckpt-format: torch_dist
+
+# ── Eval ───────────────────────────────────────────────────────────────────
+eval-iters: 3
+eval-interval: 2000
+
+# ── Logging / runtime ──────────────────────────────────────────────────────
+log-interval: 1
+log-timers-to-tensorboard: true
+log-memory-to-tensorboard: true
+log-validation-ppl-to-tensorboard: true
+log-throughput: true
+tensorboard-queue-size: 1
+distributed-timeout-minutes: 60
+manual-gc: true
+manual-gc-interval: 5
+
+# ── Performance knobs (formerly hardcoded in shell INFRA_ARGS) ────────────
+overlap-grad-reduce: true
+attention-backend: auto       # TE picks fused for QK-Clip return_max_logit, flash otherwise
+cross-entropy-loss-fusion: true
+cross-entropy-fusion-impl: te
+
+# ── WANDB ──────────────────────────────────────────────────────────────────
+# API key comes from WANDB_API_KEY env (set by scripts/setup_wandb.sh).
+# Do NOT inline the key here.
+wandb-project: alpha-pretraining
+
+# ── Stage transition + crash-safe auto-resume (pretrained-checkpoint idiom) ──
+# `pretrained-checkpoint` is consulted ONLY when --load has no checkpoint yet
+# (checkpointing.py:1417). The FIRST launch finds the empty per-node stage2
+# --load dir, falls back to this completed stage1 checkpoint (iter 71,526), and
+# sets finetune=True itself → weights loaded, iteration/consumed reset to 0,
+# shard mode streams the packed blend from position 0. Every LATER launch finds
+# a real stage2 checkpoint in --load → normal full-state resume with NO reset,
+# because `finetune` is NOT set here.
+#
+# This is deliberately NOT `load:` + `finetune: true` — that resets iteration to
+# 0 on EVERY re-run (checkpointing.py:1653), silently restarting a multi-week run
+# from scratch. --load and --save are supplied per-node by launch_diloco.sh
+# (DILOCO_CKPT_DIR → outputs/diloco_<tag>/node{0,1}/checkpoints, stable across
+# relaunches), so the production run resumes just by RE-RUNNING THE SAME COMMAND.
+# Do NOT add `load:` / `finetune:` back here.
+pretrained-checkpoint: /home/work/vidsearch/repos/project_s/Pai-Megatron-Patch/examples/alpha/outputs/alpha_baseline_48L_stage1_resume_20260526_194537/checkpoints

@@ -30,8 +30,8 @@ Env contract (set by the launcher):
   DILOCO_PORT_BASE       base port; local_rank r uses base+r
   DILOCO_H               inner steps per outer sync (default 30)
   DILOCO_TAU             apply delay in inner steps, 0 = blocking (default 0)
-  DILOCO_OUTER_LR        default 0.7   (DiLoCo paper defaults)
-  DILOCO_OUTER_MOMENTUM  default 0.9
+  DILOCO_OUTER_LR        default 0.7   (DiLoCo paper default)
+  DILOCO_OUTER_MOMENTUM  default 0.6   (MuLoCo best for Muon inner; was 0.9 DiLoCo default)
   DILOCO_SKIP_SAVE       1 = disable checkpoint saving (pilot escape hatch)
 
 The outer state (theta_global + momentum, fp32) lives on CPU.
@@ -56,7 +56,7 @@ class _State:
         self.H = int(os.environ.get("DILOCO_H", "30"))
         self.tau = int(os.environ.get("DILOCO_TAU", "0"))
         self.outer_lr = float(os.environ.get("DILOCO_OUTER_LR", "0.7"))
-        self.outer_momentum = float(os.environ.get("DILOCO_OUTER_MOMENTUM", "0.9"))
+        self.outer_momentum = float(os.environ.get("DILOCO_OUTER_MOMENTUM", "0.6"))
         self.local_rank = int(os.environ.get("LOCAL_RANK", "0"))
         assert 0 <= self.tau < self.H, "DILOCO_TAU must be in [0, H)"
         self.pg = None
