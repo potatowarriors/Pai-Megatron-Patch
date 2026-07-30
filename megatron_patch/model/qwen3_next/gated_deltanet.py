@@ -27,6 +27,12 @@ from megatron.core.transformer.utils import (
 from megatron.core.ssm.mamba_context_parallel import MambaContextParallel
 from megatron.core.ssm.mamba_mixer import MambaMixer, MambaMixerSubmodules, _split_tensor_factory
 
+from megatron_patch.model.qwen3_next.gdn_context_parallel import (
+    build_head_perm_for_split_sections,
+    tensor_a2a_cp2hp,
+    tensor_a2a_hp2cp,
+)
+
 
 try:
     from causal_conv1d import causal_conv1d_fn, causal_conv1d_update
@@ -280,6 +286,31 @@ class GatedDeltaNetMixer(MambaMixer):
             D_has_hdim=self.D_has_hdim,
         )
 
+        # GDN context parallel (a2a head-split, ported from upstream PR #2642).
+        # The GDN a2a layout assigns whole k-head groups to each CP rank; the
+        # Mamba2-style group-state replication path (cp_size > ngroups) is not
+        # supported here, matching the upstream GDN constraint
+        # `num_key_heads % (tp_size * cp_size) == 0`.
+        if self.cp.cp_size > 1:
+            assert self.cp.group_repeat_count == 1, (
+                "GDN context parallel requires ngroups/tp (num_k_heads per TP rank) "
+                f"to be divisible by cp_size; got ngroups_local_tp={self.ngroups_local_tp}, "
+                f"cp_size={self.cp.cp_size}"
+            )
+        # Per-section channel sizes of the in_proj output on this TP rank, in
+        # this module's fused layout order [z, V, Q, K, b, a]. Used to build the
+        # head permutation that makes a single unsectioned a2a equivalent to a
+        # per-section a2a (each CP rank must receive the r-th slice of EVERY
+        # section, not the r-th slice of the whole fused tensor).
+        self.in_proj_split_sections = (
+            self.d_inner_local_tp,                 # z
+            self.d_inner_local_tp,                 # V
+            self.ngroups_local_tp * self.d_state,  # Q
+            self.ngroups_local_tp * self.d_state,  # K
+            self.nheads_local_tp,                  # b
+            self.nheads_local_tp,                  # a
+        )
+
     def forward(
         self,
         hidden_states,
@@ -293,7 +324,18 @@ class GatedDeltaNetMixer(MambaMixer):
 
         zVQKba, _ = self.in_proj(hidden_states)
 
-        #zVQKba = self.cp.pre_conv_ssm(zVQKba)
+        if self.cp.cp_size > 1:
+            # CP a2a: sequence-split -> head-split. After this, each CP rank
+            # holds the FULL sequence in natural order for its 1/cp slice of
+            # every section [z, V, Q, K, b, a], so the tpcp-sized splits below
+            # line up and the recurrence runs unbroken over the whole sequence.
+            head_perm = build_head_perm_for_split_sections(
+                self.in_proj_split_sections, self.cp.cp_size, zVQKba.device
+            )
+            zVQKba = zVQKba.index_select(-1, head_perm)
+            zVQKba = tensor_a2a_cp2hp(
+                zVQKba, seq_dim=0, head_dim=-1, cp_group=self.pg_collection.cp
+            )
 
         zVQKba = rearrange(zVQKba, "l b d -> b l d").contiguous()
 
@@ -312,7 +354,7 @@ class GatedDeltaNetMixer(MambaMixer):
         VQK = causal_conv1d_fn(
             x=VQK,
             weight=rearrange(self.cp.get_conv1d_weight(), "d 1 w -> d w"),
-            bias=self.cp.get_conv1d_bias(),
+            bias=self.cp.get_conv1d_bias() if self.conv1d.bias is not None else None,
             activation=self.activation,
         )
         
@@ -347,7 +389,10 @@ class GatedDeltaNetMixer(MambaMixer):
 
         beta = b.sigmoid()
         # If the model is loaded in fp16, without the .float() here, A might be -inf
-        g = -self.A_log.float().exp() * F.softplus(a.float() + self.dt_bias)
+        # A_log/dt_bias are full-size replicated params; under CP each rank uses
+        # (and receives gradient for) only its own head slice. cp_size==1 returns
+        # the parameters unmodified.
+        g = -self.cp.get_A_log().float().exp() * F.softplus(a.float() + self.cp.get_dt_bias())
         if self.cp.nheads_local_tpcp // self.cp.ngroups_local_tpcp > 1:
             query = query.repeat_interleave(self.cp.nheads_local_tpcp // self.cp.ngroups_local_tpcp, dim=2)
             key = key.repeat_interleave(self.cp.nheads_local_tpcp // self.cp.ngroups_local_tpcp, dim=2)
@@ -364,11 +409,16 @@ class GatedDeltaNetMixer(MambaMixer):
         )
 
         if self.rmsnorm:
-            #z = self.cp.post_conv_ssm(z)
+            # Under CP, z came through the same a2a as V/Q/K and is head-split
+            # consistently with core_attn_out; the gated RMSNorm is per-head.
             core_attn_out = self.norm(core_attn_out, z)
 
         y = rearrange(core_attn_out, "b l h p -> l b (h p)").contiguous()
-        #y = self.cp.post_conv_ssm(y)
+
+        if self.cp.cp_size > 1:
+            # CP a2a: head-split -> sequence-split, restoring the attention
+            # load-balanced chunk order expected by the surrounding layers.
+            y = tensor_a2a_hp2cp(y, seq_dim=0, head_dim=-1, cp_group=self.pg_collection.cp)
 
         out, out_bias = self.out_proj(y)
 
