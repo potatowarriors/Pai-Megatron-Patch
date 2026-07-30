@@ -64,16 +64,111 @@ torchrun --nproc_per_node=4 tests/test_gdn_context_parallel.py
 - `CUDA_DEVICE_MAX_CONNECTIONS=1` 필수 (CP>1에서 Megatron assert). **throughput lever 1
   (conn=8, +2.7%)은 CP>1과 양립 불가 — CP 도입 시 되돌릴 것.**
 
-## H100 클러스터 후속 검증 체크리스트 (노드 빌 때)
+## H100 클러스터 검증 러너북 (노드 빌 때)
 
-| # | 항목 | 명령 (예) | 판정 기준 |
+### 사전 준비
+
+```bash
+# (분석 노드에서) 브랜치를 origin에 push — 클러스터 checkout이 받을 수 있게
+git push origin feature/gdn-context-parallel
+
+# (클러스터에서) 학습 브랜치에 머지하거나 이 브랜치를 직접 checkout
+git fetch origin && git checkout feature/gdn-context-parallel
+```
+
+주의사항 (전 항목 공통):
+- `CUDA_DEVICE_MAX_CONNECTIONS=1` 이어야 함 (train.sh 기본값; **conn=8 throughput
+  override를 쓰고 있었다면 해제** — CP>1에서 Megatron이 assert).
+- data preset이 `mock`이면 train.sh가 wandb를 자동 차단 → 라이브 대시보드 오염 없음.
+- `--save`는 train.sh가 타임스탬프 run 디렉토리로 자동 유도 — 라이브 체크포인트
+  디렉토리를 절대 직접 지정하지 말 것.
+- profile preset은 dist_muon + qk-clip:true + prod recompute(selective layernorm+moe)
+  내장, GBS 96/MBS 3 → CP∈{1,2,4,8} 전부에서 GBS 나눗셈 성립 (dp=8/cp).
+
+### 1. 포팅 유닛테스트 (H100/sm90 + NCCL 실환경 재확인, ~5분)
+
+```bash
+cd <repo-root>
+export PYTHONPATH=$PWD:$PWD/backends/megatron/Megatron-LM-251125
+python tests/test_gdn_context_parallel.py                      # 단위 + (옵션) bitwise 회귀
+torchrun --nproc_per_node=2 tests/test_gdn_context_parallel.py
+torchrun --nproc_per_node=4 tests/test_gdn_context_parallel.py
+```
+판정: `ALL ... TESTS PASSED`, forward max diff 0.0.
+**주의**: toy 모델이 k-head 4개라 `--nproc_per_node=8`은 cp>ngroups assert로 의도적
+실패 — 8-rank(CP=8)는 아래 full-stack 스모크(실모델 k-head 16)가 커버.
+
+### 2. Full-stack CP=1 vs CP=2 A/B (Muon + QK-Clip + EP8×CP 결합, 항목 2·3·4 통합)
+
+```bash
+cd examples/alpha
+# 기준선 CP=1 (8 GPU, EP8)
+bash train.sh analysis_24L profile mock \
+  --expert-model-parallel-size 8 --train-iters 16
+# CP=2 (dp 4), CP=4 (dp 2), CP=8 (dp 1) — 각각 실행
+bash train.sh analysis_24L profile mock \
+  --expert-model-parallel-size 8 --context-parallel-size 2 --train-iters 16
+bash train.sh analysis_24L profile mock \
+  --expert-model-parallel-size 8 --context-parallel-size 4 --train-iters 16
+bash train.sh analysis_24L profile mock \
+  --expert-model-parallel-size 8 --context-parallel-size 8 --train-iters 16
+```
+판정:
+- parallel_state init 성공 (EP8이 expert-DP로 CP 흡수 — 항목 4)
+- iter-1 lm_loss: CP=1 대비 |Δ| ≲ 1e-2 (GDN은 bit-identical이지만 attention ring의
+  리덕션 순서 차이로 bf16 수준 오차는 정상), iter 16까지 궤적 근접 + NaN 0
+- Muon step 크래시 없음, grad-norm 로그 CP=1과 근사 (항목 2)
+- `max_attention_logit` 로깅 정상 (TE가 max_logit로 flash를 끄고 fused+CP 경로 선택;
+  cuDNN 9.24 LD_PRELOAD는 train.sh 자동) (항목 3)
+
+QK-Clip **발동 경로**까지 강제 확인 (임계 1로 낮춰 clip 실행 유도):
+```bash
+bash train.sh analysis_24L profile mock \
+  --expert-model-parallel-size 8 --context-parallel-size 2 \
+  --qk-clip-threshold 1 --train-iters 5
+```
+판정: clip 실행 로그 + exit 0 (수치는 무의미, 크래시 여부만).
+
+### 3. stage2 체크포인트 CP>1 로드 스모크 (항목 5)
+
+```bash
+# 학습 브랜치 머지 후, 라이브와 같은 model preset으로. 로드는 read-only.
+bash train.sh baseline_48L <stage2_training_preset> <stage2_data_preset> \
+  --load <stage2 ckpt 경로> --no-load-optim --no-load-rng \
+  --context-parallel-size 2 --exit-interval 3
+```
+판정: torch_dist 로드 성공(CP는 파라미터 비샤딩 — 복제 로드), 첫 lm_loss가 라이브
+stage2 수준(발산/스파이크 없음), 3 iter 후 정상 종료.
+
+### 4. LC 메모리 프로파일 (항목 6) — 32K/128K × CP{4,8}
+
+```bash
+# 32K @ CP4 (권장 기준선)
+bash train.sh baseline_48L profile mock \
+  --expert-model-parallel-size 8 --context-parallel-size 4 \
+  --seq-length 32768 --micro-batch-size 1 --global-batch-size 8 \
+  --no-create-attention-mask-in-dataloader --train-iters 5
+# 32K @ CP8, 128K @ CP8 (seq만 교체: 131072)
+```
+- 판정: iter-1 후 Megatron 메모리 리포트의 `max allocated` < ~76GB(마진 포함) — 수치를
+  이 문서 §VRAM 표에 실측으로 기입.
+- 128K가 selective recompute로 초과하면 full recompute로 재시도:
+  `--recompute-granularity full --recompute-method uniform --recompute-num-layers 1`
+  (profile preset의 `recompute-modules`와 충돌 assert가 나면 전용 preset yaml을 만들어
+  recompute 키를 교체할 것).
+- `--no-create-attention-mask-in-dataloader`는 LC에서 필수 (32K에서 [1,1,s,s] bool
+  마스크 = 샘플당 1GiB; TE causal은 어차피 이 마스크를 무시).
+
+### 요약 판정표
+
+| # | 항목 | 커버하는 러너북 단계 | 핵심 판정 |
 |---|---|---|---|
-| 1 | analysis_24L twin CP=2 스모크 | `bash train.sh analysis_24L profile mock --context-parallel-size 2 --train-iters 10` | exit 0, NaN 없음, iter-1 lm_loss가 CP=1 실행과 bf16 오차 내 일치 |
-| 2 | Muon(dist_muon)+CP | 위와 동일 (profile preset이 Muon 사용 시 그대로) | grad-norm/loss 궤적 CP=1과 근사 일치, optimizer step 크래시 없음 |
-| 3 | QK-Clip+CP | `--qk-clip` 활성 상태에서 #1 반복 (cuDNN 9.24 LD_PRELOAD 유지) | max_attention_logit 로깅 정상, fused-attn 엔진 선택 성공(TE가 max_logit로 flash를 끄고 fused+CP 경로 사용) |
-| 4 | 프로세스 그룹 결합 | 8GPU: TP1·PP1·EP8·CP{2,4,8} | parallel_state init 성공 (expert-DP로 CP 흡수 확인) |
-| 5 | stage2 ckpt CP>1 로드 | `--load <stage2 ckpt> --context-parallel-size 4` 스모크 | torch_dist 로드 성공(CP는 파라미터 비샤딩·복제), resume 후 loss 연속 |
-| 6 | 32K 메모리 프로파일 | prod 48L, seq 32768, MBS 1, CP{4,8} | max-alloc < 80GB, 여유분 기록 → 128K 계획 수립 |
+| 1 | GDN CP 수치 정합 (H100) | §1 | forward max diff 0.0 |
+| 2 | Muon(dist_muon)+CP | §2 | loss/grad-norm 궤적 CP=1 근접, step 크래시 없음 |
+| 3 | QK-Clip+CP | §2 | max_logit 로깅 + threshold=1 강제 발동 무크래시 |
+| 4 | EP8×CP 프로세스 그룹 | §2 | CP{2,4,8} init 성공 |
+| 5 | stage2 ckpt CP>1 로드 | §3 | torch_dist 복제 로드 + loss 연속 |
+| 6 | 32K/128K 메모리 | §4 | max-alloc < 76GB, 실측치 기록 |
 
 ## Out of scope (후속 별도 안건)
 
