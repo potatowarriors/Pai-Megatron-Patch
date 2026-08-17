@@ -48,5 +48,9 @@ __pycache__/
 *.sublime-*
 
 # Internal documentation (not for public GitHub)
-examples/alpha/docs/
+# NOTE 2026-08-17: examples/alpha/docs/ is now TRACKED (decision records —
+# curriculum log, throughput/eval investigations — must be versioned; the
+# untracked-docs policy destroyed analysis provenance, see mirror-loss episode).
+# Secrets must never live in docs — keys go in scripts/setup_wandb.sh (tracked
+# history already contains one; rotate before making the repo public).
 toolkits/distributed_checkpoints_convertor/scripts/alpha/docs/
