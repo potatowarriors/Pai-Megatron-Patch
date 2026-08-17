@@ -8,11 +8,19 @@ Reads token counts of every packed constituent directly from bin_bytes/4
 category's target share across its members proportionally to measured size,
 and writes flat Megatron data YAMLs.
 
-Categories and target shares (cluster-total, decided 2026-07-29):
-  P2 (switch at ckpt 14,000, stable remainder):
+Categories and target shares (cluster-total; P2 decided 2026-07-29, P2b/P3
+revised 2026-08-05 after adding Nemotron-CC-Code-v1 — 427.9B real CC code pages,
+Ultra's "nemotron-cc-code" category; fills the raw-code=0% structural gap):
+  P2  (LIVE since ckpt 14,000, superseded by P2b at 18,000):
       specialized 15  math 20  code 13  cc_actual 22.5  cc_qa 23  korean 4  fw2hq 2.5
-  P3 (switch at ckpt 24,000, ~decay onset):
-      specialized 35  math 18  code 10  cc_actual 6     cc_qa 21  korean 6  fw2hq 4
+  P2b (switch at ckpt 18,000 — insert cc_code 8%, funded by cc_actual -4,
+       cc_qa -2, math -1, synthetic code -1):
+      specialized 15  math 19  code 12  cc_actual 18.5  cc_qa 21  korean 4
+      fw2hq 2.5  cc_code 8
+  P3  (switch at ckpt 24,000, ~decay onset — cc_code raised to 10%, funded by
+       crawl + synthetic code; specialized/math/korean kept intact):
+      specialized 35  math 18  code 8   cc_actual 4     cc_qa 16  korean 6
+      fw2hq 3  cc_code 10
 
 "specialized" = all 15 Nemotron-Pretraining-Specialized v1/v1.1/v1.2 subsets
 (user approved DeepSeek-v3-derived subsets; wiki_rewrite / scientific_coding
@@ -37,6 +45,7 @@ CATEGORIES = {
                   "code/student_teacher", "code/transpilation"],
     "cc_actual": ["nemotron_cc_hq/actual"],
     "cc_qa":     ["nemotron_cc_hq/qa_pairs"],
+    "cc_code":   ["cc_code"],
     "specialized": [
         "specialized/v1.1/code_concepts", "specialized/v1.1/economics",
         "specialized/v1.1/formal_logic", "specialized/v1.1/multiple_choice",
@@ -50,10 +59,13 @@ CATEGORIES = {
 }
 
 PLANS = {
+    # p2 is the LIVE preset since ckpt 14,000 (pre-cc_code; kept for reproducibility).
     "p2": {"specialized": 15.0, "math": 20.0, "code": 13.0, "cc_actual": 22.5,
-           "cc_qa": 23.0, "korean": 4.0, "fw2hq": 2.5},
-    "p3": {"specialized": 35.0, "math": 18.0, "code": 10.0, "cc_actual": 6.0,
-           "cc_qa": 21.0, "korean": 6.0, "fw2hq": 4.0},
+           "cc_qa": 23.0, "korean": 4.0, "fw2hq": 2.5, "cc_code": 0.0},
+    "p2b": {"specialized": 15.0, "math": 19.0, "code": 12.0, "cc_actual": 18.5,
+            "cc_qa": 21.0, "korean": 4.0, "fw2hq": 2.5, "cc_code": 8.0},
+    "p3": {"specialized": 35.0, "math": 18.0, "code": 8.0, "cc_actual": 4.0,
+           "cc_qa": 16.0, "korean": 6.0, "fw2hq": 3.0, "cc_code": 10.0},
 }
 
 HEADER = """\
@@ -106,6 +118,8 @@ def main():
         pairs = []
         for cat, rels in CATEGORIES.items():
             share = plan[cat]
+            if share <= 0:
+                continue  # zero-share category: omit from data-path entirely
             print(f"{'':24s}{cat:12s} {share:5.1f}% {cat_tot[cat]/1e9:8.1f}B")
             for rel in rels:
                 if rel in toks and cat_tot[cat] > 0:
@@ -116,9 +130,11 @@ def main():
             here = os.path.dirname(os.path.abspath(__file__))
             out = os.path.join(here, "..", "configs", "data",
                                f"stage2_v5_blend_packed_{name}.yaml")
-            desc = ("P2: stable-phase remainder after ckpt 14,000 — specialized in at 15%."
-                    if name == "p2" else
-                    "P3: decay-window blend after ckpt 24,000 — specialized 35%, quality-max.")
+            desc = {
+                "p2":  "P2: stable remainder after ckpt 14,000 — specialized in at 15%.",
+                "p2b": "P2b: after ckpt 18,000 — real code (Nemotron-CC-Code-v1) in at 8%.",
+                "p3":  "P3: decay-window blend after ckpt 24,000 — specialized 35%, cc_code 10%.",
+            }[name]
             with open(os.path.normpath(out), "w") as f:
                 f.write(HEADER.format(name=name.upper(), desc=desc))
                 f.write(f'data-path: "{data_path}"\n')
