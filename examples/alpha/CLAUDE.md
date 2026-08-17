@@ -223,7 +223,7 @@ max-position-embeddings: 262144
 | `sglang/convert_config_for_sglang.py` | Alpha→Qwen3-Next config converter (head_dim 256 / vocab 163,968 호환성 검증 필요) |
 | `sglang/sglang_alpha_model.py` | SGLang model adapter (mlp_only_layers support) |
 | `../../backends/sglang/setup.sh` | SGLang backend setup (patch + adapter install) |
-| `scripts/setup_wandb.sh` | Sourced by train.sh to set `WANDB_API_KEY` (smoke/mock 시 auto-override됨) |
+| `scripts/setup_wandb.sh` | Sourced by train.sh to set `WANDB_API_KEY` — **키 하드코딩 금지**, env → `$WANDB_KEY_FILE` → `scripts/.wandb_key`(gitignored, 표준) → `~/.wandb_key` 순 해석 (2026-08-18 유출 정리; smoke/mock 시 auto-override됨) |
 | `diloco_patch.py` | **DiLoCo 2노드 코어**: train_step 래핑, 페어별 Gloo sync, outer Nesterov, τ-오버랩, dense dedup, outer-state 저장/복원, 데이터 샤딩(짝/홀 + `DILOCO_SHARD_BLOCK` 블록-순환 — 단위 테스트 `tests/test_diloco_shard_view.py`). 검증 기록은 `study/diloco_pilot.md`, 샤딩 aliasing 규명은 `study/mirror_loss_aliasing.md` |
 | `pretrain_alpha_diloco.py` | DiLoCo 엔트리 (diloco_patch 설치 후 pretrain_alpha 실행; train.sh `PRETRAIN_SCRIPT` env로 주입) |
 | `launch_diloco.sh` | 2노드 런처 (env knob·데이터 모드·resume 규칙은 파일 헤더 주석) |

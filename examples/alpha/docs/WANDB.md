@@ -45,23 +45,31 @@ Alpha 프로젝트에서는 YAML 설정 기반 WANDB 통합을 구현했습니�
 
 ### 1. WANDB 계정 및 API 키
 
-이미 설정된 API 키:
+키는 **어떤 트래킹 파일에도 하드코딩하지 않는다** (2026-08-18 유출 정리 이후 규칙).
+`scripts/setup_wandb.sh`가 아래 순서로 키를 해석한다:
+
+1. 이미 export된 `WANDB_API_KEY` (그대로 존중)
+2. `$WANDB_KEY_FILE`이 가리키는 파일
+3. `scripts/.wandb_key` (gitignored, chmod 600 — **표준 위치**)
+4. `~/.wandb_key`
+
+키 설정/교체는 파일 한 줄 교체로 끝난다:
 ```bash
-<WANDB_API_KEY — scripts/setup_wandb.sh 참조 (커밋 금지)>
+printf '%s' '<YOUR_WANDB_API_KEY>' > scripts/.wandb_key && chmod 600 scripts/.wandb_key
 ```
 
-사용자: `kide004` (https://wandb.ai/kide004)
+사용자: `kide004` (https://wandb.ai/kide004) — 키 발급/폐기: https://wandb.ai/settings → API keys
 
 ### 2. 환경 변수 설정
 
 WANDB API 키를 환경 변수로 설정:
 
 ```bash
-# 방법 1: 스크립트 사용 (권장)
+# 방법 1: 스크립트 사용 (권장 — scripts/.wandb_key 파일에서 키를 읽음)
 source ./scripts/setup_wandb.sh
 
-# 방법 2: 수동 설정
-export WANDB_API_KEY="<WANDB_API_KEY — scripts/setup_wandb.sh 참조 (커밋 금지)>"
+# 방법 2: 수동 설정 (env가 파일보다 우선)
+export WANDB_API_KEY="<YOUR_WANDB_API_KEY>"   # 셸 히스토리 주의; 파일 방식 권장
 export WANDB_MODE="online"
 ```
 
@@ -333,9 +341,9 @@ created_at > "2025-01-17"
 source ./scripts/setup_wandb.sh
 ```
 
-또는:
+또는 키 파일이 없는 경우 생성:
 ```bash
-export WANDB_API_KEY="<WANDB_API_KEY — scripts/setup_wandb.sh 참조 (커밋 금지)>"
+printf '%s' '<YOUR_WANDB_API_KEY>' > scripts/.wandb_key && chmod 600 scripts/.wandb_key
 ```
 
 #### 2. WANDB not logging
