@@ -215,7 +215,8 @@ max-position-embeddings: 262144
 | `tools/verify_pipeline.py` | 검증 게이트: `preflight` / `compare-config`(config.json↔common.pt) / `tokenizer-roundtrip` |
 | `calculate_parameters.py` | Parameter count tool — accepts flat YAML; reports 15.08B for current baseline |
 | `tools/compute_blend_weights.py` | Stage-2 blend weight 계산 — CC-HQ cap + 자연비율 재분배, epoch 표(over-epoch 경고), data-path/YAML emit. `--cap-cchq`/`--budget-t`/`--write` (§"Stage 2 v5 Re-tokenization") |
-| `tokenizer_v5/` | **Alpha 전용 v5 tokenizer** (5 files, 12.6MB; HF `PreTrainedTokenizerFast`, vocab 163,860) |
+| `tokenizer_v5/` | **Alpha 전용 v5 tokenizer** (HF `PreTrainedTokenizerFast`, vocab 163,860). **chat template 등록됨** (2026-08-04): `chat_template.jinja` = Nemotron 3 Ultra 사본(think 규약·tool XML 포맷·effort 마커), `tokenizer_config.json`에 동기화 |
+| `tools/verify_chat_template.py` | chat template 검증 스위트 24 tests: 렌더 매트릭스(think 제거·tools·병합), 토큰 무결성, **assistant-스팬 마스킹 규약**(prefix-diff 불성립 실증), **injection 방어**(`split_special_tokens=True`) |
 | `hf_model/` | HuggingFace model implementation. `AlphaSparseMoeBlock`는 **DSV3 라우팅**(sigmoid + group-limited 8×4 + `e_score_correction_bias` + routed_scaling 2.5; `DeepseekV3TopkRouter` mirror) — 학습과 일치해야 벤치마크 유효. `configuration_alpha.py`에 `scoring_func/n_group/topk_group/routed_scaling_factor`, num_experts default=192. **`e_score_correction_bias`는 fp32 `nn.Parameter` + `_keep_in_fp32_modules_strict`** — buffer/bf16으로 되돌리지 말 것(MG fp32 정렬·라우팅 충실; Known Issues "fp32 router bias 다운캐스트" 참조) |
 | `../../toolkits/distributed_checkpoints_convertor/scripts/alpha/run_convert.sh` | **GPU-agnostic 변환기** (EP=#GPU, `num_experts%GPU` 검증, 모델 flags는 `emit-megatron-flags`에서). `run_8xH20.sh`/`run_4xGPU.sh`는 `GPUS=8`/`4` shim |
 | `sglang/deploy.sh` | SGLang deployment script (Option A/B, uses local backend) |
@@ -223,7 +224,7 @@ max-position-embeddings: 262144
 | `sglang/sglang_alpha_model.py` | SGLang model adapter (mlp_only_layers support) |
 | `../../backends/sglang/setup.sh` | SGLang backend setup (patch + adapter install) |
 | `scripts/setup_wandb.sh` | Sourced by train.sh to set `WANDB_API_KEY` (smoke/mock 시 auto-override됨) |
-| `diloco_patch.py` | **DiLoCo 2노드 코어**: train_step 래핑, 페어별 Gloo sync, outer Nesterov, τ-오버랩, dense dedup, outer-state 저장/복원, 데이터 샤딩. 검증 기록은 `study/diloco_pilot.md` |
+| `diloco_patch.py` | **DiLoCo 2노드 코어**: train_step 래핑, 페어별 Gloo sync, outer Nesterov, τ-오버랩, dense dedup, outer-state 저장/복원, 데이터 샤딩(짝/홀 + `DILOCO_SHARD_BLOCK` 블록-순환 — 단위 테스트 `tests/test_diloco_shard_view.py`). 검증 기록은 `study/diloco_pilot.md`, 샤딩 aliasing 규명은 `study/mirror_loss_aliasing.md` |
 | `pretrain_alpha_diloco.py` | DiLoCo 엔트리 (diloco_patch 설치 후 pretrain_alpha 실행; train.sh `PRETRAIN_SCRIPT` env로 주입) |
 | `launch_diloco.sh` | 2노드 런처 (env knob·데이터 모드·resume 규칙은 파일 헤더 주석) |
 
@@ -317,8 +318,8 @@ bf16 grad-reduce + GBS 3072에서도 **1.15×**에 그친다(실측; GBS 256이�
 ### Quick Start
 
 ```bash
-# 프로덕션 (완전 서로소 데이터 샤딩 — 필수):
-DILOCO_DATA_SHARD=1 DILOCO_H=30 DILOCO_TAU=2 \
+# 프로덕션 (완전 서로소 데이터 샤딩 — 필수; SHARD_BLOCK=GBS는 blend-aliasing 수정, 2026-08-17):
+DILOCO_DATA_SHARD=1 DILOCO_SHARD_BLOCK=3072 DILOCO_H=30 DILOCO_TAU=2 \
   bash launch_diloco.sh <tag> baseline_48L <training_preset> <data_preset> [extra...]
 
 # A/B 실험 (seed 분리 — node0가 1노드 기준선과 bit-비교 가능; 풀 예산 시 ~17% 중복):
@@ -345,6 +346,11 @@ NODE0_ARGS="--load <node0 ckpt>" NODE1_ARGS="--load <node1 ckpt>" DILOCO_DATA_SH
 ### 규칙/함정
 
 1. **프로덕션은 `DILOCO_DATA_SHARD=1` 필수** — 동일 seed 강제(페어 assert). seed-split은 A/B 전용.
+   신규 런은 **`DILOCO_SHARD_BLOCK=3072`(=GBS) 병용** — 레거시 짝/홀 매핑은 BlendedDataset의
+   결정론적 수열과 alias되어 노드별 구성 오프셋(P2) + 거울상 loss 시소(P2b/P3, 주기 ~325 iter)를
+   만든다. 블록-순환이면 양 노드 매 iter 구성 오차 ≤2샘플. 레거시→블록 전환은 GBS 일정 구간의
+   iteration 경계에서만(consumed % 3072 == 0, 기동 시 assert). 규명·실측:
+   [`study/mirror_loss_aliasing.md`](study/mirror_loss_aliasing.md).
 2. **H를 바꾸면 outer lr/μ 재튜닝** — H=5에서 문헌 기본값(0.7/0.9)은 초반 우세 후 역전됨.
 3. 체크포인트 저장 시 pending sync는 자동 드레인됨; outer state(θ+momentum, fp32
    ~27GB/rank)는 `<save>/diloco_outer/iter_N/`에 동봉되어 resume 시 자동 복원.
@@ -442,6 +448,48 @@ bash train.sh baseline_48L pretrain_auxfree stage1_v5_korean_web
 4. resume 관련 키는 모두 training preset YAML 안에 평면적으로 (`load:`, `finetune:`, `no-load-optim:`) — 셸이 조건부로 끼워넣지 않음
 
 ## Known Issues & Fixes
+
+### DiLoCo: 짝/홀 샤딩 × blend 인덱스 aliasing → 거울상 loss 시소 (2026-08-17 ✅)
+
+- **증상**: P2b 스위치(iter 18k) 이후 두 노드의 lm/seq-bal loss가 거울상 진동
+  (상관 −0.95/−0.996, 주기 ~336 iter, 노드당 ±0.032). P2에서는 상수 오프셋(+0.038)이었음.
+- **원인**: 로깅 loss는 노드-로컬(자기 샤드)인데, `DILOCO_DATA_SHARD=1`의 짝/홀
+  분할이 BlendedDataset의 **셔플 없는 결정론적** 소스 수열과 alias. 6자리 가중치
+  합의 잔차(P2b +1e-6 / P3 −1e-6)를 `normalize()`가 나누며 전 가중치를 밀어
+  블렌드 패턴이 짝/홀 격자 위를 세차운동 → 패리티 주기 반전 = 시소, 주기
+  2/|Σw−1| 샘플 = 325.5 iter @ GBS 3072×2 (반사실로 인과 확정: 잔차 3e-6 → 주기 1/3).
+  구성 델타 26변수만으로 실측 gap R²=0.83(raw)/0.98(smoothed) 설명, ±1 iter
+  시프트 시 붕괴. 페어 합산 구성은 매 iter 정확(≤1.4샘플) — 학습 무결성은 유지,
+  단 같은 부호 편향이 ~160 iter(5×H) 지속되어 노드-로컬 optimizer 상태에 적분됨
+  (expert-bias 발산의 압력이었던 그 비대칭).
+- **수정**: `DILOCO_SHARD_BLOCK=3072`(=GBS) 블록-순환 매핑 (`diloco_patch.py`).
+  노드별 배치가 블렌드 수열의 연속 3072샘플이 되어 구성 오차 ≤2샘플, 오프셋·시소
+  동시 소멸. 전환은 consumed % 3072 == 0에서만(assert), pair 간 env 일치 assert.
+  부작용 없음(인덱스 산술만, 페어 합산 스트림 불변). 다음 재시작에서 활성화.
+- **전체 기록**: [`study/mirror_loss_aliasing.md`](study/mirror_loss_aliasing.md)
+  (재현: `study/mirror_loss_repro.py`, 검증: `tests/test_diloco_shard_view.py`).
+
+### DiLoCo: MoE expert-bias가 outer 동기화에서 제외 → 노드별 발산 (2026-08-11 ✅)
+
+- **증상**: aux-loss-free `expert_bias`(buffer)는 wire 집합(`named_parameters()`)에 미포함 —
+  각 노드가 자기 샤드 통계로 독립 갱신. 짝/홀 샤딩의 구성 비대칭이 지속 압력이 되어
+  체크포인트 분석(10k~20k)에서 지속 코어 24 expert(layer 2/20 집중), 최대 격차 0.118
+  (선택 척도의 ~12%)까지 성장. 훈련 loss 피해는 검출한계(<0.005) 이하였으나 **최종 배포
+  모델의 `e_score_correction_bias`가 단일 샤드 균형으로 오염**되는 실해 + P3에서 악화 전망.
+- **수정** (`diloco_patch.py`, `DILOCO_BIAS_SYNC=1` 기본): 매 step `tokens_per_expert`를
+  **전용 Gloo pair group**(포트+100 — τ-오버랩 wire 스레드와 group 공유 금지)으로 pair
+  **SUM** → 양 노드가 결합 배치 통계로 동일 갱신 → bias 영구 bit-identical (레퍼런스
+  sync-DP 의미론; bias 벡터의 평균/전송 없음). 매 outer sync에 `bias in sync` checksum 로그.
+  부수: fresh 경로에 params-identical 시 broadcast/`reload_model_params()` 생략 가드
+  (fp32 master 보존).
+- **적용**: iter 20,000에서 node0 체크포인트를 양 노드 채택(+outer 신규 초기화) 후 재시작.
+- **함정 2건**: ① `import megatron.core.distributed.finalize_model_grads as _F`는 패키지
+  `__init__`의 속성 재바인딩 탓에 **함수**를 반환 — `hasattr()` 가드가 패치를 무음 스킵했다.
+  `importlib.import_module()`로 진짜 모듈을 잡을 것 (monkey-patch에 soft-fail 가드 금지).
+  ② pair collective는 양 노드 **대칭 호출** 필수 — env 게이트 계측은 `EXTRA_ENV`로 전달
+  (launch_diloco의 ENVV는 화이트리스트라 임의 env를 node1에 안 넘긴다).
+- **전체 기록**: [`docs/STAGE2_CURRICULUM_LOG.md`](docs/STAGE2_CURRICULUM_LOG.md) §2.4
+  (blend 커리큘럼·샤드 aliasing·resume 정밀 검증 포함 단일 진입점).
 
 ### NGC 25.03에서 QK-Clip fused-attn 크래시 — cuDNN 9.8에 max_logit 엔진 없음 (2026-07-13 ✅)
 
@@ -1049,6 +1097,7 @@ emit 병목은 소스 `.bin`에서 bin 멤버 문서를 **무작위로 읽는 NF
 | 파일 | 역할 |
 |---|---|
 | `toolkits/pretrain_data_preprocessing/bestfit_pack.py` | BFP packer (segment-tree BFD + pad-to-L emit + pre/post-verify + round-trip + `--dry-run`/`--strict-eod`). BFD ~0.25M docs/s(pure Python); 대형 셋은 emit가 I/O bound |
+| `toolkits/pretrain_data_preprocessing/split_by_doclen.py` | unpacked 문서를 길이 기준 lt/ge 분리 (기본 T=65536). LC 스테이지 배분 정책용 — 32k는 lt만 패킹, ≥64k는 128k 보존. `docs/LC_DATASETS.md` §5.1 |
 | `run_stage2_v5.sh` `pack`/`pack-dry` sub-target | 10개 blend member 일괄 packing (env `SEQLEN`/`EOD`/`OUT_PACKED`) |
 | `examples/alpha/configs/data/stage2_v5_blend_packed.yaml` | packed blend (stage2_v5_blend의 packed 트리 미러) |
 | `tests/test_bestfit_pack.py` | 16 unit tests (segtree↔brute, BFD↔naive parity, piece coverage, baseline 추정, 실 IndexedDataset round-trip) |
@@ -1061,6 +1110,10 @@ emit 병목은 소스 `.bin`에서 bin 멤버 문서를 **무작위로 읽는 NF
 - **Muon Optimizer**: `docs/MUON.md`
 - **Setup**: `docs/SETUP.md`
 - **Evaluation**: `docs/EVALUATION.md`
+- **LC Datasets**: `docs/LC_DATASETS.md` — long-context 확보 데이터셋(PG19/EDGAR/peS2o v3) 전수 분석 + LC 스테이지 계획: 길이 분포·토큰 풀, 32k GO 판정, 128k는 다문서 합성 경로(§5.1 Nemotron 3 레시피 + LongBlocks + Alpha 블렌드 구체안)
+- **SFT/RL Datasets**: `docs/SFT_RL_DATASETS.md` — post-LC SFT·RL(MOPD) 데이터 자산 전수 정리: Nemotron-Post-Training-v3 49종 + used_in 매핑(ultra/super/nano), Ultra 파이프라인(RLVR→교사RL→MOPD) 재현 설계, SFT max 64k 근거, 한국어 SFT(Multilingual-v2 ko 81.6k행)
+- **Data Prep Log**: `docs/DATA_PREP_LOG.md` — LC·SFT 데이터 준비 작업의 **단일 진입점** (2026-07-31~08-04): 현재 상태 스냅샷(무엇이 어디에), 타임라인, 신규 도구 4종, 핵심 결정 7건, 남은 작업 큐 A~F
+- **Stage2 Curriculum Log**: `docs/STAGE2_CURRICULUM_LOG.md` — stage2 mid-run blend 커리큘럼(P2/P2b/P3) + DiLoCo bias-sync 결함 수정의 **단일 진입점** (2026-07-29~08-11): Nemotron 3 근거, 샤드×blend aliasing(정적/동적), resume 정밀 검증과 실행 간 비결정성, expert-bias 발산 정량 분석·수정·재시작 기록
 
 ## Muon Optimizer Quick Reference
 

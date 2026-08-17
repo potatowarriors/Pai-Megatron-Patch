@@ -30,6 +30,10 @@ Env contract (set by the launcher):
   DILOCO_PORT_BASE       base port; local_rank r uses base+r
   DILOCO_H               inner steps per outer sync (default 30)
   DILOCO_TAU             apply delay in inner steps, 0 = blocking (default 0)
+  DILOCO_SHARD_BLOCK     shard mapping for DILOCO_DATA_SHARD=1: 0 = legacy
+                         sample-parity world*i+r; B>0 = block-cyclic with
+                         block B (use B = GBS, 3072 — kills the blend-index
+                         parity aliasing, see study/mirror_loss_aliasing.md)
   DILOCO_OUTER_LR        default 0.7   (DiLoCo paper default)
   DILOCO_OUTER_MOMENTUM  default 0.6   (MuLoCo best for Muon inner; was 0.9 DiLoCo default)
   DILOCO_SKIP_SAVE       1 = disable checkpoint saving (pilot escape hatch)
@@ -60,6 +64,11 @@ class _State:
         self.local_rank = int(os.environ.get("LOCAL_RANK", "0"))
         assert 0 <= self.tau < self.H, "DILOCO_TAU must be in [0, H)"
         self.pg = None
+        self.bias_pg = None     # dedicated pair group for per-step MoE bias-count sync
+                                # (separate from self.pg: the tau-overlap wire thread uses
+                                # self.pg concurrently, and Gloo matches collectives by
+                                # call order per group — sharing would interleave & corrupt)
+        self.bias_bufs = None   # router expert_bias buffers (24 x [192], fp32, CUDA)
         self.wire_dtype = torch.bfloat16
         self.params = None      # all named params (initial broadcast)
         self.owned = None       # params THIS rank wire-syncs (experts [+ dense on lr0])
@@ -121,6 +130,29 @@ def _make_pair_group(st):
     _log(st, f"pair group up (port {port}, wire dtype {st.wire_dtype})")
 
 
+def _make_bias_group(st):
+    """Second Gloo pair group dedicated to the per-step expert-bias count sync.
+
+    Must NOT share st.pg: the tau-overlap worker thread issues long sequences of
+    collectives on st.pg while training steps (and their bias syncs) proceed on
+    the main thread — Gloo matches ops per group by call order, so two threads
+    on one group would interleave differently on the two nodes and corrupt both.
+    Port offset +100 keeps clear of the main pair ports (base+local_rank, 0..7).
+    """
+    port = st.port_base + 100 + st.local_rank
+    store = dist.TCPStore(
+        st.master, port, st.world, st.node_rank == 0,
+        timeout=datetime.timedelta(minutes=30),
+    )
+    try:
+        pg = dist.ProcessGroupGloo(store, st.node_rank, st.world,
+                                   datetime.timedelta(minutes=60))
+    except TypeError:
+        pg = dist.ProcessGroupGloo(store, st.node_rank, st.world)
+    st.bias_pg = pg
+    _log(st, f"bias-sync pair group up (port {port})")
+
+
 def _named_params(model_chunks):
     out = []
     for chunk in model_chunks:
@@ -176,7 +208,25 @@ def _setup(st, model, optimizer):
     """First-call init: pair group, cross-node weight broadcast, snapshots."""
     t0 = time.time()
     _make_pair_group(st)
+    _make_bias_group(st)
     st.params = _named_params(model)
+
+    # Collect the MoE routers' aux-loss-free expert_bias buffers. They are NOT
+    # parameters (register_buffer), so the outer average never touches them; the
+    # per-step count sync (see _install_bias_count_sync) keeps them bit-identical
+    # across nodes, and _apply_outer verifies that with a pair checksum.
+    st.bias_bufs = []
+    for chunk in model:
+        for m in chunk.modules():
+            b = getattr(m, "expert_bias", None)
+            if b is not None:
+                st.bias_bufs.append(b)
+    _log(st, f"expert_bias buffers tracked: {len(st.bias_bufs)}")
+    if st.bias_bufs:
+        bsum = sum(float(b.detach().sum(dtype=torch.float64)) for b in st.bias_bufs)
+        ok, lo, hi = _pair_minmax_equal(st.bias_pg, bsum)
+        _log(st, f"initial expert_bias checksum {bsum:.9f} "
+                 f"(pair equal: {ok}, lo={lo:.9f} hi={hi:.9f})")
 
     # Megatron marks EP-sharded expert params with allreduce=False; dense params
     # (attention, GDN, embeddings, router, shared experts) are DP-replicated
@@ -193,9 +243,28 @@ def _setup(st, model, optimizer):
     if os.environ.get("DILOCO_DATA_SHARD", "0") == "1":
         # disjoint sharding requires ONE shared global order -> identical seeds
         from megatron.training import get_args
-        ok, lo, hi = _pair_minmax_equal(st.pg, float(get_args().seed))
+        args = get_args()
+        ok, lo, hi = _pair_minmax_equal(st.pg, float(args.seed))
         assert ok, (f"DILOCO_DATA_SHARD=1 requires the SAME --seed on both nodes "
-                    f"(shared global shuffle order), got {lo} vs {hi}")
+                    f"(shared global order), got {lo} vs {hi}")
+        # both nodes must use the SAME shard mapping — a mixed pair would
+        # duplicate part of the corpus and permanently drop the rest
+        block = int(os.environ.get("DILOCO_SHARD_BLOCK", "0"))
+        ok, lo, hi = _pair_minmax_equal(st.pg, float(block))
+        assert ok, (f"DILOCO_SHARD_BLOCK differs across nodes: {lo} vs {hi} — "
+                    f"launch_diloco.sh must forward it via ENVV to both nodes")
+        if block > 0:
+            # a parity->block switch is exact (0 duplication / 0 omission) ONLY
+            # when resuming at a block boundary: consumed % B == 0, i.e. any
+            # iteration boundary while GBS == B (verified in
+            # study/mirror_loss_repro.py; a fresh start trivially satisfies 0 % B == 0)
+            consumed = int(getattr(args, "consumed_train_samples", 0) or 0)
+            assert consumed % block == 0, (
+                f"DILOCO_SHARD_BLOCK={block} needs consumed_train_samples % "
+                f"block == 0, got {consumed} — resume at an iteration boundary "
+                f"with constant GBS == block, or unset DILOCO_SHARD_BLOCK")
+            _log(st, f"data shard mapping: block-cyclic B={block} "
+                     f"(consumed {consumed} block-aligned)")
 
     if _try_load_outer_state(st):
         # resumed: each node loaded its own Megatron checkpoint; do NOT broadcast
@@ -241,16 +310,27 @@ def _setup(st, model, optimizer):
         torch.cuda.synchronize()
         _log(st, "resume: NCCL parallel groups + coalesced-allreduce path warmed")
     else:
-        # fresh start: broadcast node0 weights so both replicas start
-        # bit-identical (D2H in the param's own dtype, cast on CPU — GPU-side
-        # dtype temps fragment the allocator and break torch_dist save)
-        with torch.no_grad():
-            for _, p in st.params:
-                buf = p.data.detach().cpu().to(torch.float32)
-                _bcast_pair(st.pg, buf, root=0)
-                p.data.copy_(buf.to(p.dtype))
-        torch.cuda.empty_cache()
-        optimizer.reload_model_params()
+        # fresh start. If both nodes already hold bit-identical params (e.g. the
+        # 2026-08-11 bias-fix restart: node1 resumes from a copy of node0's
+        # checkpoint), skip the broadcast AND the reload_model_params() — the
+        # reload would re-derive the Muon fp32 masters from bf16 params and
+        # silently discard the precise masters loaded from the checkpoint.
+        s = sum(float(p.data.detach().sum(dtype=torch.float64)) for _, p in st.params)
+        identical, lo, hi = _pair_minmax_equal(st.pg, s)
+        if identical:
+            _log(st, "fresh start: params already pair-identical — "
+                     "broadcast/reload skipped (fp32 masters preserved)")
+        else:
+            # broadcast node0 weights so both replicas start bit-identical
+            # (D2H in the param's own dtype, cast on CPU — GPU-side dtype temps
+            # fragment the allocator and break torch_dist save)
+            with torch.no_grad():
+                for _, p in st.params:
+                    buf = p.data.detach().cpu().to(torch.float32)
+                    _bcast_pair(st.pg, buf, root=0)
+                    p.data.copy_(buf.to(p.dtype))
+            torch.cuda.empty_cache()
+            optimizer.reload_model_params()
         st.theta = [p.data.detach().cpu().to(torch.float32) for _, p in st.owned]
         st.momentum = [torch.zeros_like(t) for t in st.theta]
     _log(st, f"setup done in {time.time() - t0:.1f}s: owned {len(st.owned)} params "
@@ -319,10 +399,22 @@ def _apply_outer(st, optimizer):
     optimizer.reload_model_params()
 
     st.outer_step_count += 1
+
+    # verify the per-step count sync is keeping expert_bias bit-identical
+    # across nodes (bias_pg is idle here — the wire thread has joined)
+    bias_sync = "n/a"
+    if st.bias_bufs:
+        bsum = sum(float(b.detach().sum(dtype=torch.float64)) for b in st.bias_bufs)
+        ok, blo, bhi = _pair_minmax_equal(st.bias_pg, bsum)
+        bias_sync = ok
+        if not ok:
+            _log(st, f"WARNING: expert_bias diverged across nodes: {blo} != {bhi}")
+
     _log(st, f"outer step {st.outer_step_count} @ inner {st.inner_step}: "
              f"snap {stats['snap_s']:.1f}s, wire {stats['wire_s']:.1f}s "
              f"(overlapped tau={st.tau}), apply {time.time() - t0:.1f}s, "
-             f"|pseudo-grad| rms {stats['rms']:.3e}, theta in sync: {stats['in_sync']}")
+             f"|pseudo-grad| rms {stats['rms']:.3e}, theta in sync: {stats['in_sync']}, "
+             f"bias in sync: {bias_sync}")
     if not stats["in_sync"]:
         raise RuntimeError(
             f"[diloco] theta divergence detected: {stats['lo']} != {stats['hi']}")
@@ -332,10 +424,31 @@ def _install_data_shard():
     """DILOCO_DATA_SHARD=1: exact disjoint data sharding across nodes.
 
     Both nodes MUST use the same seed (guarded in _setup): they then share one
-    global shuffled sample order, and node r takes positions world*i + r — the
-    same semantics as standard sync-DP splitting a global batch across ranks.
-    Zero duplication, zero omission (vs the seed-split mode, which duplicates
-    ~17% of the corpus over a full 0.7T-per-node budget).
+    global sample order and split it disjointly — zero duplication, zero
+    omission (vs the seed-split mode, which duplicates ~17% of the corpus over
+    a full 0.7T-per-node budget). Two mappings (DILOCO_SHARD_BLOCK):
+
+    - B=0, legacy sample-parity: node r takes positions world*i + r.
+      CAUTION under explicit blend weights: the top-level BlendedDataset
+      source sequence is deterministic (NOT shuffled — only each component's
+      internal order is), and the stride-2 split aliases with it. Measured on
+      stage2: constant per-node composition offsets (P2, e.g. cc_actual
+      ±3.3%p -> lm-loss offset 0.038), and when the 6-decimal weight sum is
+      1 ± 1e-6 a slow MIRROR SEESAW between the nodes with period
+      2/|sum(w)-1| samples (P2b/P3: 325 iters at GBS 3072, composition swing
+      up to ±8%p, per-node lm loss ±0.032). Root cause + reproduction:
+      study/mirror_loss_aliasing.md, study/mirror_loss_repro.py.
+
+    - B>0, block-cyclic (use B = GBS): node r takes position
+      world*B*(i//B) + r*B + i%B. Each node's iteration batch is then one
+      CONTIGUOUS B-slice of the blend sequence, and the greedy blender's
+      bounded discrepancy makes every batch match the exact blend within ~2
+      samples (P3 measured: per-node max deviation 1.3 samples, cross-node
+      max 2 — vs 137/274 under parity). Offset and seesaw both vanish.
+      Switching parity->block mid-run is exact iff consumed % B == 0 (any
+      iteration boundary at constant GBS == B; asserted in _setup): the two
+      mappings tile the same remaining global range, so the pair-union
+      stream per iteration is IDENTICAL — only the node assignment changes.
 
     The underlying train dataset is built with world x the requested samples so
     each node's shard still covers its full --train-samples budget.
@@ -343,15 +456,23 @@ def _install_data_shard():
     import megatron_patch.data as _MPD
     world = int(os.environ.get("DILOCO_WORLD", "2"))
     rank = int(os.environ["DILOCO_RANK"])
+    block = int(os.environ.get("DILOCO_SHARD_BLOCK", "0"))
     orig_provider = _MPD.train_valid_test_datasets_provider
 
     class _ShardView(torch.utils.data.Dataset):
         def __init__(self, ds):
             self.ds = ds
         def __len__(self):
+            if block > 0:
+                # whole blocks only — a trailing partial block would map node1
+                # past the end of the underlying dataset
+                return (len(self.ds) // (world * block)) * block
             return len(self.ds) // world
         def __getitem__(self, idx):
-            return self.ds[world * int(idx) + rank]
+            i = int(idx)
+            if block > 0:
+                return self.ds[world * block * (i // block) + rank * block + i % block]
+            return self.ds[world * i + rank]
         def __getattr__(self, name):          # passthrough for Megatron attrs
             return getattr(self.ds, name)
 
@@ -359,11 +480,14 @@ def _install_data_shard():
         sizes = list(train_val_test_num_samples)
         sizes[0] = sizes[0] * world
         train, valid, test = orig_provider(sizes, *args, **kwargs)
+        view = _ShardView(train)
+        mapping = (f"{world}*{block}*(i//{block}) + {rank}*{block} + i%{block}"
+                   if block > 0 else f"{world}*i+{rank}")
         print(f"[diloco] data shard: node {rank}/{world} takes positions "
-              f"{world}*i+{rank} of a shared global order "
-              f"(underlying len {len(train)} -> shard len {len(train) // world})",
+              f"{mapping} of a shared global order "
+              f"(underlying len {len(train)} -> shard len {len(view)})",
               flush=True)
-        return _ShardView(train), valid, test
+        return view, valid, test
 
     for attr in ("is_distributed",):
         if hasattr(orig_provider, attr):
@@ -422,6 +546,75 @@ def install_unshard_resume():
           f"plain single-node continuation of a sharded pair run", flush=True)
 
 
+def _install_bias_count_sync():
+    """Cross-node sync of the aux-loss-free router bias, at its native semantics.
+
+    Megatron's get_updated_expert_bias() SUMS local_tokens_per_expert across the
+    instance's TPxCPxDP ranks, then nudges each expert's bias by
+    sign(mean_load - load) * rate. We extend the SUM across the DiLoCo pair
+    BEFORE the intra-instance reduce, so every rank of both nodes computes the
+    identical update from the combined 2-node global batch (reference sync-DP
+    semantics; arXiv 2408.15664). Both nodes' biases stay bit-identical given
+    identical starting biases. Wire cost: 24x192 fp32 = 18KB per step on the
+    dedicated bias pair group (Gloo/TCP, ~ms).
+    """
+    import importlib
+    # NB: `import megatron.core.distributed.finalize_model_grads as _F` yields the
+    # FUNCTION, not the module — the package __init__ rebinds the attribute
+    # (`from .finalize_model_grads import finalize_model_grads`). importlib
+    # returns the real module from sys.modules, whose global namespace is what
+    # the call site actually reads. (The original hasattr() guard silently
+    # skipped the critical patch because a function has no such attribute.)
+    _MU = importlib.import_module("megatron.core.transformer.moe.moe_utils")
+    _F = importlib.import_module("megatron.core.distributed.finalize_model_grads")
+    orig_fn = _MU.get_updated_expert_bias
+
+    call_stat = {"n": 0}
+
+    def get_updated_expert_bias_pair_synced(tokens_per_expert, expert_bias,
+                                            expert_bias_update_rate):
+        st = _state
+        call_stat["n"] += 1
+        if call_stat["n"] == 1:
+            print(f"[diloco][bias-sync] FIRST CALL rank={os.environ.get('LOCAL_RANK')}"
+                  f" state={'ok' if st is not None else 'None'}"
+                  f" bias_pg={'ok' if (st and st.bias_pg is not None) else 'None'}",
+                  flush=True)
+        if st is not None and st.bias_pg is not None:
+            buf = tokens_per_expert.detach().to("cpu", torch.float32)
+            _allreduce_sum(st.bias_pg, buf)
+            # NOTE: debug collectives must run SYMMETRICALLY on both nodes —
+            # pass the flag via EXTRA_ENV so node1 gets it too (launch_diloco's
+            # ENVV whitelist does not forward arbitrary DILOCO_* vars).
+            dbg = os.environ.get("DILOCO_BIAS_DEBUG", "0") == "1" and st.local_rank == 0
+            if dbg:
+                pre = float(expert_bias.detach().sum(dtype=torch.float64))
+                cnt = float(buf.sum(dtype=torch.float64))
+                for tag, val in (("pre-bias", pre), ("summed-counts", cnt)):
+                    eq, lo, hi = _pair_minmax_equal(st.bias_pg, val)
+                    print(f"[diloco][bias-debug][node{st.node_rank}] {tag} "
+                          f"local={val:.9f} eq={eq} lo={lo:.9f} hi={hi:.9f}",
+                          flush=True)
+            tokens_per_expert = buf.to(tokens_per_expert.device,
+                                       tokens_per_expert.dtype)
+            out = orig_fn(tokens_per_expert, expert_bias, expert_bias_update_rate)
+            if dbg:
+                post = float(out.detach().sum(dtype=torch.float64))
+                eq, lo, hi = _pair_minmax_equal(st.bias_pg, post)
+                print(f"[diloco][bias-debug][node{st.node_rank}] post-update "
+                      f"local={post:.9f} eq={eq} lo={lo:.9f} hi={hi:.9f}",
+                      flush=True)
+            return out
+        return orig_fn(tokens_per_expert, expert_bias, expert_bias_update_rate)
+
+    _MU.get_updated_expert_bias = get_updated_expert_bias_pair_synced
+    _F.get_updated_expert_bias = get_updated_expert_bias_pair_synced
+    print(f"[diloco] expert-bias count sync installed "
+          f"(per-step pair SUM of tokens_per_expert; "
+          f"_F now={_F.get_updated_expert_bias.__name__}, "
+          f"_MU now={_MU.get_updated_expert_bias.__name__})", flush=True)
+
+
 def install():
     """Wrap megatron.training.training.train_step with the DiLoCo outer loop."""
     global _state
@@ -430,6 +623,9 @@ def install():
 
     if os.environ.get("DILOCO_DATA_SHARD", "0") == "1":
         _install_data_shard()
+
+    if os.environ.get("DILOCO_BIAS_SYNC", "1") == "1":
+        _install_bias_count_sync()
 
     def train_step_diloco(*args, **kwargs):
         global _state

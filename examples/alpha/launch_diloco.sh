@@ -19,6 +19,13 @@
 #                            <root>/node<r>/checkpoints, so RE-RUNNING THE SAME
 #                            COMMAND RESUMES. Pair with a training preset using
 #                            `pretrained-checkpoint:` for the first-launch start.
+#   DILOCO_SHARD_BLOCK=0     shard mapping for DILOCO_DATA_SHARD=1: 0 = legacy
+#                            sample-parity world*i+r (aliases with the blend
+#                            index -> per-node offset + mirror loss seesaw);
+#                            3072 (= GBS) = block-cyclic, per-node batches match
+#                            the exact blend within ~2 samples. Switch parity->
+#                            block only at an iteration boundary with constant
+#                            GBS == block (asserted). See study/mirror_loss_aliasing.md
 #   NODE1_SEED=4321          node1 data-shuffle seed (weights are broadcast from node0)
 #   NODE0_ARGS / NODE1_ARGS  per-node extra Megatron args; override the derived
 #                            --save/--load only for a non-standard resume
@@ -53,6 +60,7 @@ CUDA_DEVICE_MAX_CONNECTIONS=32 \
 DILOCO_WORLD=2 DILOCO_MASTER=main1 DILOCO_PORT_BASE=$PORT_BASE \
 DILOCO_H=${DILOCO_H:-30} DILOCO_TAU=${DILOCO_TAU:-0} DILOCO_OUTER_LR=${DILOCO_OUTER_LR:-0.7} \
 DILOCO_OUTER_MOMENTUM=${DILOCO_OUTER_MOMENTUM:-0.6} DILOCO_DATA_SHARD=${DILOCO_DATA_SHARD:-0} \
+DILOCO_SHARD_BLOCK=${DILOCO_SHARD_BLOCK:-0} \
 PRETRAIN_SCRIPT=$ALPHA/pretrain_alpha_diloco.py ${EXTRA_ENV:-}"
 
 echo "[launch_diloco] tag=$TAG presets=$MODEL/$TRAIN/$DATA H=${DILOCO_H:-30} tau=${DILOCO_TAU:-0} port_base=$PORT_BASE data_shard=${DILOCO_DATA_SHARD:-0} node1_seed=${NODE1_SEED:-shared} args=$*"

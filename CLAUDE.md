@@ -268,6 +268,9 @@ cd backends/megatron/Megatron-LM-251125 && \
 # Progressive mix dataset (13 tests)
 cd <repo-root> && python -m pytest tests/test_progressive_mix_dataset.py -v
 
+# DiLoCo data-shard mappings — parity/block-cyclic + switch exactness (9 tests)
+cd <repo-root> && python -m pytest tests/test_diloco_shard_view.py -v
+
 # Muon QGKV split — full suite incl. oracle per-block independence (20 tests)
 cd backends/megatron/Megatron-LM-251125 && \
   NVIDIA_PYTORCH_VERSION=25.06 WORLD_SIZE=1 RANK=0 LOCAL_RANK=0 \
