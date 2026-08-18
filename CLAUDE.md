@@ -321,6 +321,24 @@ cd backends/megatron/Megatron-LM-251125 && \
 - **DO** modify `megatron_patch/training.py` or add patches.
 - **Exception**: core infrastructure not exposed for patching (e.g. the num-microbatches calculator) may be patched directly — see [Custom Training Features](#custom-training-features-alpha-stage1) for the precedent.
 
+### Commit & History Rules (adopted 2026-08-18)
+
+이 저장소의 커밋 이력 관리 규칙. Claude Code 세션에서도 동일하게 적용한다.
+
+1. **작업 단위 즉시 커밋.** 기능 하나가 완료·검증되면 그 자리에서 커밋한다.
+   여러 주 작업을 한 번에 몰아 커밋하지 않는다. 커밋 메시지는
+   `type(scope): summary` (feat/fix/docs/chore/perf/experiment/test) 관례를 따른다.
+2. **브랜치 규율.** 실험은 `experiment/*` 브랜치에서. 결론이 나면 — 기각이어도 —
+   기록 커밋으로 main에 흡수하고 브랜치는 삭제한다 (`TESTED & REJECTED` 커밋 선례).
+   검증 대기 중인 기능 브랜치(`feature/*`)만 장기 유지하되 main 위로 주기적 rebase.
+3. **서브모듈 수정 시 vendored patch 동시 갱신.** `backends/megatron/Megatron-LM-251125`
+   를 건드린 커밋에는 `backends/submodule_patches/` 재생성이 반드시 포함되어야 한다
+   (재생성법은 그 디렉토리 README). superproject의 서브모듈 포인터는 항상 **upstream
+   커밋**을 가리켜야 하며, 로컬-전용 커밋 SHA를 기록하면 클론이 깨진다 —
+   `git status`의 251125 `M` 표시는 설계상 정상이므로 절대 커밋하지 않는다.
+4. **main 커밋 후 즉시 push.** 원격(origin)이 유일한 백업이다. 로컬에만 수십 커밋을
+   쌓아두지 않는다.
+
 ## References
 
 - Main README: [README.md](README.md)
