@@ -1,0 +1,11 @@
+# 생성 산출물 — prepare_seed.py 가 결정론적으로 재생성한다 (seed*.parquet 전부)
+*.parquet
+
+# 실행 로그
+logs/
+
+# Data Designer 아티팩트 (대용량)
+artifacts/
+
+# export 결과
+out/
