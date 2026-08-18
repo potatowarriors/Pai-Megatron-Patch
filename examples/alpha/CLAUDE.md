@@ -110,18 +110,16 @@ python tools/verify_pipeline.py preflight --from-checkpoint <ckpt> --gpus 4
 
 전체 v1→v2 검증 감사 + 발견·수정 내역: [`docs/V2_PIPELINE_VERIFICATION.md`](docs/V2_PIPELINE_VERIFICATION.md).
 
-### SGLang Deployment (Inference)
-```bash
-# One-time setup (patches SGLang submodule + installs model adapter)
-bash backends/sglang/setup.sh
+### Inference / Serving
 
-# Option A: HF Fallback (quick, no hybrid optimizations)
-bash examples/alpha/sglang/deploy.sh /path/to/alpha-hf --mode fallback
-
-# Option B: Native Qwen3-Next (MambaRadixCache + dual memory pool)
-bash examples/alpha/sglang/deploy.sh /path/to/alpha-hf --mode native --ep 8
-```
-SGLang backend is managed as a git submodule at `backends/sglang/sglang-v0.5.2/`.
+**SGLang 스택은 2026-08-18 제거됨** — RL은 NeMo-RL framework로 진행하기로 결정되어
+(생성 백엔드 vLLM) SGLang 서빙 준비물이 불필요해짐. 제거된 자산: `backends/sglang/`
+(submodule + setup.sh + patches), `examples/alpha/sglang/`,
+`scripts/run_benchmarks_sglang.sh`, vendored `sglang-v0.5.2.patch`.
+Alpha 아키텍처의 추론엔진 매핑 지식(`srt/models/alpha.py` 197줄 등)은 향후 vLLM 모델
+정의 작성 시 참고 — 제거 커밋의 부모에서 복원:
+`git log --diff-filter=D -- backends/submodule_patches/sglang-v0.5.2.patch`.
+벤치마크 평가는 HF 기반 `scripts/run_benchmarks.sh`가 주력 경로 (영향 없음).
 
 ### Parameter Analysis
 ```bash
@@ -219,10 +217,6 @@ max-position-embeddings: 262144
 | `tools/verify_chat_template.py` | chat template 검증 스위트 24 tests: 렌더 매트릭스(think 제거·tools·병합), 토큰 무결성, **assistant-스팬 마스킹 규약**(prefix-diff 불성립 실증), **injection 방어**(`split_special_tokens=True`) |
 | `hf_model/` | HuggingFace model implementation. `AlphaSparseMoeBlock`는 **DSV3 라우팅**(sigmoid + group-limited 8×4 + `e_score_correction_bias` + routed_scaling 2.5; `DeepseekV3TopkRouter` mirror) — 학습과 일치해야 벤치마크 유효. `configuration_alpha.py`에 `scoring_func/n_group/topk_group/routed_scaling_factor`, num_experts default=192. **`e_score_correction_bias`는 fp32 `nn.Parameter` + `_keep_in_fp32_modules_strict`** — buffer/bf16으로 되돌리지 말 것(MG fp32 정렬·라우팅 충실; Known Issues "fp32 router bias 다운캐스트" 참조) |
 | `../../toolkits/distributed_checkpoints_convertor/scripts/alpha/run_convert.sh` | **GPU-agnostic 변환기** (EP=#GPU, `num_experts%GPU` 검증, 모델 flags는 `emit-megatron-flags`에서). `run_8xH20.sh`/`run_4xGPU.sh`는 `GPUS=8`/`4` shim |
-| `sglang/deploy.sh` | SGLang deployment script (Option A/B, uses local backend) |
-| `sglang/convert_config_for_sglang.py` | Alpha→Qwen3-Next config converter (head_dim 256 / vocab 163,968 호환성 검증 필요) |
-| `sglang/sglang_alpha_model.py` | SGLang model adapter (mlp_only_layers support) |
-| `../../backends/sglang/setup.sh` | SGLang backend setup (patch + adapter install) |
 | `scripts/setup_wandb.sh` | Sourced by train.sh to set `WANDB_API_KEY` — **키 하드코딩 금지**, env → `$WANDB_KEY_FILE` → `scripts/.wandb_key`(gitignored, 표준) → `~/.wandb_key` 순 해석 (2026-08-18 유출 정리; smoke/mock 시 auto-override됨) |
 | `diloco_patch.py` | **DiLoCo 2노드 코어**: train_step 래핑, 페어별 Gloo sync, outer Nesterov, τ-오버랩, dense dedup, outer-state 저장/복원, 데이터 샤딩(짝/홀 + `DILOCO_SHARD_BLOCK` 블록-순환 — 단위 테스트 `tests/test_diloco_shard_view.py`). 검증 기록은 `study/diloco_pilot.md`, 샤딩 aliasing 규명은 `study/mirror_loss_aliasing.md` |
 | `pretrain_alpha_diloco.py` | DiLoCo 엔트리 (diloco_patch 설치 후 pretrain_alpha 실행; train.sh `PRETRAIN_SCRIPT` env로 주입) |

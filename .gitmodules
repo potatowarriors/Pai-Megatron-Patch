@@ -37,6 +37,3 @@
 [submodule "backends/megatron/Megatron-LM-251125"]
 	path = backends/megatron/Megatron-LM-251125
 	url = https://github.com/NVIDIA/Megatron-LM.git
-[submodule "backends/sglang/sglang-v0.5.2"]
-	path = backends/sglang/sglang-v0.5.2
-	url = https://github.com/sgl-project/sglang.git

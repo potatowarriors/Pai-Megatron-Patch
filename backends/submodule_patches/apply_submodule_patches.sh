@@ -1,14 +1,14 @@
 #!/usr/bin/env bash
-# Apply the vendored custom edits to the Megatron-LM-251125 and sglang-v0.5.2
-# submodules after a fresh `git clone --recurse-submodules` (or `git pull` +
+# Apply the vendored custom edits to the Megatron-LM-251125 submodule after a
+# fresh `git clone --recurse-submodules` (or `git pull` +
 # `git submodule update --init`).
 #
 # WHY THIS EXISTS:
-#   The submodule origins point at upstream (NVIDIA/Megatron-LM, sgl-project/sglang)
-#   which we cannot push to. The parent repo only records each submodule's commit
-#   SHA, so working-tree edits (Alpha custom features #1/#2/#3 in CLAUDE.md, plus
-#   the sglang alpha model) are NOT carried by a normal clone/pull. This script
-#   re-applies them from the .patch files committed alongside it.
+#   The submodule origin points at upstream (NVIDIA/Megatron-LM) which we cannot
+#   push to. The parent repo only records the submodule's commit SHA, so
+#   working-tree edits (Alpha custom features #1/#3 in CLAUDE.md) are NOT
+#   carried by a normal clone/pull. This script re-applies them from the .patch
+#   files committed alongside it.
 #
 # USAGE (from anywhere):
 #   bash backends/submodule_patches/apply_submodule_patches.sh
@@ -24,7 +24,6 @@ REPO_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
 # submodule_path : expected_base_sha : patch_file
 TARGETS=(
   "backends/megatron/Megatron-LM-251125:a6d86a6da:Megatron-LM-251125.patch"
-  "backends/sglang/sglang-v0.5.2:b0d25e72c:sglang-v0.5.2.patch"
 )
 
 apply_one() {
