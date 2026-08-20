@@ -66,6 +66,27 @@ except ImportError:
 logger = logging.getLogger(__name__)
 
 
+def seq_idx_from_cu_seqlens(cu_seqlens: torch.Tensor, seq_len: int) -> torch.Tensor:
+    """Expand cu_seqlens boundaries into a per-token segment index.
+
+    cu_seqlens [0, a, b, ..., T] -> int32 tensor of shape [1, seq_len] where
+    token t belongs to segment i iff cu_seqlens[i] <= t < cu_seqlens[i+1].
+    This is the `seq_idx` format causal_conv1d_fn uses to keep its receptive
+    field (d_conv-1 tokens) from crossing packed-sequence boundaries.
+    """
+    cu = cu_seqlens.to(dtype=torch.long)
+    assert int(cu[0]) == 0 and int(cu[-1]) == seq_len, (
+        f"cu_seqlens must span [0, seq_len]: got {cu[0].item()}..{cu[-1].item()} "
+        f"for seq_len={seq_len}"
+    )
+    seg_lens = cu[1:] - cu[:-1]
+    seq_idx = torch.repeat_interleave(
+        torch.arange(seg_lens.numel(), device=cu_seqlens.device, dtype=torch.int32),
+        seg_lens,
+    )
+    return seq_idx.view(1, seq_len)
+
+
 class GatedDeltaNetMixer(MambaMixer):
     """
     Args:
@@ -284,12 +305,26 @@ class GatedDeltaNetMixer(MambaMixer):
         self,
         hidden_states,
         inference_context=None,
+        packed_seq_params=None,
         *,
         inference_params: Optional[BaseInferenceContext] = None,
     ):
 
-        
+
         seq_len, batch_size, dim = hidden_states.shape
+
+        # THD/varlen packing: reset conv receptive field and recurrent state at
+        # every cu_seqlens boundary so packed sequences cannot leak into each
+        # other. fla's varlen kernels require the flattened batch=1 layout.
+        cu_seqlens = None
+        conv_seq_idx = None
+        if packed_seq_params is not None:
+            assert batch_size == 1, (
+                "GatedDeltaNetMixer varlen packing requires micro-batch-size 1 "
+                f"(flattened THD layout), got batch_size={batch_size}"
+            )
+            cu_seqlens = packed_seq_params.cu_seqlens_q.to(dtype=torch.long)
+            conv_seq_idx = seq_idx_from_cu_seqlens(cu_seqlens, seq_len)
 
         zVQKba, _ = self.in_proj(hidden_states)
 
@@ -307,12 +342,18 @@ class GatedDeltaNetMixer(MambaMixer):
             dim=-1,
         )
 
-        VQK = rearrange(VQK, "b l d -> b d l").contiguous()
+        if conv_seq_idx is None:
+            VQK = rearrange(VQK, "b l d -> b d l").contiguous()
+        else:
+            # causal_conv1d's seq_idx (varlen) path requires channel-last
+            # layout: a (b, d, l) *view* over (b, l, d)-contiguous storage.
+            VQK = rearrange(VQK.contiguous(), "b l d -> b d l")
 
         VQK = causal_conv1d_fn(
             x=VQK,
             weight=rearrange(self.cp.get_conv1d_weight(), "d 1 w -> d w"),
             bias=self.cp.get_conv1d_bias(),
+            seq_idx=conv_seq_idx,
             activation=self.activation,
         )
         
@@ -361,6 +402,7 @@ class GatedDeltaNetMixer(MambaMixer):
             initial_state=None,
             output_final_state=False,
             use_qk_l2norm_in_kernel=True,
+            cu_seqlens=cu_seqlens,
         )
 
         if self.rmsnorm:

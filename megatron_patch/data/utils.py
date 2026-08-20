@@ -115,6 +115,33 @@ def get_ltor_position_ids_packed_seq(data):
 
     return position_ids
 
+
+def cu_seqlens_from_position_ids(position_ids):
+    """Derive packing boundaries from per-segment-resetting position ids.
+
+    Given position_ids of shape [seq_length] that restart from 0 at every
+    packed-sequence boundary, return (cu_seqlens, max_seqlen) in the
+    FlashAttention varlen convention: cu_seqlens = [0, A1, A1+A2, ..., seq_len]
+    as int32, max_seqlen as a 0-dim tensor.
+
+    A window holding a single sequence (no interior reset — the common case for
+    long-context bins where one document fills the whole window) yields
+    cu_seqlens = [0, seq_len].
+    """
+    start_indices = (position_ids == 0).nonzero(as_tuple=True)[0]
+    seqlens = start_indices[1:] - start_indices[:-1]
+    cu_seqlens = torch.zeros(
+        start_indices.shape[0] + 1, device=position_ids.device, dtype=torch.int
+    )
+    cu_seqlens[1:-1] = torch.cumsum(seqlens, dim=0)
+    cu_seqlens[-1] = position_ids.shape[0]
+    if seqlens.numel() > 0:
+        max_seqlen = torch.max(seqlens.max(), position_ids.max() + 1)
+    else:
+        # Single segment: seqlens is empty and .max() would raise.
+        max_seqlen = position_ids.max() + 1
+    return cu_seqlens, max_seqlen
+
 def get_batch_on_this_tp_rank_original(data_iterator, per_seq_average=False):
     args = get_args()
     tokenizer = get_tokenizer()
