@@ -66,6 +66,39 @@ gdn-cp head-split의 rank-local 형상(전체 seq × heads/cp)을 재현하므�
 실측치가 기입된 gdn_cp_port.md 갱신 커밋 포함. **실패 시**: LC-A를 32K CP=1로 겨우 시작할 수
 있는지(§4의 CP=1 32K 메모리 실측 추가 필요) 검토하되, LC-B(64K+)는 CP 수정 전까지 보류.
 
+## §1.5. THD 문서 격리 검증 (LC-A 데이터 경로 전제 조건)
+
+**배경 (2026-08-20 발견)**: 현행 문서 격리(`--reset-attention-mask` dense mask)는 비용이
+O(seq²)라 32K에서 샘플당 **1 GiB**, 128K에서 17 GiB — LC에서 유지 불가. `LC_DATASETS.md`
+§5의 "패킹 filler가 LC 신호를 오염시키지 않는다" 논거가 이 격리에 기대므로, LC-A는
+**THD/cu_seqlens 방식 문서 격리**(varlen attention + GDN 커널 state 리셋)로 전환해야 한다.
+격리 자체를 끄는 대안은 Llama 3 보고(LC CPT에서 cross-doc 차단 중요)와 상충 → 비권장.
+
+**준비 완료 (GPU 불필요분, `feature/gdn-varlen-thd` 브랜치)**: MambaStack/MambaLayer/
+GDN mixer에 PackedSeqParams 관통 배선(fla `cu_seqlens` + causal_conv1d `seq_idx`),
+`AlphaMambaModel` 서브클래스(서브모듈 무수정), helper.py cu_seqlens 로직 공용화
+(+단일 세그먼트 윈도우에서 `seqlens.max()` 빈 텐서 크래시 잠재버그 수정),
+CPU 테스트 7종 통과. GPU 검증 항목은 `tests/test_gdn_varlen_thd.py`의 skipif 3종 +
+아래 스모크.
+
+| 단계 | 내용 | 판정 | 예상 |
+|---|---|---|---|
+| a | `python -m pytest tests/test_gdn_varlen_thd.py -v` (GPU 3종: fla varlen 등가성 / conv seq_idx 등가성 / 격리 네거티브 컨트롤) | ~~ALL PASSED~~ **✅ 2026-08-20 분석 노드에서 10/10 통과** (커널 테스트는 소메모리라 P3 대기 불필요했음). P3 후 재실행은 회귀 확인용 | ~2분 |
+| b | 1-GPU 스모크: `bash train.sh baseline_48L smoke mock --reset-position-ids --no-create-attention-mask-in-dataloader --micro-batch-size 1` | iter 진행 + NaN 없음 (stage1.yaml 주석의 "iter 1 AssertionError"가 사라졌는지) | ~10분 |
+| c | 4096 등가성 A/B: mock 30 iter, ①현행(reset-attention-mask dense) vs ②THD(위 플래그) — loss 궤적 비교 | 근접(비트일치 아님 — ②는 GDN 문서 간 state까지 격리하므로 미세 개선 방향의 차이만 허용) | ~30분 |
+| d | **QK-Clip×THD**: b/c 실행 중 `max_attention_logit` 로그 정상 확인 (TE fused-attn return_max_logit이 thd 포맷에서 동작하는지 — cuDNN 엔진 부재 크래시 이력 있는 조합) | 무크래시 + 로그값 유효 | b/c에 포함 |
+
+**⚠️ 스코프 한계 — THD+CP 미해결**: 이 브랜치는 **CP=1에서의 THD**만 검증한다.
+§1.4에서 LC-A가 CP≥2로 결정되면 추가 작업 필요: megatron_patch helper의 `CP>1 패킹 금지`
+가드 해제 + 업스트림 `get_thd_batch_on_this_cp_rank` 방식 배치 슬라이싱 이식.
+(GDN CP는 head-split이라 rank가 전체 seq를 보므로 cu_seqlens 의미론은 그대로 —
+attention 쪽 TE thd+CP 경로만 통합하면 됨.) §1.4 메모리 실측에서 **32K@CP1(MBS1,
+recompute)** 항목을 추가 측정할 것 — 통과하면 LC-A를 CP=1+THD로 시작하고 THD+CP는
+LC-B 전 과제로 미룰 수 있다.
+
+**충돌 주의**: `feature/gdn-context-parallel`과 이 브랜치는 둘 다 `gated_deltanet.py`를
+수정한다. 머지 순서: gdn-cp 먼저(§1 통과 시) → varlen-thd를 그 위로 rebase.
+
 ## §2. FlashQLA 커널 벤치 (최적화 트랙)
 
 배경·설치·판정 기준의 정본: [`../study/flashqla_poc.md`](../study/flashqla_poc.md).
@@ -94,10 +127,12 @@ PYTHONPATH=/home/work/vidsearch/envs/flashqla_poc/pylibs \
 | 3 | P3 ckpt CP>1 로드 | §1.3 | 〃 (LC는 이 ckpt에서 시작하므로 하드 게이트) |
 | 4 | 32K 메모리 (CP4 또는 CP8) | §1.4 | LC-A 보류 |
 | 5 | 128K@CP8 메모리 | §1.4 | LC-A는 GO 가능, LC-B만 보류 (recompute 재시도 후) |
-| 6 | FlashQLA 정확도 | §2 | fla로 LC 진행 (성능 손해만, 기능 무손실) |
-| 7 | FlashQLA 성능 | §2 | 〃 — 채택 포기 판단도 유효한 결론, poc.md에 기록 |
+| 6 | THD 문서 격리 (커널 등가성 + 스모크 + QK-Clip 상호작용) | §1.5 | LC-A 보류 — dense mask는 32K에서 불가하므로 대체 경로 없음 (격리 포기 결정은 별도 레시피 승인 필요) |
+| 7 | FlashQLA 정확도 | §2 | fla로 LC 진행 (성능 손해만, 기능 무손실) |
+| 8 | FlashQLA 성능 | §2 | 〃 — 채택 포기 판단도 유효한 결론, poc.md에 기록 |
 
-**1–4 통과 = LC-A GO.** 5는 LC-B 전용, 6–7은 채택 여부만 좌우한다.
+**1–4 + 6 통과 = LC-A GO.** 5는 LC-B 전용, 7–8은 채택 여부만 좌우한다.
+단 LC-A의 CP가 ≥2로 결정되면 §1.5의 THD+CP 통합(스코프 한계 참조)까지 완료해야 GO.
 
 ## §4. 통과 후 작업 (각각 별도 커밋 단위)
 

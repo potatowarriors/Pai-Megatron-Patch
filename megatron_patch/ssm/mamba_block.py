@@ -281,6 +281,7 @@ class MambaStack(MegatronModule):
         attention_mask: Tensor,
         inference_context: Optional[BaseInferenceContext] = None,
         rotary_pos_emb: Optional[Tensor] = None,
+        packed_seq_params=None,
         *,
         inference_params: Optional[BaseInferenceContext] = None,
     ):
@@ -298,11 +299,19 @@ class MambaStack(MegatronModule):
             inference_context (BaseInferenceContext): the inference parameters.
             rotary_pos_emb (Tensor, optional): the rotary positional embeddings.
                 Defaults to None.
+            packed_seq_params (PackedSeqParams, optional): THD/varlen packing metadata
+                (cu_seqlens). Callers that cannot pass it explicitly (upstream
+                MambaModel.forward drops it) may stash it on the block as
+                `self.packed_seq_params_override` instead; the explicit argument
+                takes precedence.
         Returns:
             Tensor: the output tensor.
         """
 
         inference_context = deprecate_inference_params(inference_context, inference_params)
+
+        if packed_seq_params is None:
+            packed_seq_params = getattr(self, "packed_seq_params_override", None)
 
         if not self.pre_process:
             # See set_input_tensor()
@@ -378,6 +387,14 @@ class MambaStack(MegatronModule):
                     else nullcontext()
                 )
                 with inner_fp8_context:
+                    # Forward packed_seq_params only when packing is active, so
+                    # layer classes without the parameter (upstream MambaLayer)
+                    # keep working while packing is off.
+                    packed_kwargs = (
+                        {"packed_seq_params": packed_seq_params}
+                        if packed_seq_params is not None
+                        else {}
+                    )
                     if isinstance(layer, TransformerLayer):
                         hidden_states, _ = layer(
                             hidden_states=hidden_states,
@@ -385,12 +402,14 @@ class MambaStack(MegatronModule):
                             inference_context=inference_context,
                             rotary_pos_emb=rotary_pos_emb,
                             sequence_len_offset=sequence_len_offset,
+                            **packed_kwargs,
                         )
                     else:  # MambaLayer
                         hidden_states = layer(
                             hidden_states=hidden_states,
                             attention_mask=attention_mask,
                             inference_context=inference_context,
+                            **packed_kwargs,
                         )
 
                 # The attention layer (currently a simplified transformer layer)

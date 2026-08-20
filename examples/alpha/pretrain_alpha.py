@@ -55,6 +55,49 @@ from megatron_patch.model.alpha.layer_specs import get_alpha_layer_spec
 from megatron_patch.model.qwen3_next.transformer_config import Qwen3NextTransformerConfig
 
 
+class AlphaMambaModel(MambaModel):
+    """MambaModel that accepts packed_seq_params (THD/varlen packing).
+
+    Upstream MambaModel.forward() drops packed_seq_params before calling the
+    decoder, which makes sequence packing (SFT) and THD document isolation
+    (LC 32k+) impossible. Instead of copying the ~100-line upstream forward,
+    we stash the value on the decoder (megatron_patch MambaStack reads
+    `packed_seq_params_override` as a fallback) around the super() call.
+
+    helper.py::forward_step passes packed_seq_params only to models whose
+    forward signature declares it, so declaring it here is what activates the
+    already-existing PackedSeqParams plumbing in megatron_patch/template/helper.py.
+    """
+
+    def forward(
+        self,
+        input_ids: Tensor,
+        position_ids: Tensor,
+        attention_mask: Tensor,
+        decoder_input: Tensor = None,
+        labels: Tensor = None,
+        inference_context: Optional[BaseInferenceContext] = None,
+        runtime_gather_output: Optional[bool] = None,
+        packed_seq_params=None,
+        *,
+        inference_params: Optional[BaseInferenceContext] = None,
+    ) -> Tensor:
+        self.decoder.packed_seq_params_override = packed_seq_params
+        try:
+            return super().forward(
+                input_ids=input_ids,
+                position_ids=position_ids,
+                attention_mask=attention_mask,
+                decoder_input=decoder_input,
+                labels=labels,
+                inference_context=inference_context,
+                runtime_gather_output=runtime_gather_output,
+                inference_params=inference_params,
+            )
+        finally:
+            self.decoder.packed_seq_params_override = None
+
+
 def mamba_builder(args, pre_process, post_process, vp_stage=None, config=None):
     """
     Alpha 모델 빌더 (Mamba 기반)
@@ -74,7 +117,7 @@ def mamba_builder(args, pre_process, post_process, vp_stage=None, config=None):
         config = core_transformer_config_from_args(args, Qwen3NextTransformerConfig)
     assert args.use_legacy_models is False, "Mamba only supported in Mcore!"
 
-    model = MambaModel(
+    model = AlphaMambaModel(
         config=config,
         mamba_stack_spec=get_alpha_layer_spec(args),
         vocab_size=args.padded_vocab_size,
