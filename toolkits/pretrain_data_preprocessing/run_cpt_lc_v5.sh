@@ -20,17 +20,23 @@
 #
 # Usage: bash run_cpt_lc_v5.sh [all|longblocks|pg19|edgar|pes2o]
 #   PROCS(기본 4) RAYON_THREADS(기본 2) — 8코어 분석 노드 기준.
+#   PACKED_DIR         packed 산출 디렉토리 override (재패킹 시 신규 경로 지정 —
+#                      기본 경로는 exists-skip이라 덮어쓰지 않음)
+#   PAD_DOC_MULTIPLE   bestfit_pack --pad-doc-multiple (기본 1 = 종전과 동일.
+#                      THD+CP 문서 격리는 16 필요 — docs/LC_REPACK_RUNBOOK.md)
+#   SEQ                packed seq-length (기본 32768; 128k 스테이지는 131072)
 
 set -uo pipefail
 
 DIR="$(cd "$(dirname "$0")" && pwd)"
 RAW="/home/work/Datasets/LL_datasets/longcontext/en"
 OUT="/home/work/Datasets/LL_preprocessed/v5/cpt_lc"
-PACKED="/home/work/Datasets/LL_preprocessed/v5/cpt_lc_packed_32k"
+PACKED="${PACKED_DIR:-/home/work/Datasets/LL_preprocessed/v5/cpt_lc_packed_32k}"
 PROCS="${PROCS:-4}"
 export RAYON_THREADS="${RAYON_THREADS:-2}"
 SPLIT_T=65536
-SEQ=32768
+SEQ="${SEQ:-32768}"
+PAD_DOC_MULTIPLE="${PAD_DOC_MULTIPLE:-1}"
 
 fail() { echo "[STAGE-FAIL] $1"; exit 1; }
 
@@ -68,6 +74,7 @@ pack_ds() {  # $1=ds
     mkdir -p "${PACKED}/${ds}"
     python3 "${DIR}/bestfit_pack.py" --input "${OUT}/${ds}/lt64k" \
         --output "${PACKED}/${ds}/data" --seq-length "${SEQ}" --eod 0 \
+        --pad-doc-multiple "${PAD_DOC_MULTIPLE}" \
         || fail "${ds}/pack"
     echo "[STAGE-DONE] ${ds}/pack"
 }

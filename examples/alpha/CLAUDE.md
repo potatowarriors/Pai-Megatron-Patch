@@ -1090,7 +1090,7 @@ emit 병목은 소스 `.bin`에서 bin 멤버 문서를 **무작위로 읽는 NF
 ### 도구
 | 파일 | 역할 |
 |---|---|
-| `toolkits/pretrain_data_preprocessing/bestfit_pack.py` | BFP packer (segment-tree BFD + pad-to-L emit + pre/post-verify + round-trip + `--dry-run`/`--strict-eod`). BFD ~0.25M docs/s(pure Python); 대형 셋은 emit가 I/O bound |
+| `toolkits/pretrain_data_preprocessing/bestfit_pack.py` | BFP packer (segment-tree BFD + pad-to-L emit + pre/post-verify + round-trip + `--dry-run`/`--strict-eod`). BFD ~0.25M docs/s(pure Python); 대형 셋은 emit가 I/O bound. **`--pad-doc-multiple 16`** (2026-08-21): 문서별 EOD 패딩으로 THD+CP 세그먼트 %2cp 정렬 — LC 32k/128k 패킹 필수, 재패킹 절차는 `docs/LC_REPACK_RUNBOOK.md` |
 | `toolkits/pretrain_data_preprocessing/split_by_doclen.py` | unpacked 문서를 길이 기준 lt/ge 분리 (기본 T=65536). LC 스테이지 배분 정책용 — 32k는 lt만 패킹, ≥64k는 128k 보존. `docs/LC_DATASETS.md` §5.1 |
 | `run_stage2_v5.sh` `pack`/`pack-dry` sub-target | 10개 blend member 일괄 packing (env `SEQLEN`/`EOD`/`OUT_PACKED`) |
 | `examples/alpha/configs/data/stage2_v5_blend_packed.yaml` | packed blend (stage2_v5_blend의 packed 트리 미러) |
@@ -1108,7 +1108,8 @@ emit 병목은 소스 `.bin`에서 bin 멤버 문서를 **무작위로 읽는 NF
 - **SFT/RL Datasets**: `docs/SFT_RL_DATASETS.md` — post-LC SFT·RL(MOPD) 데이터 자산 전수 정리: Nemotron-Post-Training-v3 49종 + used_in 매핑(ultra/super/nano), Ultra 파이프라인(RLVR→교사RL→MOPD) 재현 설계, SFT max 64k 근거, 한국어 SFT(Multilingual-v2 ko 81.6k행)
 - **Data Prep Log**: `docs/DATA_PREP_LOG.md` — LC·SFT 데이터 준비 작업의 **단일 진입점** (2026-07-31~08-04): 현재 상태 스냅샷(무엇이 어디에), 타임라인, 신규 도구 4종, 핵심 결정 7건, 남은 작업 큐 A~F
 - **Stage2 Curriculum Log**: `docs/STAGE2_CURRICULUM_LOG.md` — stage2 mid-run blend 커리큘럼(P2/P2b/P3) + DiLoCo bias-sync 결함 수정의 **단일 진입점** (2026-07-29~08-11): Nemotron 3 근거, 샤드×blend aliasing(정적/동적), resume 정밀 검증과 실행 간 비결정성, expert-bias 발산 정량 분석·수정·재시작 기록
-- **LC Entry Gate**: `docs/LC_ENTRY_GATE.md` — **P3 종료 직후, LC-A 시작 전에 통과해야 하는 검증 게이트의 단일 진입점** (2026-08-18): GDN CP 클러스터 검증(`feature/gdn-context-parallel` 러너북 4단계) + FlashQLA 커널 벤치(`study/flashqla_poc.md`), GO/NO-GO 판정표, 통과 후 커밋 단위(머지·가드 스왑·LC preset)
+- **LC Entry Gate**: `docs/LC_ENTRY_GATE.md` — **P3 종료 직후, LC-A 시작 전에 통과해야 하는 검증 게이트의 단일 진입점** (2026-08-18): GDN CP 클러스터 검증(`feature/gdn-context-parallel` 러너북 4단계) + FlashQLA 커널 벤치(`study/flashqla_poc.md`), GO/NO-GO 판정표, 통과 후 커밋 단위(머지·가드 스왑·LC preset). §1.5(varlen-thd 브랜치): THD 문서 격리 검증 트랙
+- **LC Repack Runbook**: `docs/LC_REPACK_RUNBOOK.md` — **LC 데이터 재패킹 절차의 단일 진입점** (2026-08-21, GPU 불필요·별도 세션 실행용): THD+CP가 요구하는 `--pad-doc-multiple 16` 재패킹(4종) + filler 소스 결정(3안 — stage2 unpacked 소실 발견) + 128k 패킹 예고, %16 정렬 검증 스크립트 포함
 
 ## Muon Optimizer Quick Reference
 

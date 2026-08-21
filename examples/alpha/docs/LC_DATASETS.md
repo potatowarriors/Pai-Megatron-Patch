@@ -240,6 +240,13 @@ EDGAR `cik`(같은 기업 연도 시리즈), peS2o field-of-study, repo 단위 �
 
 ## 6.5 전처리 실측 결과 (2026-08-06 — §6 체크리스트 1~3 완료)
 
+> **⚠️ 2026-08-21 추기**: 아래 32k packed 산출물은 **THD+CP 문서 격리와 비호환** —
+> LC는 CP≥2 학습이라 packed 세그먼트 길이 %16(`--pad-doc-multiple 16`) 요건이
+> 추가됐다 (`LC_ENTRY_GATE.md` §1.5). unpacked/≥64k 보존분은 그대로 유효하며,
+> **재패킹 절차는 [`LC_REPACK_RUNBOOK.md`](LC_REPACK_RUNBOOK.md)** (별도 세션 실행용).
+> 같은 문서 §3에 filler(§5.1의 "stage2 v5 재패킹") 전제 붕괴 — stage2 unpacked
+> 소실 — 와 대안 옵션도 기록되어 있다.
+
 `run_cpt_lc_v5.sh`로 4종 전체 처리 완료 (convert → tokenize → split(T=64k) →
 bestfit_pack 32k). 산출: `LL_preprocessed/v5/cpt_lc{,_packed_32k}/<ds>/`.
 

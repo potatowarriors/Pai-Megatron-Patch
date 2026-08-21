@@ -11,17 +11,30 @@ alpha의 **LC-phase → SFT → RL(MOPD)** 훈련 계획을 위한 데이터 준
 |---|---|---|---|
 | LC 원천 3종 (PG19/EDGAR/peS2o v3) | `LL_datasets/longcontext/en/` | 159G raw | ✅ 분석·변환·**pre-tokenize 완료** (08-06) |
 | **LongBlocks LC doc-QA (완성본)** | `…/LongBlocks/_jsonl/` | 45파일 / 191,758샘플 / 30G | ✅ **pre-tokenize까지 완료** (08-06) |
-| **LC pre-tokenized 4종** | `LL_preprocessed/v5/cpt_lc{,_packed_32k}/` | unpacked 24.21B tok (272G) · **32k packed 15.56B/477k bins** (59G) · **≥64k 보존 8.65B** | ✅ LC-A 투입 가능 (`LC_DATASETS.md` §6.5) |
+| **LC pre-tokenized 4종** | `LL_preprocessed/v5/cpt_lc{,_packed_32k}/` | unpacked 24.21B tok (272G) · **32k packed 15.56B/477k bins** (59G) · **≥64k 보존 8.65B** | ⚠️ unpacked/≥64k는 유효하나 **32k packed는 THD+CP 비호환 — `--pad-doc-multiple 16` 재패킹 필요** ([`LC_REPACK_RUNBOOK.md`](LC_REPACK_RUNBOOK.md), 08-21) |
 | Nemotron post-training v3 (49종) | `LL_datasets/posttraining/{SFT,RL}` | SFT 988G + RL 62G | ✅ 다운로드·검증 완료 |
 | 블렌드 레시피 분석 | `posttraining/RL/nemotron_blend_recipe.json` | — | ✅ |
 | chat template | `examples/alpha/tokenizer_v5/chat_template.jinja` | — | ✅ 등록·24테스트 통과 |
 | **정체성 SFT (자체 제작)** | `LL_datasets/posttraining/SFT/alpha-SFT-Identity-v1/` | train 7,315 + eval 400 | ✅ 완료 (08-10, card v1.1) |
 | **정체성 RL (자체 제작)** | `LL_datasets/posttraining/RL/alpha-RL-Identity-Following-v1/` | 16,510 프롬프트 | ✅ 완료 (08-10) |
-| LC 전처리 산출 대상 | `LL_preprocessed/v5/cpt_lc/` | 빈 디렉토리 | ⏳ 토크나이즈부터 |
+| stage2 v5 unpacked 10종 | ~~`LL_preprocessed/v5/stage2/`~~ | — | ❌ **소실 확인 (08-21)** — `specialized/`만 잔존, 나머지는 4k-packed(`stage2_packed/`)뿐이라 32k 재패킹 불가. filler 확보 옵션은 [`LC_REPACK_RUNBOOK.md`](LC_REPACK_RUNBOOK.md) §3 |
+| stage1 v5 unpacked 3종 (dclm/korean_web/fineweb2hq) | `LL_preprocessed/v5/stage1/` | ~466B tok | ✅ 보존 확인 (08-21) — LC filler 대안 소스 |
 
 실행 중인 백그라운드 작업: 없음 (2026-08-04 기준).
 
 ## 1. 타임라인
+
+**08-21 — THD+CP 재패킹 요건 확정 (최신)**
+- LC는 CP≥2 학습이고 dense 마스크 격리는 32k에서 불가 → **THD/cu_seqlens 문서 격리**
+  채택 (`LC_ENTRY_GATE.md` §1.5). 데이터 요건: 모든 packed 세그먼트 길이 %16
+  (`bestfit_pack --pad-doc-multiple 16`, main 70220d7).
+- **기존 `cpt_lc_packed_32k`는 재패킹 대상** — 별도 세션 실행용 러너북 작성:
+  [`LC_REPACK_RUNBOOK.md`](LC_REPACK_RUNBOOK.md) (사전조건→명령→%16 정렬 검증→후처리).
+- **발견: stage2 v5 unpacked 10종 소실** — 큐 B의 "stage2 블렌드 32k 재패킹" 전제
+  붕괴. filler 확보 옵션 3안(stage1 unpacked 사용 / 재토크나이즈 / packed 복원)은
+  러너북 §3, 결정은 LC-A 블렌드 yaml 설계와 함께.
+- `run_cpt_lc_v5.sh`에 env 노브 추가: `PACKED_DIR`/`PAD_DOC_MULTIPLE`/`SEQ`
+  (기본값 = 종전 동작).
 
 **07-31 — LC 분석·전략**
 - LC 원천 3종 전수 스캔(문자) + tokenizer_v5 실측 환산 → `LC_DATASETS.md` 작성.
@@ -124,7 +137,11 @@ alpha의 **LC-phase → SFT → RL(MOPD)** 훈련 계획을 위한 데이터 준
    → 데이터셋별 BATCH_SIZE), pes2o fill 77%(길이 필터가 filler 제거 → filler 티어).
 
 **B. LC-A 잔여** — ~~자연 장문 변환·토크나이즈~~ 완료(08-06, A와 통합 처리).
-   남은 것: **stage2 v5 블렌드 32k 재패킹** → **LC-A 블렌드 yaml 작성**.
+   남은 것 (08-21 전면 갱신, 실행 절차는 [`LC_REPACK_RUNBOOK.md`](LC_REPACK_RUNBOOK.md)):
+   ① **LC 4종 32k 재패킹** (`--pad-doc-multiple 16`, THD+CP 요건 — 확정, 즉시 실행 가능)
+   ② **filler 소스 결정** — ~~stage2 v5 재패킹~~ 불가(unpacked 소실). 옵션 3안 중
+      블렌드 yaml 설계와 함께 결정 (korean_web+fineweb2hq는 어느 안에서도 쓰이므로 선행 가능)
+   ③ **LC-A 블렌드 yaml 작성** (pad16 경로 + THD 플래그 셋은 `LC_ENTRY_GATE.md` §1.5 기준).
 
 **C. G0 시스템 게이트** (H100 유휴 시)
    zero-shot RULER/NLL(8k~64k) — CPT 예산·직행 가능성 캘리브레이션.
