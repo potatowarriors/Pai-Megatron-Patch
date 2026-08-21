@@ -271,3 +271,99 @@ def test_end_to_end_pack_roundtrip(tiny_dataset, tmp_path):
     found_multiset = found
     for sd in short_docs:
         assert sd in found_multiset, f"document was split or lost: {sd}"
+
+
+# --------------------------------------------------------------------------
+# --pad-doc-multiple (THD+CP per-segment divisibility)
+# --------------------------------------------------------------------------
+def test_pad_lengths_unit():
+    lens = np.array([5, 8, 16, 1, 0])
+    assert bfp.pad_lengths(lens, 1).tolist() == [5, 8, 16, 1, 0]
+    assert bfp.pad_lengths(lens, 8).tolist() == [8, 8, 16, 8, 0]
+    assert bfp.pad_lengths(lens, 16).tolist() == [16, 16, 16, 16, 0]
+    assert bfp.pad_lengths(lens, 8).dtype == np.int64
+
+
+def test_end_to_end_pad_doc_multiple(tiny_dataset, tmp_path):
+    """With --pad-doc-multiple M, every doc(+its EOD pad run) inside a bin must
+    end on an M-aligned boundary, docs stay intact, and real tokens survive."""
+    in_prefix, docs, cap, eod, indexed_dataset = tiny_dataset
+    out_prefix = str(tmp_path / "out_padded")
+    M = 8
+
+    r = subprocess.run(
+        [sys.executable, os.path.join(PRE, "bestfit_pack.py"),
+         "--input", in_prefix, "--output", out_prefix,
+         "--seq-length", str(cap), "--eod", str(eod),
+         "--pad-doc-multiple", str(M), "--megatron-path", MEGATRON],
+        capture_output=True, text=True)
+    assert r.returncode == 0, r.stdout + r.stderr
+
+    out = indexed_dataset.IndexedDataset(out_prefix + "_text_document")
+    lens = np.asarray(out.sequence_lengths)
+    assert (lens == cap).all()
+
+    # Every EOD *run* must end on an M-aligned boundary (or at bin end, which
+    # is M-aligned since cap % M == 0): scan each bin, find maximal runs of
+    # consecutive EODs, and require run-end % M == 0. This is exactly the
+    # boundary structure the THD+CP batch path derives padded cu_seqlens from.
+    found = []
+    for b in range(len(out)):
+        seq = np.asarray(out[b]).tolist()
+        i = 0
+        cur = []
+        while i < len(seq):
+            cur.append(seq[i])
+            if seq[i] == eod:
+                j = i + 1
+                while j < len(seq) and seq[j] == eod:
+                    cur.append(seq[j])
+                    j += 1
+                assert j % M == 0, (
+                    f"bin {b}: EOD run ends at {j}, not a multiple of {M}")
+                found.append(cur)
+                cur = []
+                i = j
+            else:
+                i += 1
+        if cur:
+            # Allowed residue: a full-L chunk of an over-length doc is a
+            # single-piece bin with no interior EOD; its segment boundary is
+            # the bin end, which is M-aligned since cap % M == 0.
+            assert len(cur) == cap, (
+                f"bin {b} has trailing non-EOD residue of {len(cur)} tokens")
+
+    # Doc intactness: each short/exact doc must appear as the PREFIX of some
+    # padded block (content..EOD followed only by pad EODs).
+    short_docs = [d.tolist() for d in docs if len(d) <= cap]
+    for sd in short_docs:
+        hit = any(
+            blk[:len(sd)] == sd and all(t == eod for t in blk[len(sd):])
+            for blk in found
+        )
+        assert hit, f"document not found intact with EOD-only padding: {sd}"
+
+    # Token conservation: emitted = real + pads, pads are all EOD.
+    real = sum(len(d) for d in docs)
+    total = int(lens.sum())
+    n_eod_out = sum(int((np.asarray(out[b]) == eod).sum()) for b in range(len(out)))
+    n_eod_in = len(docs)
+    assert total - real == n_eod_out - n_eod_in  # all added tokens are EODs
+
+
+def test_end_to_end_default_unchanged_by_pad_arg_1(tiny_dataset, tmp_path):
+    """--pad-doc-multiple 1 must be byte-identical to omitting the flag."""
+    in_prefix, docs, cap, eod, indexed_dataset = tiny_dataset
+    outs = []
+    for name, extra in [("a", []), ("b", ["--pad-doc-multiple", "1"])]:
+        out_prefix = str(tmp_path / f"out_{name}")
+        r = subprocess.run(
+            [sys.executable, os.path.join(PRE, "bestfit_pack.py"),
+             "--input", in_prefix, "--output", out_prefix,
+             "--seq-length", str(cap), "--eod", str(eod),
+             "--megatron-path", MEGATRON] + extra,
+            capture_output=True, text=True)
+        assert r.returncode == 0, r.stdout + r.stderr
+        outs.append(out_prefix + "_text_document.bin")
+    with open(outs[0], "rb") as fa, open(outs[1], "rb") as fb:
+        assert fa.read() == fb.read()

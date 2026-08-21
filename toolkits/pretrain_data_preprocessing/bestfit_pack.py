@@ -255,6 +255,20 @@ def build_pieces(lengths: np.ndarray, cap: int, strict_eod: bool):
     return pool, full, leak_chunks, n_empty
 
 
+def pad_lengths(lengths: np.ndarray, multiple: int) -> np.ndarray:
+    """Round each piece length up to the next multiple (int64; multiple<=1 = no-op).
+
+    Used by --pad-doc-multiple: the emit step then pads each piece with EOD to
+    this rounded length, so every packed segment satisfies the THD+CP
+    divisibility requirement (TE's thd_get_partitioned_indices and the GDN
+    a2a permutation both need per-segment lengths % (2*cp_size) == 0).
+    """
+    lengths = np.asarray(lengths, dtype=np.int64)
+    if multiple <= 1:
+        return lengths
+    return -(-lengths // multiple) * multiple
+
+
 def estimate_baseline_truncations(lengths: np.ndarray, cap: int) -> int:
     """Doc-splits that plain concat-and-chunk would cause in the FILE order:
     a cut at every multiple of cap splits a doc unless it lands on a doc boundary.
@@ -299,6 +313,12 @@ def main():
                         "random-read latency-bound, so parallel os.pread hides it (big "
                         "speedup on large shards). Writes stay ordered on the main thread "
                         "so output is byte-identical to --emit-threads 1. Default 48.")
+    p.add_argument("--pad-doc-multiple", type=int, default=1,
+                   help="Pad every packed piece with EOD so its emitted length is a multiple "
+                        "of this value. Required for THD+CP document isolation: TE's "
+                        "thd_get_partitioned_indices needs each segment divisible by "
+                        "2*cp_size, so use 16 to cover CP<=8. Default 1 = no per-doc "
+                        "padding (output byte-identical to previous behavior).")
     p.add_argument("--megatron-path",
                    default="/home/work/vidsearch/repos/project_s/Pai-Megatron-Patch/"
                            "backends/megatron/Megatron-LM-251125",
@@ -313,6 +333,9 @@ def main():
 
     cap = args.seq_length
     eod = args.eod
+    pad_mult = args.pad_doc_multiple
+    if pad_mult > 1 and cap % pad_mult != 0:
+        p.error(f"--seq-length {cap} must be divisible by --pad-doc-multiple {pad_mult}")
     in_prefix = args.input + "_text_document"
 
     t_all = time.time()
@@ -320,7 +343,8 @@ def main():
     print(f"[bestfit_pack] seq-length L  = {cap}")
     print(f"[bestfit_pack] eod / pad id  = {eod}")
     print(f"[bestfit_pack] mode          = {'DRY-RUN' if args.dry_run else 'WRITE'}"
-          f"{' (strict-eod)' if args.strict_eod else ''}")
+          f"{' (strict-eod)' if args.strict_eod else ''}"
+          f"{f' (pad-doc-multiple={pad_mult})' if pad_mult > 1 else ''}")
 
     if not indexed_dataset.IndexedDataset.exists(in_prefix):
         print(f"ERROR: not found: {in_prefix}.{{bin,idx}}", file=sys.stderr)
@@ -357,20 +381,28 @@ def main():
     print(f"[bestfit_pack]   pool pieces = {pool['len'].shape[0]:,}  "
           f"full-bin pieces = {full['len'].shape[0]:,}  (long docs > L = {n_long:,})")
 
-    # 2) BFD pack the pool
+    # 1.5) per-piece padded lengths (--pad-doc-multiple; pad_mult==1 -> plen==len)
+    pool_plen = pad_lengths(pool["len"], pad_mult)
+    doc_pad_tokens = int((pool_plen - pool["len"]).sum())
+    if pad_mult > 1:
+        print(f"[bestfit_pack]   per-doc pad to %{pad_mult}: +{doc_pad_tokens:,} tokens "
+              f"({doc_pad_tokens/max(real_tokens,1)*100:.3f}% of real)")
+
+    # 2) BFD pack the pool (by padded lengths, so bins hold whole padded pieces)
     print(f"[bestfit_pack] best-fit-decreasing packing ...", flush=True)
     t0 = time.time()
-    item_bin, n_pool_bins, bin_remaining = bestfit_decreasing(pool["len"], cap)
+    item_bin, n_pool_bins, bin_remaining = bestfit_decreasing(pool_plen, cap)
     n_full_bins = full["len"].shape[0]
     total_bins = n_pool_bins + n_full_bins
     print(f"[bestfit_pack]   BFD done in {time.time()-t0:.1f}s  "
           f"pool bins = {n_pool_bins:,}  full bins = {n_full_bins:,}  total = {total_bins:,}")
 
     # 3) stats
-    pad_tokens = int(np.asarray(bin_remaining, dtype=np.int64).sum()) if bin_remaining else 0
+    tail_pad = int(np.asarray(bin_remaining, dtype=np.int64).sum()) if bin_remaining else 0
+    pad_tokens = tail_pad + doc_pad_tokens
     emitted = total_bins * cap
-    # invariant: emitted == real + pad
-    assert emitted == real_tokens + pad_tokens, (emitted, real_tokens, pad_tokens)
+    # invariant: emitted == real + pad (doc-level + bin-tail)
+    assert emitted == real_tokens + pad_tokens, (emitted, real_tokens, doc_pad_tokens, tail_pad)
     fill = real_tokens / emitted if emitted else 1.0
     base_trunc = estimate_baseline_truncations(lengths, cap)
     # BFP only splits docs strictly longer than L: a doc of length L_i becomes
@@ -417,6 +449,7 @@ def main():
     seq_ptr = np.asarray(ds.index.sequence_pointers)   # int64 byte offsets
     itemsize = np.dtype(dtype).itemsize
     pdoc, poff, plen = pool["doc"], pool["off"], pool["len"]
+    pplen = pool_plen
     fdoc, foff, flen = full["doc"], full["off"], full["len"]
 
     def _read(doc, off, length):
@@ -425,7 +458,14 @@ def main():
         return np.frombuffer(buf, dtype=dtype)
 
     def build_pool_bin(members):
-        parts = [_read(pdoc[m], poff[m], plen[m]) for m in members]
+        parts = []
+        for m in members:
+            part = _read(pdoc[m], poff[m], plen[m])
+            target = int(pplen[m])
+            if target > part.shape[0]:
+                # per-doc EOD pad (--pad-doc-multiple; masked by --eod-mask-loss)
+                part = np.concatenate([part, np.full(target - part.shape[0], eod, dtype=dtype)])
+            parts.append(part)
         arr = np.concatenate(parts) if len(parts) > 1 else parts[0]
         fill_n = arr.shape[0]
         assert fill_n <= cap, f"bin overflow {fill_n} > {cap}"
@@ -519,9 +559,15 @@ def main():
                 members_of[b].append(it)
         ok = 0
         for b in sample_set:
-            expected = np.concatenate(
-                [ds.get(int(pool["doc"][m]), int(pool["off"][m]), int(pool["len"][m]))
-                 for m in members_of[b]])
+            exp_parts = []
+            for m in members_of[b]:
+                part = ds.get(int(pool["doc"][m]), int(pool["off"][m]), int(pool["len"][m]))
+                target = int(pool_plen[m])
+                if target > part.shape[0]:
+                    part = np.concatenate(
+                        [part, np.full(target - part.shape[0], eod, dtype=dtype)])
+                exp_parts.append(part)
+            expected = np.concatenate(exp_parts)
             fn = expected.shape[0]
             if fn < cap:
                 expected = np.concatenate([expected, np.full(cap - fn, eod, dtype=dtype)])
