@@ -88,16 +88,26 @@ CPU 테스트 7종 통과. GPU 검증 항목은 `tests/test_gdn_varlen_thd.py`�
 | c | 4096 등가성 A/B: mock 30 iter, ①현행(reset-attention-mask dense) vs ②THD(위 플래그) — loss 궤적 비교 | 근접(비트일치 아님 — ②는 GDN 문서 간 state까지 격리하므로 미세 개선 방향의 차이만 허용) | ~30분 |
 | d | **QK-Clip×THD**: b/c 실행 중 `max_attention_logit` 로그 정상 확인 (TE fused-attn return_max_logit이 thd 포맷에서 동작하는지 — cuDNN 엔진 부재 크래시 이력 있는 조합) | 무크래시 + 로그값 유효 | b/c에 포함 |
 
-**⚠️ 스코프 한계 — THD+CP 미해결**: 이 브랜치는 **CP=1에서의 THD**만 검증한다.
-§1.4에서 LC-A가 CP≥2로 결정되면 추가 작업 필요: megatron_patch helper의 `CP>1 패킹 금지`
-가드 해제 + 업스트림 `get_thd_batch_on_this_cp_rank` 방식 배치 슬라이싱 이식.
-(GDN CP는 head-split이라 rank가 전체 seq를 보므로 cu_seqlens 의미론은 그대로 —
-attention 쪽 TE thd+CP 경로만 통합하면 됨.) §1.4 메모리 실측에서 **32K@CP1(MBS1,
-recompute)** 항목을 추가 측정할 것 — 통과하면 LC-A를 CP=1+THD로 시작하고 THD+CP는
-LC-B 전 과제로 미룰 수 있다.
+**THD+CP 준비 상태 (2026-08-21 갱신 — LC는 CP≥2가 기본 경로이므로 필수 트랙)**:
+알고리즘·데이터 계층은 GPU 없이 완료, 남은 것은 머지 시점의 스티치 커밋 + 분산 검증.
+
+| 조각 | 위치 | 상태 |
+|---|---|---|
+| 세그먼트별 a2a 순열 (`build_thd_cp_a2a_perm` + `a2a_cp_to_hp/hp_to_cp`, upstream main 포팅) | gdn-cp 브랜치 `gdn_context_parallel.py` (a62b2b4) | ✅ CPU 14/14 (`tests/test_gdn_thd_cp_perm.py`) — rank별 배치 레퍼런스 대조·역순열·전역 지그재그 교차검증. divisibility 검증은 upstream의 `%cp`를 `%2cp`로 강화(실요건) |
+| 데이터 divisibility (`bestfit_pack.py --pad-doc-multiple`) | main (70220d7) | ✅ 19/19 — **LC 32k/128k 재패킹 시 `--pad-doc-multiple 16` 필수** (CP≤8 커버; unpacked 원본 보존돼 있어 재패킹 가능, per-doc pad 오버헤드 <1% 예상) |
+| 패드 런 세그먼트 병합 (`merge_eod_pad_segments` — position-id 리셋이 pad EOD마다 만든 length-1 세그먼트를 앞 문서로 흡수해 %2cp 정렬 회복) | 이 브랜치 `megatron_patch/data/utils.py` | ✅ CPU 5 tests (실제 position-id 유도 체인 round-trip 포함) |
+
+**남은 작업 = 머지-스티치 커밋** (gdn-cp §1 통과·머지 → varlen-thd rebase 후 한 커밋):
+① mixer forward에서 in_proj 출력→`a2a_cp_to_hp(..., packed_seq_params)` / norm 출력→
+`a2a_hp_to_cp` 배선 + varlen seq_len을 a2a 후 전역 길이로 재계산(현재는 입력 shape 기준),
+② helper.py `CP>1 패킹 금지` 해제 → 업스트림 `get_thd_batch_on_this_cp_rank`
+(`megatron/core/utils.py:2005`, TE `thd_get_partitioned_indices`) 호출 +
+`merge_eod_pad_segments` 적용(cu_seqlens_padded=cu_seqlens, pre-padded 데이터 전제),
+③ torchrun CP{2,4} packed-vs-CP1 forward 등가성 (gdn-cp 러너북 §1 패턴 재사용).
+폴백: §1.4에서 32K@CP1(MBS1, recompute) 실측 통과 시 LC-A를 CP=1+THD로 먼저 열 수 있음.
 
 **충돌 주의**: `feature/gdn-context-parallel`과 이 브랜치는 둘 다 `gated_deltanet.py`를
-수정한다. 머지 순서: gdn-cp 먼저(§1 통과 시) → varlen-thd를 그 위로 rebase.
+수정한다. 머지 순서: gdn-cp 먼저(§1 통과 시) → varlen-thd를 그 위로 rebase → 스티치.
 
 ## §2. FlashQLA 커널 벤치 (최적화 트랙)
 

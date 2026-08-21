@@ -216,3 +216,74 @@ def test_fla_varlen_actually_isolates_segments():
         "cu_seqlens had no effect on a downstream segment — varlen isolation "
         "is not active (fla version ignoring the kwarg?)"
     )
+
+
+# ---------------------------------------------------------------------------
+# CPU: merge_eod_pad_segments (megatron_patch/data/utils.py) — THD+CP prep
+# ---------------------------------------------------------------------------
+
+def _merge_eod_pad_segments():
+    from megatron_patch.data.utils import merge_eod_pad_segments
+
+    return merge_eod_pad_segments
+
+
+def test_merge_absorbs_pad_run_after_doc():
+    """Doc(len 5 incl. its EOD) + 3 pad EODs: position-id resets make the pads
+    length-1 segments; merging restores one 8-aligned segment."""
+    fn = _merge_eod_pad_segments()
+    #        |-- doc: c c c c E --|  E  E  E  |-- doc2: c c c E --|
+    tokens = torch.tensor([7, 8, 9, 5, 0, 0, 0, 0, 4, 6, 2, 0])
+    cu = torch.tensor([0, 5, 6, 7, 8, 12], dtype=torch.int)
+    out = fn(cu, tokens, eod_id=0)
+    assert out.tolist() == [0, 8, 12]
+    assert out.dtype == torch.int
+
+
+def test_merge_keeps_content_segments():
+    fn = _merge_eod_pad_segments()
+    tokens = torch.tensor([7, 8, 0, 4, 6, 0])
+    cu = torch.tensor([0, 3, 6])
+    out = fn(cu, tokens, eod_id=0)
+    assert out.tolist() == [0, 3, 6]  # nothing to merge
+
+
+def test_merge_bin_tail_pad_into_last_doc():
+    fn = _merge_eod_pad_segments()
+    tokens = torch.tensor([7, 0, 3, 0, 0, 0])  # doc, doc, then 2 tail pads
+    cu = torch.tensor([0, 2, 4, 5, 6])
+    out = fn(cu, tokens, eod_id=0)
+    assert out.tolist() == [0, 2, 6]
+
+
+def test_merge_leading_all_eod_segment_kept():
+    fn = _merge_eod_pad_segments()
+    tokens = torch.tensor([0, 7, 8, 0])
+    cu = torch.tensor([0, 1, 4])
+    out = fn(cu, tokens, eod_id=0)
+    assert out.tolist() == [0, 1, 4]  # nothing before it to merge into
+
+
+def test_merge_round_trip_with_position_id_derivation():
+    """End-to-end over the real derivation chain: padded-doc token stream ->
+    GPTDataset-style position ids -> cu_seqlens -> merge -> M-aligned segments."""
+    from megatron_patch.data.utils import cu_seqlens_from_position_ids
+
+    fn = _merge_eod_pad_segments()
+    M = 8
+    # two docs padded to %8 (5+3 pads, 7+1 pad), then 8 tail pads to fill 24+8=32? keep 24
+    tokens = torch.tensor(
+        [1, 2, 3, 4, 0, 0, 0, 0,          # doc1 (5 incl EOD) + 3 pads -> 8
+         5, 6, 7, 8, 9, 10, 0, 0]         # doc2 (7 incl EOD) + 1 pad  -> 8
+    )
+    # replicate GPTDataset reset: position restarts after every EOD
+    pos = torch.zeros_like(tokens)
+    p = 0
+    for i, t in enumerate(tokens):
+        pos[i] = p
+        p = 0 if t == 0 else p + 1
+    cu, _ = cu_seqlens_from_position_ids(pos)
+    merged = fn(cu, tokens, eod_id=0)
+    assert merged.tolist() == [0, 8, 16]
+    seg = torch.diff(merged.to(torch.long))
+    assert (seg % M == 0).all()
