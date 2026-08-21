@@ -127,13 +127,25 @@ lt64k 합계 15.56B).
 4k-packed는 재패킹 불가(장문이 이미 4k 조각 + pad/문서 EOD 구분 불가,
 `LC_DATASETS.md` §6 체크리스트 2). filler 확보는 아래 옵션 중 결정해야 한다:
 
-**2026-08-21 추기 — raw 잔존 실사로 옵션 B가 크게 저렴해짐**:
-`LL_datasets/pretraining/stage2/`에 **code 1.9T + math 718G + Nemotron-CC-Math-v1
-244G + eng 8.6G의 raw가 잔존**함을 확인했다 (소실된 것은 v5 *unpacked mmap*이고
-raw jsonl은 CC-HQ만 삭제 — CC-HQ는 MinIO 복원 가능). LC-A filler 필요량은 ~7-9B뿐이라
-**전량이 아니라 샤드 서브셋만 재토크나이즈**하면 되고(파이프라인 처리량 ~25M tok/s
-기준 토크나이즈 자체는 분 단위; 지배 비용은 CC-HQ MinIO 복원 ~3h), P3 조성
-(CC-HQ 60/code 27/math 12/korean 1)을 그대로 재현할 수 있다.
+**2026-08-21 추기 — raw 잔존 실사로 옵션 B가 크게 저렴해짐** (같은 날 2차 정정 포함):
+소실된 것은 v5 *unpacked mmap* 계층이고 **raw는 CC-HQ만 삭제**(MinIO 복원 가능)임을
+확인했다. replay가 미러링해야 할 조성은 stage2 코퍼스 자연 비율(CC-HQ 60%...)이
+아니라 **모델이 마지막으로 본 P3 decay 블렌드**
+(`configs/data/stage2_v5_blend_packed_p3.yaml` 실측 집계):
+
+| P3 구성 | 비중 | 32k filler 소스 상태 (08-21 실사) |
+|---|---|---|
+| **specialized v1/v1.1/v1.2** | **35% (최대)** | raw 잔존 `LL_datasets/pretraining/stage3/Nemotron-Pretraining-Specialized-*` (unpacked는 빈 스캐폴딩 — .bin 0개) |
+| CC-HQ (actual 4 + qa 16) | 20% | raw 삭제 → **MinIO 복원 ~3h (유일한 복원 비용)** |
+| math (+CC-Math) | 18% | raw 잔존 `pretraining/stage2/{math,Nemotron-CC-Math-v1}` (718G+244G) |
+| cc_code | 10% | raw 잔존 `Nemotron-CC-Code-v1` (1.1T) |
+| code 5종 | 8% | raw 잔존 `pretraining/stage2/code` (1.9T) |
+| korean_web / fineweb2hq | 6% / 3% | stage1 unpacked 잔존 → 재패킹만 |
+
+LC-A filler 필요량은 ~7-9B뿐이라 **전량이 아니라 샤드 서브셋만 재토크나이즈**하면
+된다(처리량 ~25M tok/s 기준 토크나이즈는 분 단위; 지배 비용은 CC-HQ 복원 ~3h).
+Nemotron 3 Ultra의 LC 54%가 "직전 phase 블렌드 재사용"이었으므로 P3 미러가 레시피
+정합 기본값이고, 조성 조정 여부는 블렌드 yaml 설계에서 확정.
 
 | 옵션 | 내용 | 비용 | 비고 |
 |---|---|---|---|

@@ -19,7 +19,7 @@ alpha의 **LC-phase → SFT → RL(MOPD)** 훈련 계획을 위한 데이터 준
 | **정체성 SFT (자체 제작)** | `LL_datasets/posttraining/SFT/alpha-SFT-Identity-v1/` | train 7,315 + eval 400 | ✅ 완료 (08-10, card v1.1) |
 | **정체성 RL (자체 제작)** | `LL_datasets/posttraining/RL/alpha-RL-Identity-Following-v1/` | 16,510 프롬프트 | ✅ 완료 (08-10) |
 | stage2 v5 unpacked 10종 | ~~`LL_preprocessed/v5/stage2/`~~ | — | ❌ **소실 확인 (08-21)** — `specialized/`만 잔존, 나머지는 4k-packed(`stage2_packed/`)뿐이라 32k 재패킹 불가. filler 확보 옵션은 [`LC_REPACK_RUNBOOK.md`](LC_REPACK_RUNBOOK.md) §3 |
-| **stage2 raw 소스 (code/math)** | `LL_datasets/pretraining/stage2/` | code 1.9T + math 718G + CC-Math-v1 244G + eng 8.6G | ✅ **잔존 확인 (08-21)** — unpacked 소실과 별개로 raw는 살아있음(CC-HQ raw만 삭제, MinIO 복원 가능). LC filler는 서브셋 재토크나이즈로 P3 조성 재현 가능 → 러너북 §3 옵션 B 권고 |
+| **stage2/P3 raw 소스** | `LL_datasets/pretraining/{stage2,stage3}/` | code 1.9T + math 718G + CC-Math 244G + **Specialized v1/v1.1/v1.2** (+cc_code 1.1T) | ✅ **잔존 확인 (08-21)** — 소실은 unpacked 계층뿐, raw는 CC-HQ만 삭제(MinIO 복원 ~3h). 주의: `v5/stage2/specialized/`는 빈 스캐폴딩(.bin 0개). LC filler는 **P3 블렌드(specialized 35%가 최대) 미러**를 서브셋 재토크나이즈로 재현 → 러너북 §3 옵션 B |
 | stage1 v5 unpacked 3종 (dclm/korean_web/fineweb2hq) | `LL_preprocessed/v5/stage1/` | ~466B tok | ✅ 보존 확인 (08-21) — LC filler 대안 소스 |
 
 실행 중인 백그라운드 작업: 없음 (2026-08-04 기준).
