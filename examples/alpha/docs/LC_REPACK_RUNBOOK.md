@@ -153,8 +153,58 @@ Nemotron 3 Ultra의 LC 54%가 "직전 phase 블렌드 재사용"이었으므로 
 | **B. raw 서브셋 재토크나이즈 (실사 후 권고)** | code/math는 잔존 raw에서 필요분 샤드만 토크나이즈→32k+pad16 패킹; CC-HQ는 MinIO 복원 후 동일; korean은 stage1 unpacked 재사용 | 반나절 내외 (CC-HQ 복원 ~3h 지배) | **P3 조성 재현 = replay 목적에 최적.** 128k filler도 같은 raw에서 SEQ=131072로 재생산 가능 |
 | C. 4k-packed에서 whole-doc 복원 도구 신규 | EOD split로 온전 문서만 추출(4k 초과 조각은 드롭/수용) | 도구 개발+검증 | raw 잔존 확인으로 존재 이유 소멸 — **탈락** |
 
-**권고**: 옵션 B 기반으로 LC-A 블렌드 yaml 설계(큐 B)와 함께 확정. 결정 전이라도
-**korean_web + fineweb2hq는 선행 패킹 가능** (어느 안에서도 쓰임):
+**✅ 결정 (2026-08-21, 사용자 확정): P3 미러로 진행.** 근거: replay의 목적은
+기존 학습 내용을 파괴적 망각으로부터 지키는 것이므로, 모델이 마지막으로 본 분포
+(P3 decay 블렌드)를 **조성 변경 없이 그대로** 재현한다. filler 블렌드 가중치는
+`configs/data/stage2_v5_blend_packed_p3.yaml`의 상대 가중치를 재사용(경로만
+pad16 산출물 트리로 치환).
+
+### 3.1 물량 산정
+
+LC-A 예산 12~16B × filler 54% ≈ **6.5~8.6B**. 카테고리 목표 = P3 비중 × filler 총량.
+재토크나이즈 소스는 **목표의 ≥2× 풀** 확보(epoch ≤0.5로 반복 회피). filler 8B 기준:
+
+| 카테고리 | P3 비중 | 목표 | 확보 방식 |
+|---|---|---|---|
+| specialized | 35% | 2.8B | **전체 재생산** (§3.2 — subset 가중 보존·128k 재사용 겸) |
+| CC-HQ | 20% | 1.6B | MinIO 복원 후 샤드 서브셋 ≥3.2B (actual:qa = 4:16 비율) |
+| math(+CC-Math) | 18% | 1.44B | 샤드 서브셋 ≥2.9B |
+| cc_code | 10% | 0.8B | 샤드 서브셋 ≥1.6B |
+| code 5종 | 8% | 0.64B | 샤드 서브셋 ≥1.3B (subset별 P3 가중 비례 배분) |
+| korean_web / fineweb2hq | 6% / 3% | 0.48B / 0.24B | stage1 unpacked **전체** 패킹 (아래 명령) |
+
+### 3.2 카테고리별 절차
+
+**① specialized — `run_stage3_v5.sh` 재사용 (전체 재생산 권장)**: 필요 풀은 ~5.6B지만
+15개 subset의 P3 내부 가중치 보존 + parquet 샤드 순서 편향 회피를 위해 전체 처리가
+안전하다 (멱등·무인, 산출 unpacked는 128k filler 재패킹에도 재사용):
+
+```bash
+OUT_DIR=/home/work/Datasets/LL_preprocessed/v5/lc_filler/specialized \
+OUT_PACKED_DIR=/home/work/Datasets/LL_preprocessed/v5/lc_filler_packed_32k_pad16/specialized \
+SEQLEN=32768 PAD_DOC_MULTIPLE=16 KEEP_UNPACKED=1 \
+  bash run_stage3_v5.sh all
+```
+
+(**`KEEP_UNPACKED=1` 필수** — 128k 재패킹 대비. 예상 비용: 토크나이즈 324B ≈ 반나절
++ pack, 디스크 ~2.6TB — NFS 여유 19T 내. env 노브는 2026-08-21 추가분.)
+
+**② math / code / cc_code — 샤드 파일 결정적 해시 샘플링**으로 목표 풀만 토크나이즈
+(순서 편향 방지 — pes2o filler 티어의 해시 샘플링 선례). jsonl은
+`preprocess_stage2_v5.sh` 직행, parquet(cc_code)은 변환 후. 이어서:
+
+```bash
+python3 bestfit_pack.py --input <unpacked_prefix> --output <...>/lc_filler_packed_32k_pad16/<ds>/data \
+  --seq-length 32768 --eod 0 --pad-doc-multiple 16 --emit-threads 48
+```
+
+**③ CC-HQ** — `run_stage2_v5.sh restore`로 MinIO 복원(~3h, 시계 skew time-patch 내장)
+후 ②와 동일.
+
+**④ filler 블렌드 yaml** — P3 yaml 가중치 복사 + 경로만 pad16 트리 치환 →
+LC 46% 쪽(cpt_lc_packed_32k_pad16 + KO 2종)과 합성해 LC-A 최종 yaml (작업 ③).
+
+**korean_web + fineweb2hq 선행 패킹** (즉시 실행 가능):
 
 ```bash
 cd toolkits/pretrain_data_preprocessing

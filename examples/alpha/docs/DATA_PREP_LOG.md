@@ -136,6 +136,13 @@ alpha의 **LC-phase → SFT → RL(MOPD)** 훈련 계획을 위한 데이터 준
 9. **정체성 데이터 SFT 블렌드 비중 0.3~1.0% 상한** — 과다 주입 시 무엇을 물어도
    자기소개하는 과적합. NVIDIA 도 21,660행만 사용. identity 단독 반복 에폭 금지.
 
+10. **LC-A filler = P3 블렌드 미러** (사용자 확정 2026-08-21) — replay의 목적은
+    파괴적 망각 방지이므로 모델이 마지막으로 본 분포(P3: specialized 35 / CC-HQ 20 /
+    math 18 / cc_code 10 / code 8 / korean 6 / fw2hq 3)를 **조성 변경 없이** 재현.
+    가중치는 `stage2_v5_blend_packed_p3.yaml` 재사용, 경로만 pad16 트리로 치환.
+    Nemotron 3 Ultra의 "LC 54% = 직전 phase 블렌드 재사용"과 동형.
+    실행 절차: [`LC_REPACK_RUNBOOK.md`](LC_REPACK_RUNBOOK.md) §3.
+
 ## 4. 남은 작업 큐 (우선순위 순)
 
 **A. ~~LongBlocks 토크나이즈 파이프라인~~ 완료 (08-06)** — `run_cpt_lc_v5.sh`,
@@ -145,8 +152,9 @@ alpha의 **LC-phase → SFT → RL(MOPD)** 훈련 계획을 위한 데이터 준
 **B. LC-A 잔여** — ~~자연 장문 변환·토크나이즈~~ 완료(08-06, A와 통합 처리).
    남은 것 (08-21 전면 갱신, 실행 절차는 [`LC_REPACK_RUNBOOK.md`](LC_REPACK_RUNBOOK.md)):
    ① **LC 4종 32k 재패킹** (`--pad-doc-multiple 16`, THD+CP 요건 — 확정, 즉시 실행 가능)
-   ② **filler 소스 결정** — ~~stage2 v5 재패킹~~ 불가(unpacked 소실). 옵션 3안 중
-      블렌드 yaml 설계와 함께 결정 (korean_web+fineweb2hq는 어느 안에서도 쓰이므로 선행 가능)
+   ② ~~filler 소스 결정~~ **확정 (08-21, 결정 #10): P3 미러** — 러너북 §3.1 물량표
+      + §3.2 카테고리별 절차대로 실행 (specialized 전체 재생산 / math·code·cc_code
+      해시 서브셋 / CC-HQ MinIO 복원 / korean·fw2hq 전체 패킹)
    ③ **LC-A 블렌드 yaml 작성** (pad16 경로 + THD 플래그 셋은 `LC_ENTRY_GATE.md` §1.5 기준).
 
 **C. G0 시스템 게이트** (H100 유휴 시)

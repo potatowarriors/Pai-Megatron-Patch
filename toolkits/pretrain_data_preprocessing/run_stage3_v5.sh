@@ -51,13 +51,14 @@ RAW="/home/work/Datasets/LL_datasets/pretraining/stage3"
 JSONL_ROOT="${RAW}/_jsonl"
 # 2026-07-29: outputs live under the stage2 tree — these datasets are consumed by
 # the (final) stage2 run, there is no stage3. Raw parquet stays under .../stage3/.
-OUT="/home/work/Datasets/LL_preprocessed/v5/stage2/specialized"
-OUT_PACKED="/home/work/Datasets/LL_preprocessed/v5/stage2_packed/specialized"
+OUT="${OUT_DIR:-/home/work/Datasets/LL_preprocessed/v5/stage2/specialized}"
+OUT_PACKED="${OUT_PACKED_DIR:-/home/work/Datasets/LL_preprocessed/v5/stage2_packed/specialized}"
 
 NCORES="${NCORES:-$(nproc)}"
 SEQLEN="${SEQLEN:-4096}"
 EOD="${EOD:-0}"
 KEEP_UNPACKED="${KEEP_UNPACKED:-0}"
+PAD_DOC_MULTIPLE="${PAD_DOC_MULTIPLE:-1}"   # THD+CP: 16 (docs/LC_REPACK_RUNBOOK.md)
 CLEAN_JSONL="${CLEAN_JSONL:-1}"
 export AUTO_CLEAN_PARTS="${AUTO_CLEAN_PARTS:-1}"
 
@@ -116,7 +117,8 @@ pack_subset() {
   echo; echo "########## pack [${ver}] ${key}  (seq=${SEQLEN} eod=${EOD}) ##########"
   mkdir -p "$(dirname "${outpre}")"
   python3 "${PRE}/bestfit_pack.py" --input "${inpre}" --output "${outpre}" \
-      --seq-length "${SEQLEN}" --eod "${EOD}" --emit-threads "${emit}"
+      --seq-length "${SEQLEN}" --eod "${EOD}" --emit-threads "${emit}" \
+      --pad-doc-multiple "${PAD_DOC_MULTIPLE}"
 }
 
 process_subset() {  # full idempotent flow for one subset
