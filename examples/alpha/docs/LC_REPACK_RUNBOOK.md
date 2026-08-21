@@ -127,14 +127,22 @@ lt64k 합계 15.56B).
 4k-packed는 재패킹 불가(장문이 이미 4k 조각 + pad/문서 EOD 구분 불가,
 `LC_DATASETS.md` §6 체크리스트 2). filler 확보는 아래 옵션 중 결정해야 한다:
 
+**2026-08-21 추기 — raw 잔존 실사로 옵션 B가 크게 저렴해짐**:
+`LL_datasets/pretraining/stage2/`에 **code 1.9T + math 718G + Nemotron-CC-Math-v1
+244G + eng 8.6G의 raw가 잔존**함을 확인했다 (소실된 것은 v5 *unpacked mmap*이고
+raw jsonl은 CC-HQ만 삭제 — CC-HQ는 MinIO 복원 가능). LC-A filler 필요량은 ~7-9B뿐이라
+**전량이 아니라 샤드 서브셋만 재토크나이즈**하면 되고(파이프라인 처리량 ~25M tok/s
+기준 토크나이즈 자체는 분 단위; 지배 비용은 CC-HQ MinIO 복원 ~3h), P3 조성
+(CC-HQ 60/code 27/math 12/korean 1)을 그대로 재현할 수 있다.
+
 | 옵션 | 내용 | 비용 | 비고 |
 |---|---|---|---|
-| **A. stage1 unpacked 사용 (즉시 가능)** | `v5/stage1/{dclm,korean_web,fineweb2hq}/data`(unpacked 보존 확인됨)를 32k+pad16 패킹 | korean_web+fw2hq는 소규모(~23B, 수 시간); DCLM은 1.78TB라 전량 과잉 — 필요분만 | filler가 web-heavy (math/code 부재) — P3 분포 유지 관점 검토 필요 |
-| B. stage2 소실분 재토크나이즈 | CC-HQ는 MinIO 복원(`run_stage2_v5.sh restore`, ~3h) + 재토크나이즈; code/math는 로컬 raw 잔존 여부 소스별 확인 | 수 일 (CC-HQ 지배) | 128k 단계 filler까지 근본 해결. LC-A 예산(filler ~7-9B)만 보면 과잉 |
-| C. 4k-packed에서 whole-doc 복원 도구 신규 | EOD split로 온전 문서만 추출(4k 초과 조각은 드롭/수용) | 도구 개발+검증 | 정보 손실 수용 여부가 쟁점 — 비권장 기본값 |
+| A. stage1 unpacked 사용 | `v5/stage1/{dclm,korean_web,fineweb2hq}/data`(보존 확인)를 32k+pad16 패킹 | korean_web+fw2hq ~23B, 수 시간 | filler가 web-heavy (math/code 부재) — P3 분포와 괴리 |
+| **B. raw 서브셋 재토크나이즈 (실사 후 권고)** | code/math는 잔존 raw에서 필요분 샤드만 토크나이즈→32k+pad16 패킹; CC-HQ는 MinIO 복원 후 동일; korean은 stage1 unpacked 재사용 | 반나절 내외 (CC-HQ 복원 ~3h 지배) | **P3 조성 재현 = replay 목적에 최적.** 128k filler도 같은 raw에서 SEQ=131072로 재생산 가능 |
+| C. 4k-packed에서 whole-doc 복원 도구 신규 | EOD split로 온전 문서만 추출(4k 초과 조각은 드롭/수용) | 도구 개발+검증 | raw 잔존 확인으로 존재 이유 소멸 — **탈락** |
 
-**권고**: LC-A 블렌드 yaml 설계(큐 B)와 함께 결정. 결정 전이라도 **옵션 A의
-korean_web + fineweb2hq는 선행 패킹 가능** (어느 안에서도 쓰임):
+**권고**: 옵션 B 기반으로 LC-A 블렌드 yaml 설계(큐 B)와 함께 확정. 결정 전이라도
+**korean_web + fineweb2hq는 선행 패킹 가능** (어느 안에서도 쓰임):
 
 ```bash
 cd toolkits/pretrain_data_preprocessing

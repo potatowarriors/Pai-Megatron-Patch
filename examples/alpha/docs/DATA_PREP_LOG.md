@@ -11,13 +11,15 @@ alpha의 **LC-phase → SFT → RL(MOPD)** 훈련 계획을 위한 데이터 준
 |---|---|---|---|
 | LC 원천 3종 (PG19/EDGAR/peS2o v3) | `LL_datasets/longcontext/en/` | 159G raw | ✅ 분석·변환·**pre-tokenize 완료** (08-06) |
 | **LongBlocks LC doc-QA (완성본)** | `…/LongBlocks/_jsonl/` | 45파일 / 191,758샘플 / 30G | ✅ **pre-tokenize까지 완료** (08-06) |
-| **LC pre-tokenized 4종** | `LL_preprocessed/v5/cpt_lc{,_packed_32k}/` | unpacked 24.21B tok (272G) · **32k packed 15.56B/477k bins** (59G) · **≥64k 보존 8.65B** | ⚠️ unpacked/≥64k는 유효하나 **32k packed는 THD+CP 비호환 — `--pad-doc-multiple 16` 재패킹 필요** ([`LC_REPACK_RUNBOOK.md`](LC_REPACK_RUNBOOK.md), 08-21) |
+| **LC pre-tokenized 4종** | `LL_preprocessed/v5/cpt_lc/` + **`cpt_lc_packed_32k_pad16/`** | unpacked 24.21B tok (272G) · **32k pad16 packed 15.56B/477,456 bins** · **≥64k 보존 8.65B** | ✅ **pad16 재패킹 완료 (08-21, 러너북 작업 1)** — %16 정렬 검증 전 종 0 miss. 구 `cpt_lc_packed_32k/`(pad 없음, THD+CP 비호환)는 블렌드 yaml 전환 후 삭제 가능 |
+| **LC KO 2종 (자체 제작, syn_data)** | `LL_preprocessed/v5/cpt_lc_packed_32k_pad16/{ko_news,ko_grounded}/` | **ko_news 423.8M/13,141 bins (fill 98.4%, 잘림 0)** · **ko_grounded 44.3M/1,515 bins** | ✅ pad16 형식으로 인계 완료 (08-21) — NIKL 이벤트-스레드 팩 + 그라운디드 합성. 출처·게이트는 각 디렉토리 README, 128k용 ≥64k KO는 syn_data 대기 |
 | Nemotron post-training v3 (49종) | `LL_datasets/posttraining/{SFT,RL}` | SFT 988G + RL 62G | ✅ 다운로드·검증 완료 |
 | 블렌드 레시피 분석 | `posttraining/RL/nemotron_blend_recipe.json` | — | ✅ |
 | chat template | `examples/alpha/tokenizer_v5/chat_template.jinja` | — | ✅ 등록·24테스트 통과 |
 | **정체성 SFT (자체 제작)** | `LL_datasets/posttraining/SFT/alpha-SFT-Identity-v1/` | train 7,315 + eval 400 | ✅ 완료 (08-10, card v1.1) |
 | **정체성 RL (자체 제작)** | `LL_datasets/posttraining/RL/alpha-RL-Identity-Following-v1/` | 16,510 프롬프트 | ✅ 완료 (08-10) |
 | stage2 v5 unpacked 10종 | ~~`LL_preprocessed/v5/stage2/`~~ | — | ❌ **소실 확인 (08-21)** — `specialized/`만 잔존, 나머지는 4k-packed(`stage2_packed/`)뿐이라 32k 재패킹 불가. filler 확보 옵션은 [`LC_REPACK_RUNBOOK.md`](LC_REPACK_RUNBOOK.md) §3 |
+| **stage2 raw 소스 (code/math)** | `LL_datasets/pretraining/stage2/` | code 1.9T + math 718G + CC-Math-v1 244G + eng 8.6G | ✅ **잔존 확인 (08-21)** — unpacked 소실과 별개로 raw는 살아있음(CC-HQ raw만 삭제, MinIO 복원 가능). LC filler는 서브셋 재토크나이즈로 P3 조성 재현 가능 → 러너북 §3 옵션 B 권고 |
 | stage1 v5 unpacked 3종 (dclm/korean_web/fineweb2hq) | `LL_preprocessed/v5/stage1/` | ~466B tok | ✅ 보존 확인 (08-21) — LC filler 대안 소스 |
 
 실행 중인 백그라운드 작업: 없음 (2026-08-04 기준).
@@ -35,6 +37,10 @@ alpha의 **LC-phase → SFT → RL(MOPD)** 훈련 계획을 위한 데이터 준
   러너북 §3, 결정은 LC-A 블렌드 yaml 설계와 함께.
 - `run_cpt_lc_v5.sh`에 env 노브 추가: `PACKED_DIR`/`PAD_DOC_MULTIPLE`/`SEQ`
   (기본값 = 종전 동작).
+- **✅ 재패킹 실행 완료 (08-21, syn_data 세션)**: EN 4종 + KO 2종 →
+  `cpt_lc_packed_32k_pad16/`. pytest 19/19 · 내장 post-verify 통과 · %16 표본검사
+  전 종 misaligned=0 · real 토큰 구본 동일(EN 15.56B). per-doc pad 오버헤드
+  0.023~0.104%. 실측 표는 `LC_DATASETS.md` §6.5 추기 참조.
 
 **07-31 — LC 분석·전략**
 - LC 원천 3종 전수 스캔(문자) + tokenizer_v5 실측 환산 → `LC_DATASETS.md` 작성.
