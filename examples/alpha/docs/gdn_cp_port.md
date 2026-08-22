@@ -201,6 +201,7 @@ P3(stage2) 완주 직후 유휴 창구에서 러너북 §1~4 전체 실행. **�
 | 128K@CP8 | selective | OOM (iter1 62.3GB 후 iter2 사망) | ❌ |
 | 128K@CP8 | full uniform-1 (`profile_fullrc.yaml`) | OOM (72.5GB) | ❌ |
 | 128K@CP8 | full + `--cross-entropy-loss-fusion te` | OOM (73.0GB — CE 융합 무효과) | ❌ **LC-B는 64K로 시작, 128K는 후속 안건** |
+| 128K@CP8 | full + `expandable_segments:True` | OOM (73.0GB — 파편화 여유 자체가 199MB뿐, 실할당이 벽) | ❌ **마이크로 레버 전멸 — 128K 네이티브는 현 구성 불가 확정** |
 
 ### 분석·주의 노트
 
@@ -209,9 +210,13 @@ P3(stage2) 완주 직후 유휴 창구에서 러너북 §1~4 전체 실행. **�
    궤적 동일이 실증하듯 동역학 무영향. **단 LC preset의 `clip-grad` 임계는 이 스케일을
    반영해 재검토할 것** (성숙 모델에서 클리핑 발동 시점이 CP에 따라 달라질 수 있음).
 2. **128K@CP8 바닥짐 분해(추정)**: Muon 상태+params+fp32 grads ~45.5GB(dp=1이라 샤딩
-   불가) + full-rc 잔여/transient + NCCL/TE ≈ 72GB — 활성값 레버(full-rc)와 CE 융합
-   모두 피크 불변으로 실증. 후속 후보: upstream PR #5982(gdn_in_proj_conv selective
-   recompute — 단독으론 부족하나 64K selective 헤드룸·스루풋 개선용) 포팅,
-   `expandable_segments`, 메모리 피크 정밀 프로파일.
+   불가) + full-rc 잔여/transient + NCCL/TE ≈ 72GB — 활성값 레버(full-rc)·CE 융합·
+   `expandable_segments` 4중 실측 전부 피크 불변 OOM으로 실증. **128K 네이티브의
+   잔여 경로 2안**: ① PP=2 × 2노드 (rank당 optimizer 반감 ~23GB; PP 경계 통신은
+   64MB/마이크로배치라 무IB 1GB/s로도 스텝의 1~2% — sync-DP를 죽인 제약이 PP엔
+   비치명; 하이브리드+PP2+CP8+EP8 조합 미검증이 과제) ② 64K 학습 + 길이 외삽
+   (근사-NoPE 가족 근거; LC-B 후 RULER@128K 실측으로 판정). upstream PR #5982
+   (gdn_in_proj_conv recompute)는 128K 해결책이 아니라 64K selective 헤드룸·
+   스루풋 개선용.
 3. **운영 함정**: 연속 torchrun 실행 시 직전 런 잔류로 EADDRINUSE 연쇄 — 런 사이
    `nvidia-smi` compute-proc 0 대기 필수 (게이트 드라이버에 가드 구현).
