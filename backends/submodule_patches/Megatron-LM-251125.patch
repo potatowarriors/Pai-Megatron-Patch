@@ -2484,6 +2484,179 @@ index c29c48d4c..dcac80e74 100644
          log_max_attention_logit = clip_qk(model, log_max_only=not args.qk_clip)
              
      timers('optimizer').stop()
+diff --git a/tests/unit_tests/dist_checkpointing/test_chunked_offload_s4.py b/tests/unit_tests/dist_checkpointing/test_chunked_offload_s4.py
+new file mode 100644
+index 000000000..0d3ea2957
+--- /dev/null
++++ b/tests/unit_tests/dist_checkpointing/test_chunked_offload_s4.py
+@@ -0,0 +1,131 @@
++# Copyright (c) 2025 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
++"""S4 backport tests: chunked-offload checkpoint compatibility across the offload switch.
++
++Adapted from upstream PR #6244's dist_checkpointing test. The dist_muon chain here is
++this snapshot's LayerWise [Muon, Adam] composition (no sibling DistributedOptimizer),
++so exactly one offload manager exists and the sibling-manager assertions are dropped.
++"""
++
++import os
++
++import pytest
++import torch
++from packaging.version import Version
++
++from megatron.core.dist_checkpointing import load, load_plain_tensors, save
++from tests.unit_tests.dist_checkpointing import (
++    TempNamedDir,
++    initialize_gpt_model,
++    setup_model_and_optimizer,
++)
++from tests.unit_tests.test_utilities import Utils
++
++pytestmark = pytest.mark.skipif(
++    Version(os.getenv('NVIDIA_PYTORCH_VERSION', "24.01")) <= Version("25.05"),
++    reason="Skip muon optimizer for LTS test",
++)
++
++
++def check_equal(input_1, input_2):
++    """Recursive equality over checkpoint dicts (same as test_layer_wise_optimizer.py)."""
++    if isinstance(input_1, dict) and isinstance(input_2, dict):
++        assert input_1.keys() == input_2.keys()
++        for key in input_1:
++            check_equal(input_1[key], input_2[key])
++    elif isinstance(input_1, torch.Tensor) and isinstance(input_2, torch.Tensor):
++        assert torch.equal(input_1.cpu(), input_2.cpu()), "checkpoint tensor mismatch"
++    else:
++        assert input_1 == input_2
++
++
++def _collect_offload_managers(optimizer):
++    managers = []
++    manager = getattr(optimizer, '_optimizer_state_offloader', None)
++    if manager is not None:
++        managers.append(manager)
++    for child in getattr(optimizer, 'chained_optimizers', ()):
++        managers.extend(_collect_offload_managers(child))
++    return managers
++
++
++class TestChunkedOffloadCheckpoint:
++    def setup_method(self, method):
++        pass
++
++    def teardown_method(self, method):
++        Utils.destroy_model_parallel()
++
++    @pytest.mark.parametrize(
++        ("source_offload", "destination_offload"),
++        [(False, True), (True, False), (True, True)],
++    )
++    def test_chunked_offload_dist_ckpt_compatibility(
++        self, tmp_path_dist_ckpt, source_offload, destination_offload
++    ):
++        """dist_muon checkpoints remain bit-equal across every offload on/off switch."""
++
++        Utils.initialize_model_parallel(1, 1)
++
++        with TempNamedDir(
++            tmp_path_dist_ckpt / 'chunked_offload_A', sync=True
++        ) as ckpt_dir_A, TempNamedDir(
++            tmp_path_dist_ckpt / 'chunked_offload_B', sync=True
++        ) as ckpt_dir_B:
++            model_A, optimizer_A = setup_model_and_optimizer(
++                seed=2,
++                tp=1,
++                pp=1,
++                bf16=True,
++                dist_opt=False,
++                initialize_fn=initialize_gpt_model,
++                optimizer='dist_muon',
++                muon_layer_wise=True,
++                chunked_optimizer_state_offload=source_offload,
++                optimizer_state_offload_chunk_size_mb=1,
++            )
++            if source_offload:
++                assert len(_collect_offload_managers(optimizer_A)) == 1
++
++            model_sharded_sd_A = model_A[0].sharded_state_dict()
++            save(optimizer_A.sharded_state_dict(model_sharded_sd_A), ckpt_dir_A)
++
++            model_B, optimizer_B = setup_model_and_optimizer(
++                seed=3,
++                tp=1,
++                pp=1,
++                bf16=True,
++                dist_opt=False,
++                initialize_fn=initialize_gpt_model,
++                optimizer='dist_muon',
++                muon_layer_wise=True,
++                chunked_optimizer_state_offload=destination_offload,
++                optimizer_state_offload_chunk_size_mb=1,
++            )
++
++            model_sharded_sd_B = model_B[0].sharded_state_dict()
++            load_sharded_sd = optimizer_B.sharded_state_dict(
++                model_sharded_sd_B, is_loading=True
++            )
++            optimizer_B.load_state_dict(load(load_sharded_sd, ckpt_dir_A))
++
++            if destination_offload:
++                # The sharded load must preserve CPU canonical storage for the managed
++                # Muon child: masters and full-size state tensors stay on CPU.
++                managers = _collect_offload_managers(optimizer_B)
++                assert len(managers) == 1
++                manager = managers[0]
++                assert manager.selected_params
++                for param in manager.selected_params:
++                    assert param.device.type == 'cpu'
++                    for value in manager.optimizer.state[param].values():
++                        if isinstance(value, torch.Tensor) and value.numel() == param.numel():
++                            assert value.device.type == 'cpu'
++
++            save(optimizer_B.sharded_state_dict(model_sharded_sd_B), ckpt_dir_B)
++
++            Utils.destroy_model_parallel()
++            Utils.initialize_model_parallel(1, 1)
++
++            plain_sd_A = load_plain_tensors(ckpt_dir_A)
++            plain_sd_B = load_plain_tensors(ckpt_dir_B)
++            check_equal(plain_sd_A, plain_sd_B)
+diff --git a/tests/unit_tests/dist_checkpointing/utils.py b/tests/unit_tests/dist_checkpointing/utils.py
+index 60157760a..a442adfc7 100644
+--- a/tests/unit_tests/dist_checkpointing/utils.py
++++ b/tests/unit_tests/dist_checkpointing/utils.py
+@@ -161,7 +161,11 @@ def init_checkpointing_mock_args(args, ckpt_dir, fully_parallel=False):
+ 
+ 
+ def setup_model_and_optimizer(
+-    seed, tp, pp, initialize_fn=initialize_gpt_model, bf16=True, dist_opt=True, optimizer='adam'
++    seed, tp, pp, initialize_fn=initialize_gpt_model, bf16=True, dist_opt=True, optimizer='adam',
++    chunked_optimizer_state_offload=False,
++    optimizer_state_offload_chunk_size_mb=0,
++    optimizer_state_offload_fraction=1.0,
++    muon_layer_wise=False,
+ ):
+     if 'muon' in optimizer and dist_opt:
+         raise ValueError(
+@@ -187,12 +191,17 @@ def setup_model_and_optimizer(
+         params_dtype=torch.bfloat16 if bf16 else torch.float,
+         use_distributed_optimizer=dist_opt,
+         optimizer=optimizer,
++        chunked_optimizer_state_offload=chunked_optimizer_state_offload,
++        optimizer_state_offload_chunk_size_mb=optimizer_state_offload_chunk_size_mb,
++        optimizer_state_offload_fraction=optimizer_state_offload_fraction,
+     )
+ 
+     if 'muon' in optimizer:
+         # Use layer-wise distributed optimizer with Muon
+         optimizer_type = optimizer
+-        optimizer = get_megatron_muon_optimizer(config, model)
++        optimizer = get_megatron_muon_optimizer(
++            config, model, layer_wise_distributed_optimizer=muon_layer_wise
++        )
+     else:
+         optimizer_type = optimizer
+         optimizer = get_megatron_optimizer(config, model)
 diff --git a/tests/unit_tests/test_chunked_offload_s1.py b/tests/unit_tests/test_chunked_offload_s1.py
 new file mode 100644
 index 000000000..c5b7863fc

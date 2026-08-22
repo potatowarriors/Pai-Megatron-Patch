@@ -102,10 +102,33 @@ offload를 251125 스냅샷에 표적 백포트 → **128K@CP8의 Muon 바닥짐
     train_step에 `ensure_master_weights_for_param_sync()`를 clip 직전에 명시해 향후
     수명주기 변경(지연 master offload 등)에도 안전하게 고정 (상주 시 no-op). LC preset은
     qk-clip 제거 확정이라 실전 경로엔 이 상호작용 자체가 없음.
-- S4: 체크포인트 round-trip (오프로드 ON 저장 ↔ OFF 재개 양방향 bit-identical).
+## Stage 4 — 체크포인트 round-trip (✅ 08-22)
+
+- **유닛 (신규 `tests/unit_tests/dist_checkpointing/test_chunked_offload_s4.py`, 3종)**:
+  GPT 모델 dist_muon(진짜 layer_wise 경로)로 OFF→ON / ON→OFF / ON→ON 스위치 전부
+  save→load→save 후 `load_plain_tensors` **비트 동일** + dest-ON에서 로드 후 CPU
+  canonical(master·momentum 전부 CPU) 보존 확인.
+  - 발견: 기존 `test_layer_wise_optimizer_save_load`는 헬퍼가
+    `layer_wise_distributed_optimizer=False` 기본값으로 호출해 **이름과 달리 비-layer_wise
+    체인을 테스트**하고 있었음 — `utils.setup_model_and_optimizer`에 `muon_layer_wise`
+    opt-in kwarg 추가(기본 False, 기존 테스트 무변화)로 우회. 기존 save_load[True-1-1]
+    무회귀 확인.
+- **풀모델 (analysis_24L mock, 신규 preset `configs/training/profile_optsave.yaml`)**:
+  - S 런: 오프로드 ON + iter 8 optimizer-state 저장(81GB torch_dist) 성공 —
+    `synchronize_for_checkpoint` 경로 실증.
+  - R-OFF: ON-저장 ckpt에서 오프로드 OFF 재개 — **재개 첫 iter(9) loss 2.339895E+00
+    원본과 정확히 일치**, 이후 노이즈 범위.
+  - R-ON: 동일 ckpt에서 ON 재개(`load_state_dict_without_device_cast` 경로) —
+    역시 iter 9 정확 일치, max-alloc 32.7GB로 오프로드 유지.
+  - 스크래치 ckpt(~324GB)는 검증 후 삭제(로그 보존).
+
+## Stage 5~6 (계획)
+
 - S5: **표적 검증 — 128K@CP8** (gdn-cp 브랜치와 결합 필요: CP는 그 브랜치에만 있음
-  → S5는 gdn-cp 머지 후 rebase 시점에) max-alloc ~47GB 예상 확인.
-- S6: vendored patch 최종화 + gdn_cp_port.md 128K 경로 갱신.
+  → S5는 gdn-cp 머지 후 rebase 시점에) max-alloc ~47GB 예상 확인. LC preset은
+  qk-clip 제거이므로 clip×offload 상호작용 없음. chunk 크기·fraction 튜닝은 이때.
+- S6: vendored patch 최종화 + gdn_cp_port.md 128K 경로 갱신 + megatron_patch/CLAUDE.md
+  Muon 호환표("CPU Offloading ❌" → chunked offload 지원) 갱신.
 
 ## 규약
 
