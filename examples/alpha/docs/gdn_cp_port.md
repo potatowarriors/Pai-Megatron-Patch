@@ -212,10 +212,21 @@ P3(stage2) 완주 직후 유휴 창구에서 러너북 §1~4 전체 실행. **�
 2. **128K@CP8 바닥짐 분해(추정)**: Muon 상태+params+fp32 grads ~45.5GB(dp=1이라 샤딩
    불가) + full-rc 잔여/transient + NCCL/TE ≈ 72GB — 활성값 레버(full-rc)·CE 융합·
    `expandable_segments` 4중 실측 전부 피크 불변 OOM으로 실증. **128K 네이티브의
-   잔여 경로 2안**: ① PP=2 × 2노드 (rank당 optimizer 반감 ~23GB; PP 경계 통신은
-   64MB/마이크로배치라 무IB 1GB/s로도 스텝의 1~2% — sync-DP를 죽인 제약이 PP엔
-   비치명; 하이브리드+PP2+CP8+EP8 조합 미검증이 과제) ② 64K 학습 + 길이 외삽
-   (근사-NoPE 가족 근거; LC-B 후 RULER@128K 실측으로 판정). upstream PR #5982
+   잔여 경로 3안** (2026-08-22 upstream 조사로 ①이 추가·최우선 후보로 승격):
+   ① **Muon chunked CPU offload** — upstream PR #6244 (merged 08-18, NVIDIA:dev)가
+   **"BF16 Muon with compact-layout LayerWiseDistributedOptimizer" 명시 지원**으로
+   optimizer 상태·master weight를 pinned CPU에 상주시키고 스텝 중 chunk 단위
+   스트리밍(`--chunked-optimizer-state-offload` + chunk-size/fraction 노브).
+   momentum+master ~26GB를 내리면 73→47GB로 128K@CP8이 들어옴; 128K 스텝 ~95s
+   대비 PCIe 왕복 ~1-2s(~2%)라 오버헤드도 수용권. **"Muon은 CPU offload 비호환"
+   이라는 기존 문서 지식은 upstream 기준 outdated** — 단 우리 251125 스냅샷과의
+   거리가 큼(2026-04 optimizer 리팩토링 + emerging_optimizers 외부화 경유,
+   로컬 QGKV-split 패치와의 병합 필요) → 표적 백포트 or dist_muon의 layer-wise
+   step 구조를 이용한 자체 최소 구현(레이어별 NS 직전 H2D/직후 D2H) 중 택일.
+   ② PP=2 × 2노드 (rank당 optimizer 반감 ~23GB; PP 경계 통신 64MB/마이크로배치라
+   무IB 1GB/s로도 스텝의 1~2%; 하이브리드+PP2+CP8+EP8 미검증이 과제)
+   ③ 64K 학습 + 길이 외삽 (근사-NoPE 가족 근거; LC-B 후 RULER@128K 실측 판정).
+   참고: Muon+MFSDPv2(PR #6425, draft)는 DP-도메인 샤딩이라 CP8(dp=1)에선 무효. upstream PR #5982
    (gdn_in_proj_conv recompute)는 128K 해결책이 아니라 64K selective 헤드룸·
    스루풋 개선용.
 3. **운영 함정**: 연속 torchrun 실행 시 직전 런 잔류로 EADDRINUSE 연쇄 — 런 사이
