@@ -150,20 +150,24 @@ alpha의 **LC-phase → SFT → RL(MOPD)** 훈련 계획을 위한 데이터 준
    → 데이터셋별 BATCH_SIZE), pes2o fill 77%(길이 필터가 filler 제거 → filler 티어).
 
 **B. LC-A 잔여** — ~~자연 장문 변환·토크나이즈~~ 완료(08-06, A와 통합 처리).
-   남은 것 (08-21 전면 갱신, 실행 절차는 [`LC_REPACK_RUNBOOK.md`](LC_REPACK_RUNBOOK.md)):
-   ① **LC 4종 32k 재패킹** (`--pad-doc-multiple 16`, THD+CP 요건 — 확정, 즉시 실행 가능)
-   ② ~~filler 소스 결정~~ **확정 (08-21, 결정 #10): P3 미러** — 러너북 §3.1 물량표
-      + §3.2 카테고리별 절차대로 실행 (specialized 전체 재생산 / math·code·cc_code
-      해시 서브셋 / CC-HQ MinIO 복원 / korean·fw2hq 전체 패킹)
-   ③ **LC-A 블렌드 yaml 작성** (pad16 경로 + THD 플래그 셋은 `LC_ENTRY_GATE.md` §1.5 기준).
+   (08-22 갱신, 실행 절차는 [`LC_REPACK_RUNBOOK.md`](LC_REPACK_RUNBOOK.md) — 상태 블록 참조):
+   ① ~~LC 4종 32k 재패킹~~ **완료 (08-22)** — `cpt_lc_packed_32k_pad16/` 산출,
+      ko_news·edgar는 THD+CP 풀스택 검증에 실사용되어 %16 정렬 실전 확인
+   ② ~~filler 소스 결정·생산~~ **완료 (08-22)** — P3 미러(결정 #10),
+      `lc_filler_packed_32k_pad16/` 트리 + `configs/data/lc_filler_32k_pad16.yaml` 커밋
+   ③ **LC-A training preset 작성만 남음** (CP4·32K·qk-clip 제거·clip-grad ×cp 재검토·
+      THD 플래그셋 — 체크리스트는 `LC_ENTRY_GATE.md` 상단 요약).
 
 **C. G0 시스템 게이트** (H100 유휴 시)
    zero-shot RULER/NLL(8k~64k) — CPT 예산·직행 가능성 캘리브레이션.
-   GDN CP 클러스터 러너북(CP=2/4/8×EP=8, 32k/64k/128k 메모리·스루풋).
+   ~~GDN CP 클러스터 러너북(CP=2/4/8×EP=8, 32k/64k/128k 메모리·스루풋)~~
+   완료 (08-22) — LC 게이트 판정 1~6 + THD+CP 스티치까지 (`LC_ENTRY_GATE.md`).
 
-**D. 128k 준비** (LC-A 진행과 병행)
-   다문서 합성 파이프라인(그룹핑 키: EDGAR cik·peS2o 주제·repo 단위, **내부 EOD
-   금지 불변량**). 한국어 장문 소싱. 128k 재패킹.
+**D. 128k 준비** (LC-A 진행과 병행) — **자원 제약 해소로 데이터가 유일 병목 (08-22)**:
+   Muon chunked offload로 128K@CP8 GO 전환(max-alloc 54.9~58.8GB,
+   `MUON_OFFLOAD_BACKPORT.md` S5). 남은 것 = 다문서 합성 파이프라인(그룹핑 키:
+   EDGAR cik·peS2o 주제·repo 단위, **내부 EOD 금지 불변량**), 한국어 장문 소싱,
+   128k 재패킹(러너북 §4).
 
 **E. SFT 준비** (LC 학습 중 병행 가능)
    messages→idxmap 변환기(스팬 마스킹, injection 방어 적용 — 기존

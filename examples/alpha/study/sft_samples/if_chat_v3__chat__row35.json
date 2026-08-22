@@ -1,0 +1,47 @@
+{
+  "_provenance": {
+    "file": "posttraining/SFT/Nemotron-SFT-Instruction-Following-Chat-v3/data/chat.jsonl",
+    "line": 35
+  },
+  "messages": [
+    {
+      "role": "system",
+      "content": null
+    },
+    {
+      "role": "user",
+      "content": null
+    },
+    {
+      "role": "assistant",
+      "reasoning_content": "The user wants me to act as a Magic 8 Ball.\nI need to adopt the persona and functionality of a Magic 8 Ball.\nThis involves:\n1.  Acknowledging the request.\n2.  Asking for the user's question (or just waiting for it).\n3.  Providing a random, cryptic, or standard Magic 8 Ball answer when prompted.\n\nStandard Magic 8 Ball answers usually fall into three categories:\n-   **Affirmative:** \"It is certain,\" \"Without a doubt,\" \"Yes - definitely.\"\n-   **Non-committal:** \"Reply hazy, try again,\" \"Better not tell you now,\" \"Concentrate and ask again.\"\n-   **Negative:** \"Don't count on it,\" \"My reply is no,\" \"Outlook not so good.\"\n\nMy response should be brief, set the stage, and invite the user to shake me (ask a question).\n\nPlan:\n1.  Confirm I am ready to play the role.\n2.  Give a typical introductory line.\n3.  Wait for input.\n\n*Self-Correction:* I shouldn't just say \"Yes.\" I should actually *be* the 8 ball.\nResponse style: Mysterious, brief.\n\n\"Concentrate and ask your question...\" is a good prompt. Or just \"Ask and I shall reveal...\"\n\nLet's go with a classic introduction.\n\n*Drafting response:*\n\"I am ready. Concentrate on your question, shake me, and I will reveal the truth.\n\nAsk your question...\"\n\nThis is simple and effective.",
+      "content": "I am ready. Concentrate on your question, shake me, and I will reveal the truth.\n\nAsk your question..."
+    },
+    {
+      "role": "user",
+      "content": "Will i date Devin next week?"
+    },
+    {
+      "role": "assistant",
+      "reasoning_content": "The user is asking a yes/no question about a future event: \"Will i date Devin next week?\"\nI need to respond in the persona of a Magic 8 Ball.\nThe standard Magic 8 Ball responses are:\n- It is certain\n- It is decidedly so\n- Without a doubt\n- Yes definitely\n- You may rely on it\n- As I see it, yes\n- Most likely\n- Outlook good\n- Yes\n- Signs point to yes\n- Reply hazy, try again\n- Ask again later\n- Better not tell you now\n- Cannot predict now\n- Concentrate and ask again\n- Don't count on it\n- My reply is no\n- My sources say no\n- Outlook not so good\n- Very doubtful\n\nI should select one of these standard responses randomly to maintain the \"Magic 8 Ball\" feel.\nLet's pick one. \"Signs point to yes\" or \"Reply hazy, try again\" or \"Don't count on it\".\nLet's go with something slightly ambiguous but leaning positive or just a classic answer.\nLet's select: \"Reply hazy, try again.\" No, that's annoying for a specific dating question.\nLet's go with: \"My sources say no.\" A bit harsh.\nLet's go with: \"Most likely.\" That's a good one.\nActually, let's do the classic simulation.\n*Shaking the ball...*\nResult: \"Outlook good.\"",
+      "content": "*Shaking the ball...*\n\n**Outlook good.**"
+    }
+  ],
+  "used_in": [
+    "ultra_v3"
+  ],
+  "uuid": "263eab44-618b-4f00-b695-70499a1995fb",
+  "metadata": {
+    "seed_dataset": "allenai/WildChat-1M",
+    "seed_prompt_sha256": "a1267f1306aa51f6a8e1163dc67262bd5e5fe26bd9d564cb9c12af9d950f00eb",
+    "model": "zai-org/GLM-5",
+    "reward_model": "nvidia/Qwen3-Nemotron-235B-A22B-GenRM-2603",
+    "train_turns": [
+      false,
+      false,
+      false,
+      false,
+      true
+    ]
+  }
+}
