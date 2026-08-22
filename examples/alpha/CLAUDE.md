@@ -26,7 +26,7 @@ Alpha는 GatedDeltaNet + Attention + MoE 하이브리드 아키텍처 기반의 
 | Vocab (effective / padded) | 163,860 / **163,968** |
 | Tokenizer | `examples/alpha/tokenizer_v5/` (alpha 전용 BBPE) |
 | EOS / pre-training EOD | `<\|endoftext\|>` (id 0) — `<\|im_end\|>` (id 3)는 SFT 단계 chat turn 전용 |
-| Document boundary handling | `--reset-attention-mask` + `--eod-mask-loss` ON; `--reset-position-ids` **OFF** (alpha hybrid: Mamba가 packed_seq_params 미지원, attention은 RoPE 상대성으로 무영향 — stage1.yaml 주석 참조) |
+| Document boundary handling | **stage1/2 (4K dense)**: `--reset-attention-mask` + `--eod-mask-loss` ON, `--reset-position-ids` OFF (당시 Mamba가 packed_seq_params 미지원). **LC/THD (2026-08-22부터)**: varlen 배선 완료로 THD 경로 사용 — `--reset-position-ids` + `--no-create-attention-mask-in-dataloader` + MBS 1 (dense mask는 O(seq²)라 32K+ 불가; 게이트 §1.5·gdn_cp_port.md 분석노트 3) |
 | RMSNorm | 표준 (γ=1 init, **1p 제거**) |
 | QK-LayerNorm | 활성 + WD `apply_wd_to_qk_layernorm` |
 | Optimizer | Muon (`dist_muon`) + QK-Clip (γ scaling 포함) |
@@ -139,10 +139,14 @@ configs/
 ├── training/stage2_ab.yaml          # ★ v2 stage2 A/B: stage1 레시피 + GBS 3072 + LR 2.5e-5 연속 + ckpt 71526 finetune
 ├── training/arxive/stage1_optsave.yaml  # stage1 − no-save-optim (optimizer state 포함 저장; resume 테스트용 — arxive로 이동됨)
 ├── training/stage2_3.yaml           # Stage 2-3 (4× LR, DSV3 routing)
+├── training/profile_noqkclip.yaml   # profile 변형: qk-clip 제거 — THD 경로·LC 검증용 (thd×return_max_logit 비호환)
+├── training/profile_optsave.yaml    # profile 변형: optimizer-state 저장 — offload resume 검증용 (save-interval 8)
 ├── training/smoke.yaml              # 2-iter, no-Muon smoke
 ├── data/stage1_v5_blend.yaml        # ★ v5 Stage 1 blend (DCLM+Korean+FW2HQ, ~466B)
 ├── data/stage2_v5_blend.yaml        # ★ v5 Stage 2 blend (10 datasets, 1.686T, weight-less → CC-HQ 60%)
 ├── data/stage2_v5_blend_cc40.yaml   # ★ same 9, CC-HQ capped 40% (compute_blend_weights.py; for small budgets)
+├── data/lc_filler_32k_pad16.yaml    # ★ LC-A filler 블렌드 (P3 미러, 결정 #10) — lc_filler_packed_32k_pad16 트리
+├── data/lc_thd_check_32k.yaml       # THD+CP 검증용 2종 블렌드 (ko_news+edgar; LC 본 블렌드 아님)
 ├── data/kormo_1pct.yaml             # legacy: pre-tokenized with Qwen3 tokenizer (vocab 151,936)
 ├── data/kormo_50pct.yaml            # legacy: pre-tokenized with Qwen3 tokenizer (vocab 151,936)
 ├── data/kormo_code_balanced.yaml    # legacy
@@ -442,6 +446,25 @@ bash train.sh baseline_48L pretrain_auxfree stage1_v5_korean_web
 4. resume 관련 키는 모두 training preset YAML 안에 평면적으로 (`load:`, `finetune:`, `no-load-optim:`) — 셸이 조건부로 끼워넣지 않음
 
 ## Known Issues & Fixes
+
+### THD+CP에서 MoE 크래시로 위장한 rope 잠복버그 (2026-08-22 ✅)
+
+- **증상**: THD+CP≥2 첫 스텝에서 MoE dispatcher가 `Split sizes doesn't match total
+  dim 0 size`로 크래시. CP=1 THD와 dense CP는 정상이라 스티치 배선을 의심하기 쉬움.
+- **원인 사슬**: `mamba_model.forward`가 gpt_model과 달리 rope에 packed_seq_params를
+  안 넘김 → `RotaryEmbedding.forward`가 dense CP 관례로 테이블을 rank별 zigzag
+  **사전 슬라이스**(로컬 길이) → THD rope 함수는 풀 테이블을 받아 자체 CP 슬라이싱
+  하므로 fused rope 커널이 테이블 밖을 읽음 → q/k 일부 NaN → 3레이어 뒤 MoE
+  라우터에서 **CUDA topk가 NaN에 중복 인덱스를 반환** → routing_map 행합 < topk →
+  split 불일치. 증상 지점과 원인 지점이 레이어 3개 + 모듈 2개 떨어져 있었음.
+- **수정**: mamba_model에 upstream gpt_model 미러(packed_seq_params 전달, 서브모듈
+  직접 수정 — 루트 CLAUDE.md 비-upstream #5) + alpha 래퍼 전달 + helper max_seqlen
+  int화. 부수 발견 2건(core utils NameError·None 가드)도 동시 수정.
+- **교훈**: ① NaN이 낀 CUDA topk는 중복 인덱스라는 미정의 동작을 낳는다 — MoE
+  라우팅 크래시를 보면 hidden NaN부터 의심. ② mock 데이터는 THD+CP 검증에 쓸 수
+  없다 — 무작위 토큰에 EOD(id 0)가 섞여 %16 미정렬 세그먼트가 생기고
+  `resolve_cu_seqlens` 가드가 거부한다(정상 동작). 실데이터나 단일 세그먼트로 검증.
+- **규명 전 과정**: [`docs/gdn_cp_port.md`](docs/gdn_cp_port.md) 분석노트 3.
 
 ### DiLoCo: 짝/홀 샤딩 × blend 인덱스 aliasing → 거울상 loss 시소 (2026-08-17 ✅)
 
@@ -1109,6 +1132,8 @@ emit 병목은 소스 `.bin`에서 bin 멤버 문서를 **무작위로 읽는 NF
 - **Data Prep Log**: `docs/DATA_PREP_LOG.md` — LC·SFT 데이터 준비 작업의 **단일 진입점** (2026-07-31~08-04): 현재 상태 스냅샷(무엇이 어디에), 타임라인, 신규 도구 4종, 핵심 결정 7건, 남은 작업 큐 A~F
 - **Stage2 Curriculum Log**: `docs/STAGE2_CURRICULUM_LOG.md` — stage2 mid-run blend 커리큘럼(P2/P2b/P3) + DiLoCo bias-sync 결함 수정의 **단일 진입점** (2026-07-29~08-11): Nemotron 3 근거, 샤드×blend aliasing(정적/동적), resume 정밀 검증과 실행 간 비결정성, expert-bias 발산 정량 분석·수정·재시작 기록
 - **LC Entry Gate**: `docs/LC_ENTRY_GATE.md` — **P3 종료 직후, LC-A 시작 전에 통과해야 하는 검증 게이트의 단일 진입점** (2026-08-18): GDN CP 클러스터 검증(`feature/gdn-context-parallel` 러너북 4단계) + FlashQLA 커널 벤치(`study/flashqla_poc.md`), GO/NO-GO 판정표, 통과 후 커밋 단위(머지·가드 스왑·LC preset). §1.5(varlen-thd 브랜치): THD 문서 격리 검증 트랙
+- **Muon Offload Backport**: `docs/MUON_OFFLOAD_BACKPORT.md` — PR #6244 표적 백포트 S0~S5 단계별 검증 로그: 코어 이식→플러밍→layer_wise 통합→체크포인트 round-trip→**128K@CP8 GO 실측**. A/B 판정 기준 교정(비결정 포락선) 포함
+- **Nondeterminism Probe**: `study/nondeterminism_probe.md` — 실행 간 비결정의 원천 실증(= TE fused attention bwd 단독; fla·conv·embedding 무혐의), 판정 포락선 산정 근거, NaN 오판 함정 2건. 재현 스크립트 `study/nondeterminism_probe.py`
 - **LC Repack Runbook**: `docs/LC_REPACK_RUNBOOK.md` — **LC 데이터 재패킹 절차의 단일 진입점** (2026-08-21, GPU 불필요·별도 세션 실행용): THD+CP가 요구하는 `--pad-doc-multiple 16` 재패킹(4종) + filler 소스 결정(3안 — stage2 unpacked 소실 발견) + 128k 패킹 예고, %16 정렬 검증 스크립트 포함
 
 ## Muon Optimizer Quick Reference
@@ -1122,7 +1147,11 @@ muon_num_ns_steps: 5
 muon_scale_mode: spectral
 ```
 
-**Compatibility**: TP=1 only, NOT compatible with CPU optimizer offloading.
+**Compatibility**: TP=1 only. HybridDeviceOptimizer식 CPU offload는 비호환이지만,
+**chunked optimizer-state offload(PR #6244 백포트)는 지원** —
+`--chunked-optimizer-state-offload --optimizer-state-offload-chunk-size-mb 256`.
+128K@CP8 실측 −21GB로 GO 전환; 32K@CP4 LC-A에는 불필요. 상세:
+[`docs/MUON_OFFLOAD_BACKPORT.md`](docs/MUON_OFFLOAD_BACKPORT.md).
 
 ### QGKV Split (auto-enabled, fixed 2026-05)
 

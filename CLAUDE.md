@@ -111,7 +111,7 @@ bash run_mcore_{model}.sh <ENV> <MODEL_SIZE> <BATCH_SIZE> <GLOBAL_BATCH_SIZE> <L
 
 ## Custom Training Features (Alpha Stage1)
 
-Three non-upstream features added on Megatron-LM-251125 for Alpha Stage1 pre-training.
+Non-upstream features added on Megatron-LM-251125 (Stage1 3건 + 2026-08-22 LC 준비 2건).
 (4번째 비-upstream 기능인 **DiLoCo 2노드 학습** — IB 없는 클러스터용 저통신 분산 — 은
 `megatron_patch`/submodule이 아니라 `examples/alpha/diloco_patch.py`에 살며,
 [`examples/alpha/CLAUDE.md`](examples/alpha/CLAUDE.md) § Multi-Node Training 참조.)
@@ -257,6 +257,53 @@ Q/Gate). Prefer a stage boundary for adoption.
 **Out of scope**: MLA (DeepSeek-V3-style latent attention) is still untouched —
 the WARNING log is what alerts you if a future MLA model is trained with Muon.
 
+### 4. Muon Chunked Optimizer-State Offload (PR #6244 백포트, 2026-08-22)
+
+Muon의 momentum과 fp32 master weight를 **CPU 상주(pinned) 캐노니컬**로 두고,
+optimizer step에서만 청크 단위로 GPU에 스트리밍(H2D→갱신→D2H)한다.
+128K@CP8의 Muon 바닥짐(~45GB/rank, dp=1이라 샤딩 불가) 해소가 목적.
+
+**CLI**:
+```bash
+--chunked-optimizer-state-offload --optimizer-state-offload-chunk-size-mb 256
+# 선택: --optimizer-state-offload-fraction 0.5   (0이면 비활성)
+```
+
+- 지원 경로: `--optimizer dist_muon`(LayerWise) 또는 `--use-distributed-optimizer`
+  (Adam). plain `muon`은 validate_args가 거부(무음 no-op 방지).
+- 제약: optimizer state를 저장/로드하면 `--ckpt-format torch_dist` 필수,
+  `--async-save` 불가, full-iteration CUDA graph 불가.
+- dist_muon 체인 [Muon, Adam*]에서 **Muon 자식만 오프로드**, Adam 자식(임베딩·
+  norm·router)은 GPU 상주 — upstream(형제 DistOpt 라우팅)과의 의도적 구조 분기.
+- 실측: 128K@CP8 max-alloc 72.5GB(OOM) → **54.9~58.8GB GO**; analysis_24L에서
+  −31% 메모리 / +5~7% per-iter; 체크포인트는 ON저장↔OFF/ON재개 상호 호환
+  (스위치 3방향 save→load→save 비트 동일).
+- **A/B 판정 주의**: alpha 풀모델은 실행 간 비결정(원천 = TE fused attention bwd,
+  `examples/alpha/study/nondeterminism_probe.md`) — 등가 검증은 동일 구성 재실행의
+  자기 산포 포락선으로 판정하고, 비트 검증은 결정론적 유닛 골든이 담당한다.
+
+**Implementation** (단계별 검증 로그: `examples/alpha/docs/MUON_OFFLOAD_BACKPORT.md`):
+- `megatron/core/optimizer/cpu_offloading/chunked_optimizer_state_offload.py` — 코어(신규, dev 원본)
+- `megatron/core/optimizer/{optimizer,optimizer_config,distrib_optimizer,layer_wise_optimizer}.py` — 통합 훅
+- `megatron/training/{arguments,training,checkpointing}.py` — 플래그·train_step 수명주기·저장 가드
+- QK-Clip이 `main_param`(fp32 master)에 쓰는 계약은 train_step의
+  `ensure_master_weights_for_param_sync()`로 고정 (LC preset은 qk-clip 제거라 실전 무관)
+
+### 5. THD+CP 코어 잠복버그 수정 3건 (2026-08-22)
+
+THD(packed)+CP 경로가 이 스냅샷에서 한 번도 실행된 적이 없어 잠복해 있던
+upstream 버그들 — GDN THD+CP 스티치(megatron_patch 쪽)가 처음 경로를 밟으며 검출.
+규명 전 과정: `examples/alpha/docs/gdn_cp_port.md` 분석노트 3.
+
+- `megatron/core/utils.py::get_thd_batch_on_this_cp_rank` — `PackedSeqParams`
+  import 누락(NameError) + 슬라이싱 루프 None 가드 부재(dense 버전에는 있음).
+- `megatron/core/models/mamba/mamba_model.py` — **THD rope 미배선(진범)**:
+  gpt_model과 달리 `get_rotary_seq_len`/`rotary_pos_emb()`에 packed_seq_params를
+  안 넘겨 rope 테이블이 dense CP 관례로 rank별 zigzag 사전 슬라이스됨 → THD rope
+  함수(자체 CP 슬라이싱)가 테이블 밖을 읽어 q/k NaN → 하류 MoE 라우터의 CUDA
+  topk가 NaN에서 중복 인덱스 반환 → dispatcher a2a split 불일치 크래시.
+  수정 = upstream gpt_model 미러(forward에 `packed_seq_params` 파라미터 추가 포함).
+
 ### Tests
 
 ```bash
@@ -276,6 +323,24 @@ cd backends/megatron/Megatron-LM-251125 && \
   NVIDIA_PYTORCH_VERSION=25.06 WORLD_SIZE=1 RANK=0 LOCAL_RANK=0 \
   MASTER_ADDR=localhost MASTER_PORT=29500 \
   python -m pytest tests/unit_tests/test_muon_optimizer.py -v --noconftest
+
+# Muon chunked offload — 코어+플러밍(38) / layer_wise 통합·골든(8) (1 GPU)
+cd backends/megatron/Megatron-LM-251125 && \
+  CUDA_VISIBLE_DEVICES=0 NVIDIA_PYTORCH_VERSION=25.06 WORLD_SIZE=1 RANK=0 LOCAL_RANK=0 \
+  MASTER_ADDR=localhost MASTER_PORT=29500 \
+  python -m pytest tests/unit_tests/test_chunked_offload_s1.py \
+    tests/unit_tests/test_chunked_offload_s3_layerwise.py -v --noconftest
+
+# Muon chunked offload — 체크포인트 스위치 3방향 비트동일 (3, conftest 필요)
+cd backends/megatron/Megatron-LM-251125 && \
+  CUDA_VISIBLE_DEVICES=0 NVIDIA_PYTORCH_VERSION=25.06 WORLD_SIZE=1 RANK=0 LOCAL_RANK=0 \
+  MASTER_ADDR=localhost MASTER_PORT=29500 \
+  python -m pytest tests/unit_tests/dist_checkpointing/test_chunked_offload_s4.py -v
+
+# GDN varlen/THD + CP — 유닛 33종 + 분산 등가 (CP{2,4}는 torchrun, THD는 비트동일 기대)
+cd <repo-root> && python -m pytest tests/test_gdn_varlen_thd.py \
+  tests/test_gdn_context_parallel.py tests/test_gdn_thd_cp_perm.py -v
+torchrun --nproc_per_node=2 tests/test_gdn_context_parallel.py   # 또는 4
 ```
 
 ## Debugging Tips

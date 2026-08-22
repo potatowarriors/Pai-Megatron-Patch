@@ -1,5 +1,14 @@
 # LC 재패킹 러너북 — THD+CP용 `--pad-doc-multiple 16` (2026-08-21 작성)
 
+> **상태 (2026-08-22 갱신)**: 작업 1(LC 4종 32k)·작업 2(filler) **완료** — syn_data
+> 세션이 `cpt_lc_packed_32k_pad16/`·`lc_filler_packed_32k_pad16/` 트리를 산출했고,
+> filler preset은 `configs/data/lc_filler_32k_pad16.yaml`로 커밋됨. 산출물 중
+> ko_news·edgar는 THD+CP 스티치 풀스택 검증(CP{1,2,4} 등가, gdn_cp_port.md
+> 분석노트 3)에 실사용되어 %16 정렬이 실전 확인됨. **작업 3(128k)은 수요 확정** —
+> Muon chunked offload로 128K@CP8이 GO 전환(max-alloc 54.9~58.8GB,
+> MUON_OFFLOAD_BACKPORT.md S5)되어 자원 제약이 풀렸고, 남은 병목은 이 데이터 팩이다.
+> 배경 서술의 varlen-thd 브랜치 참조는 낡음 — 전부 main에 머지됨(c9f65ad).
+
 **목적**: LC 학습 데이터를 THD+CP 문서 격리 요건에 맞게 재패킹한다.
 **GPU 불필요** — CPU/NFS 작업만이므로 P3 학습과 병행 가능한 별도 컴퓨팅 세션용.
 이 문서 하나로 사전조건 확인 → 실행 → 검증 → 후처리까지 완결되도록 작성했다.
