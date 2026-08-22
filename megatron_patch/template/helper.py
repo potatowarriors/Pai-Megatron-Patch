@@ -183,14 +183,24 @@ def forward_step(data_iterator, model):
         'labels': labels
     }
 
-    if 'loss_mask' in inspect.signature(model.forward).parameters:
+    # Signature checks must run on the UNWRAPPED model: at train time `model` is
+    # DDP(Float16Module(<real model>)) and wrapper forwards are generic
+    # (*inputs, **kwargs), so inspecting the wrapper never finds these params
+    # even when the real model supports them. Kwargs still flow through the
+    # wrappers to the real forward, so only the check needs unwrapping.
+    unwrapped = model
+    while hasattr(unwrapped, 'module'):
+        unwrapped = unwrapped.module
+    forward_params = inspect.signature(unwrapped.forward).parameters
+
+    if 'loss_mask' in forward_params:
         # NOTE: MTP-head (since 0328) requires loss_mask to compute correct loss scale.
         input_kwargs['loss_mask'] = loss_mask
-    
-    if 'packed_seq_params' in inspect.signature(model.forward).parameters:
+
+    if 'packed_seq_params' in forward_params:
         input_kwargs['packed_seq_params'] = packed_seq_params
     else:
-        assert packed_seq_params is None, f"Sequence Packing is not supported for {model}"
+        assert packed_seq_params is None, f"Sequence Packing is not supported for {type(unwrapped).__name__}"
 
     output_tensor = model(**input_kwargs)
 
