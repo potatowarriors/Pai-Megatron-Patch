@@ -303,6 +303,1264 @@ index ae7cea92e..ac8b30ea2 100644
 +        self.num_micro_batches = (
 +            self.current_running_global_batch_size // self.micro_batch_times_data_parallel_size
 +        )
+diff --git a/megatron/core/optimizer/cpu_offloading/chunked_optimizer_state_offload.py b/megatron/core/optimizer/cpu_offloading/chunked_optimizer_state_offload.py
+new file mode 100644
+index 000000000..930bf7f84
+--- /dev/null
++++ b/megatron/core/optimizer/cpu_offloading/chunked_optimizer_state_offload.py
+@@ -0,0 +1,1013 @@
++# Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
++
++"""Chunked GPU optimizer-state execution backed by CPU canonical storage.
++
++The wrapped optimizer continues to own its normal param_groups and state mappings.
++Parameters selected for offload keep their master weights and tensor states in pinned CPU
++memory between updates. Immediately before an update, master weights are restored as one
++window and optimizer tensor states are restored one chunk at a time. The external optimizer
++therefore only ever observes regular CUDA tensors and does not need an offload-specific API.
++"""
++
++from __future__ import annotations
++
++import collections
++import dataclasses
++import logging
++import math
++from typing import Callable, Dict, Iterable, List, Mapping, Sequence
++
++import torch
++
++from megatron.core.utils import log_single_rank
++
++_MASTER_PARAM_KEY = "master_param"
++_NON_OFFLOADABLE_STATE_KEYS = frozenset({_MASTER_PARAM_KEY, "step", "found_inf"})
++
++logger = logging.getLogger(__name__)
++
++
++@dataclasses.dataclass(frozen=True)
++class OptimizerStateChunk:
++    """A group of optimizer parameters updated as one GPU-resident window.
++
++    Attributes:
++        params: Parameters whose optimizer tensor states are staged together.
++    """
++
++    params: tuple[torch.Tensor, ...]
++
++
++@dataclasses.dataclass
++class _StatePrefetch:
++    """Prefetch token whose existence also records a scheduled no-copy chunk."""
++
++    event: torch.cuda.Event | None
++
++
++@dataclasses.dataclass
++class _StateStagingSlot:
++    """Reusable GPU storage for one optimizer-state pipeline window."""
++
++    buffers: Dict[tuple[torch.device, torch.dtype], torch.Tensor] = dataclasses.field(
++        default_factory=dict
++    )
++
++
++class ChunkedOptimizerStateOffloader:
++    """Manage CPU canonical optimizer state and chunked GPU optimizer updates.
++
++    chunk_size_bytes is a soft state-size limit. Parameters are atomic units: a single
++    parameter whose state exceeds the limit forms an oversized chunk. This is required by
++    matrix optimizers such as Muon and also avoids fabricating optimizer parameters for slices
++    of a DistributedOptimizer shard.
++
++    Master weights are always offloaded for selected mixed-precision parameters. They use a
++    full-window fallback: all selected masters are restored before the first state chunk and
++    copied back after the optimizer/model-parameter staging phase. This keeps the external
++    optimizer and FP8 parameter-gather paths unchanged while still removing masters from the
++    forward/backward residency set.
++
++    Args:
++        optimizer: The external torch-compatible optimizer to execute.
++        master_params: MCore-owned FP32 master parameters. These objects also appear in
++            optimizer.param_groups and retain their identity while their data moves between
++            CPU and CUDA.
++        chunk_size_bytes: Target bytes per optimizer-state chunk. Zero means one full chunk.
++        offload_fraction: Fraction of optimizer parameter bundles selected for offload.
++        state_dtypes: Dtypes of the supported full-size optimizer tensor states. For example,
++            Adam supplies its two moment dtypes and Muon supplies its momentum dtype. These are
++            used only for deterministic byte planning; the external optimizer remains the
++            authority for the actual state schema.
++        optimizer_owned_master_dtypes: Dtype of each optimizer-owned ``master_param`` entry.
++            Passing the exact parameters that materialize this entry avoids guessing and
++            accounts for compact int16 parameter remainders.
++        d2h_stream: Optional transfer stream shared by related optimizer wrappers.
++        h2d_stream: Optional transfer stream shared by related optimizer wrappers.
++    """
++
++    def __init__(
++        self,
++        optimizer: torch.optim.Optimizer,
++        master_params: Sequence[torch.Tensor],
++        chunk_size_bytes: int,
++        offload_fraction: float,
++        state_dtypes: Sequence[torch.dtype],
++        optimizer_owned_master_dtypes: Mapping[torch.Tensor, torch.dtype] | None = None,
++        d2h_stream: torch.cuda.Stream | None = None,
++        h2d_stream: torch.cuda.Stream | None = None,
++    ) -> None:
++        if chunk_size_bytes < 0:
++            raise ValueError(f"chunk_size_bytes must be non-negative, got {chunk_size_bytes}")
++        if not 0.0 <= offload_fraction <= 1.0:
++            raise ValueError(f"offload_fraction must be in [0, 1], got {offload_fraction}")
++        if not state_dtypes:
++            raise ValueError("state_dtypes must contain at least one optimizer-state dtype")
++
++        self.optimizer = optimizer
++        self.chunk_size_bytes = chunk_size_bytes
++        self.offload_fraction = offload_fraction
++        self.state_dtypes = tuple(state_dtypes)
++        self._state_bytes_per_param = sum(dtype.itemsize for dtype in self.state_dtypes)
++
++        self._params = self._unique_optimizer_params(optimizer.param_groups)
++        # Parameter-group membership is fixed for the optimizer lifetime. Cache it once so each
++        # state chunk only walks its own parameters instead of rescanning every optimizer group.
++        self._param_group_index_by_id = {
++            id(param): group_index
++            for group_index, group in enumerate(optimizer.param_groups)
++            for param in group["params"]
++        }
++        self._param_devices = {param: param.device for param in self._params}
++        self._explicit_master_param_ids = {id(param) for param in master_params}
++        self._master_in_optimizer_state = bool(getattr(optimizer, "master_weights", False))
++        if self._explicit_master_param_ids and self._master_in_optimizer_state:
++            raise ValueError(
++                "chunked optimizer state offload cannot manage both MCore-owned master "
++                "parameters and optimizer state['master_param'] entries in one optimizer"
++            )
++        if optimizer_owned_master_dtypes is None:
++            # Keep direct construction backward compatible. Production DistributedOptimizer
++            # callers pass the exact optimizer-owned subset and its real storage dtype.
++            self._optimizer_owned_master_dtypes = (
++                {id(param): torch.float32 for param in self._params}
++                if self._master_in_optimizer_state
++                else {}
++            )
++        else:
++            self._optimizer_owned_master_dtypes = {
++                id(param): dtype for param, dtype in optimizer_owned_master_dtypes.items()
++            }
++            unknown_param_ids = set(self._optimizer_owned_master_dtypes) - {
++                id(param) for param in self._params
++            }
++            if unknown_param_ids:
++                raise ValueError(
++                    "optimizer_owned_master_dtypes contains parameters outside "
++                    "optimizer.param_groups"
++                )
++            if self._optimizer_owned_master_dtypes and not self._master_in_optimizer_state:
++                raise ValueError(
++                    "optimizer_owned_master_dtypes requires an optimizer with master_weights"
++                )
++
++        self._selected_params = self._select_params_for_offload()
++        self._selected_param_ids = {id(param) for param in self._selected_params}
++        self._resident_params = tuple(
++            param for param in self._params if id(param) not in self._selected_param_ids
++        )
++        self._chunks = self._build_chunks(self._selected_params)
++
++        self._cpu_state: Dict[torch.Tensor, Dict[str, torch.Tensor]] = collections.defaultdict(dict)
++        # This map can be keyed by parameter alone because the constructor rejects combining
++        # MCore-owned ``param.data`` masters with optimizer-owned ``state['master_param']`` in
++        # one manager, and ``_validate_master_storage`` rechecks that invariant after lazy init.
++        self._cpu_master: Dict[torch.Tensor, torch.Tensor] = {}
++
++        self._d2h_stream = d2h_stream if d2h_stream is not None else torch.cuda.Stream()
++        self._h2d_stream = h2d_stream if h2d_stream is not None else torch.cuda.Stream()
++        self._master_h2d_event: torch.cuda.Event | None = None
++        self._master_weights_resident = True
++        # Two reusable state windows allow H2D(N+1), step(N), and D2H(N-1) to overlap
++        # without letting host run-ahead allocate one CUDA tensor set per chunk.
++        self._state_staging_slots = (_StateStagingSlot(), _StateStagingSlot())
++        self._next_state_staging_slot = 0
++        self._first_prefetch: _StatePrefetch | None = None
++
++    @staticmethod
++    def _unique_optimizer_params(param_groups: Sequence[dict]) -> tuple[torch.Tensor, ...]:
++        params = []
++        seen = set()
++        for group in param_groups:
++            for param in group["params"]:
++                if id(param) in seen:
++                    continue
++                seen.add(id(param))
++                params.append(param)
++        return tuple(params)
++
++    def _estimated_bundle_bytes(self, param: torch.Tensor) -> int:
++        state_bytes = self._estimated_state_bytes(param)
++        if id(param) in self._explicit_master_param_ids:
++            master_bytes = param.numel() * param.element_size()
++        elif id(param) in self._optimizer_owned_master_dtypes:
++            master_bytes = param.numel() * self._optimizer_owned_master_dtypes[id(param)].itemsize
++        else:
++            master_bytes = 0
++        return state_bytes + master_bytes
++
++    def _param_has_master(self, param: torch.Tensor) -> bool:
++        return (
++            id(param) in self._explicit_master_param_ids
++            or id(param) in self._optimizer_owned_master_dtypes
++        )
++
++    def _select_params_for_offload(self) -> tuple[torch.Tensor, ...]:
++        if not self._params or self.offload_fraction == 0.0:
++            return ()
++        if self.offload_fraction == 1.0:
++            return self._params
++
++        target_bytes = math.ceil(
++            sum(self._estimated_bundle_bytes(param) for param in self._params)
++            * self.offload_fraction
++        )
++        # Prefer bundles that actually have a separate master, so a partial byte budget removes
++        # both state and master residency before selecting state-only bundles. Python's sort is
++        # stable, preserving optimizer order within the two classes.
++        candidates = sorted(self._params, key=lambda param: not self._param_has_master(param))
++        selected = []
++        selected_bytes = 0
++        for param in candidates:
++            if selected_bytes >= target_bytes:
++                break
++            selected.append(param)
++            selected_bytes += self._estimated_bundle_bytes(param)
++        return tuple(selected)
++
++    def _estimated_state_bytes(self, param: torch.Tensor) -> int:
++        return param.numel() * self._state_bytes_per_param
++
++    def _build_chunks(self, params: Sequence[torch.Tensor]) -> tuple[OptimizerStateChunk, ...]:
++        if not params:
++            return ()
++        if self.chunk_size_bytes == 0:
++            return (OptimizerStateChunk(tuple(params)),)
++
++        chunks = []
++        current_params = []
++        current_bytes = 0
++        oversized_param_count = 0
++        largest_oversized_param_bytes = 0
++        for param in params:
++            param_bytes = self._estimated_state_bytes(param)
++            if param_bytes > self.chunk_size_bytes:
++                oversized_param_count += 1
++                largest_oversized_param_bytes = max(largest_oversized_param_bytes, param_bytes)
++            if current_params and current_bytes + param_bytes > self.chunk_size_bytes:
++                chunks.append(OptimizerStateChunk(tuple(current_params)))
++                current_params = []
++                current_bytes = 0
++            current_params.append(param)
++            current_bytes += param_bytes
++        if current_params:
++            chunks.append(OptimizerStateChunk(tuple(current_params)))
++        if oversized_param_count:
++            mib = 1024**2
++            log_single_rank(
++                logger,
++                logging.WARNING,
++                "Optimizer-state offload target is %.2f MiB, but %d selected parameter(s) "
++                "have an atomic tensor-state payload larger than the target; the largest is "
++                "%.2f MiB for %s. These parameters cannot be split, so this manager's "
++                "two-slot GPU tensor-state window can exceed roughly twice the configured "
++                "target.",
++                self.chunk_size_bytes / mib,
++                oversized_param_count,
++                largest_oversized_param_bytes / mib,
++                type(self.optimizer).__name__,
++            )
++        return tuple(chunks)
++
++    @property
++    def chunks(self) -> tuple[OptimizerStateChunk, ...]:
++        """Return the immutable optimizer-state chunk plan."""
++
++        return self._chunks
++
++    @property
++    def selected_params(self) -> tuple[torch.Tensor, ...]:
++        """Return optimizer parameters whose state/master bundle is offloaded."""
++
++        return self._selected_params
++
++    def is_param_offloaded(self, param: torch.Tensor) -> bool:
++        """Return whether param belongs to the offloaded fraction."""
++
++        return id(param) in self._selected_param_ids
++
++    @property
++    def transfer_streams(self) -> tuple[torch.cuda.Stream, torch.cuda.Stream]:
++        """Return the D2H/H2D stream pair used by this manager."""
++
++        return self._d2h_stream, self._h2d_stream
++
++    def use_transfer_streams(
++        self, d2h_stream: torch.cuda.Stream, h2d_stream: torch.cuda.Stream
++    ) -> None:
++        """Adopt streams shared by sibling optimizers before any transfer is scheduled."""
++
++        if d2h_stream is self._d2h_stream and h2d_stream is self._h2d_stream:
++            return
++        if (
++            self._master_h2d_event is not None
++            or self._first_prefetch is not None
++            or self._cpu_state
++            or self._cpu_master
++        ):
++            raise RuntimeError("optimizer-state transfer streams cannot change after first use")
++        self._d2h_stream = d2h_stream
++        self._h2d_stream = h2d_stream
++
++    @staticmethod
++    def _new_cpu_buffer(tensor: torch.Tensor) -> torch.Tensor:
++        return torch.empty(
++            tensor.size(), dtype=tensor.dtype, layout=tensor.layout, device="cpu", pin_memory=True
++        )
++
++    def _cpu_buffer_for_state(
++        self, param: torch.Tensor, key: str, tensor: torch.Tensor
++    ) -> torch.Tensor:
++        current = self._cpu_state[param].get(key)
++        if current is None or current.shape != tensor.shape or current.dtype != tensor.dtype:
++            current = self._new_cpu_buffer(tensor)
++            self._cpu_state[param][key] = current
++        return current
++
++    def _cpu_buffer_for_master(self, param: torch.Tensor, tensor: torch.Tensor) -> torch.Tensor:
++        current = self._cpu_master.get(param)
++        if current is None or current.shape != tensor.shape or current.dtype != tensor.dtype:
++            current = self._new_cpu_buffer(tensor)
++            self._cpu_master[param] = current
++        return current
++
++    @staticmethod
++    def _is_offloadable_state(param: torch.Tensor, key: str, value: object) -> bool:
++        """Return whether a tensor belongs to the supported chunked state schema."""
++
++        # Shape is sufficient only for the currently admitted fp32/bf16 Adam moments and the
++        # exact Muon momentum schema. FP8 moments carry one-element scale metadata that can match
++        # a one-element DistOpt shard; supporting them requires explicit state-key classification.
++        return (
++            key not in _NON_OFFLOADABLE_STATE_KEYS
++            and isinstance(value, torch.Tensor)
++            and value.shape == param.shape
++        )
++
++    def _state_items_to_offload(self, param: torch.Tensor) -> Iterable[tuple[str, torch.Tensor]]:
++        for key, value in self.optimizer.state.get(param, {}).items():
++            if self._is_offloadable_state(param, key, value) and value.is_cuda:
++                yield key, value
++
++    def _has_unregistered_cuda_state(self, params: Sequence[torch.Tensor]) -> bool:
++        """Return whether a step lazily created tensor state outside the staging pool."""
++
++        return any(
++            key not in self._cpu_state.get(param, {})
++            for param in params
++            for key, _ in self._state_items_to_offload(param)
++        )
++
++    def _schedule_state_d2h(self, params: Sequence[torch.Tensor]) -> None:
++        transfers = [
++            (param, key, gpu_tensor)
++            for param in params
++            for key, gpu_tensor in self._state_items_to_offload(param)
++        ]
++        if not transfers:
++            return
++
++        self._d2h_stream.wait_stream(torch.cuda.current_stream())
++        with torch.cuda.stream(self._d2h_stream):
++            for param, key, gpu_tensor in transfers:
++                cpu_tensor = self._cpu_buffer_for_state(param, key, gpu_tensor)
++                cpu_tensor.copy_(gpu_tensor, non_blocking=True)
++                gpu_tensor.record_stream(self._d2h_stream)
++                self.optimizer.state[param][key] = cpu_tensor
++
++    def adopt_cpu_optimizer_state(self, params: Sequence[torch.Tensor] | None = None) -> None:
++        """Register CPU tensor states created or loaded outside the manager.
++
++        Naturally CPU scalar state is left resident. Tensor state matching an optimizer
++        parameter shape is treated as offloaded state; this covers Adam moments and Muon
++        momentum while avoiding ordinary CPU step counters. Tracked buffers that are no longer
++        part of the optimizer's canonical state are released so checkpoint schema changes do
++        not retain stale pinned host memory.
++        """
++
++        params = self._selected_params if params is None else params
++        for param in params:
++            if not self.is_param_offloaded(param):
++                continue
++            adopted_keys = set()
++            for key, value in tuple(self.optimizer.state.get(param, {}).items()):
++                if self._is_offloadable_state(param, key, value) and value.device.type == "cpu":
++                    if not value.is_pinned():
++                        pinned_value = self._new_cpu_buffer(value)
++                        pinned_value.copy_(value)
++                        self.optimizer.state[param][key] = pinned_value
++                        value = pinned_value
++                    self._cpu_state[param][key] = value
++                    adopted_keys.add(key)
++
++            tracked_state = self._cpu_state.get(param)
++            if tracked_state is None:
++                continue
++            for key in tuple(tracked_state):
++                if key not in adopted_keys:
++                    del tracked_state[key]
++            if not tracked_state:
++                del self._cpu_state[param]
++
++    def initialize_state_for_loading(self, init_state_fn: Callable | None, config: object) -> None:
++        """Initialize checkpoint state without materializing all selected state on CUDA.
++
++        The optimizer's own initializer remains authoritative. This matters for precision-aware
++        FusedAdam, whose state can include scaling metadata and parameter remainders, and for
++        Muon, whose state schema is owned by Emerging Optimizers. Resident parameters initialize
++        normally; selected parameters initialize one state chunk at a time and are immediately
++        returned to CPU canonical storage. ``init_state_fn`` must only initialize per-parameter
++        optimizer state; parameter-group metadata writes target temporary subset-group clones and
++        are intentionally not committed to the original groups.
++        """
++
++        if init_state_fn is None:
++            raise RuntimeError(
++                "chunked optimizer state offload requires an optimizer state initializer "
++                "when preparing a distributed-checkpoint load"
++            )
++
++        # Checkpoint preparation may have put explicit MCore masters on CPU. Restore the
++        # selected master window so third-party initializers always observe CUDA parameters.
++        self._schedule_master_h2d()
++        self._wait_master_h2d()
++
++        original_groups = list(self.optimizer.param_groups)
++        base_group_metadata = self._snapshot_group_metadata(original_groups)
++
++        def initialize_subset(params: Sequence[torch.Tensor]) -> None:
++            groups, _ = self._make_subset_groups(params, base_group_metadata)
++            if not groups:
++                return
++            self.optimizer.param_groups = groups
++            init_state_fn(self.optimizer, config)
++
++        try:
++            if self._resident_params:
++                initialize_subset(self._resident_params)
++
++            for chunk in self._chunks:
++                initialize_subset(chunk.params)
++                self._schedule_state_d2h(chunk.params)
++                # Initialization is an infrequent checkpoint operation. Synchronizing one
++                # chunk here bounds its CUDA allocation and makes the CPU destination stable
++                # for distributed-checkpoint sharded-state construction.
++                self._d2h_stream.synchronize()
++                self.adopt_cpu_optimizer_state(chunk.params)
++
++            # Precision-aware FusedAdam creates masters in optimizer.state during init.
++            # Scan and offload the full master window once, after all chunks exist.
++            self._schedule_master_d2h()
++            self._d2h_stream.synchronize()
++            self.adopt_cpu_optimizer_state()
++        finally:
++            self.optimizer.param_groups = original_groups
++
++    def load_state_dict_without_device_cast(self, state_dict: dict) -> None:
++        """Load optimizer metadata while preserving each state's staging device.
++
++        ``torch.optim.Optimizer.load_state_dict`` casts every tensor state to the
++        corresponding parameter device. The distributed-checkpoint template initializes
++        selected states in pinned CPU memory, although a loading strategy may preserve or
++        replace those destinations. Casting the resulting CPU state would temporarily
++        reconstruct the full state on CUDA. Reproduce the id remapping and parameter-group
++        restoration without that cast.
++        """
++
++        saved_groups = state_dict["param_groups"]
++        current_groups = self.optimizer.param_groups
++        if len(saved_groups) != len(current_groups):
++            raise ValueError(
++                "loaded optimizer has a different number of parameter groups: "
++                f"{len(saved_groups)} != {len(current_groups)}"
++            )
++
++        saved_param_ids = [param_id for group in saved_groups for param_id in group["params"]]
++        current_params = [param for group in current_groups for param in group["params"]]
++        if len(saved_param_ids) != len(current_params):
++            raise ValueError(
++                "loaded optimizer has a different number of parameters: "
++                f"{len(saved_param_ids)} != {len(current_params)}"
++            )
++        id_map = dict(zip(saved_param_ids, current_params))
++        current_param_ids = {id(param) for param in current_params}
++
++        restored_groups = []
++        for saved_group, current_group in zip(saved_groups, current_groups):
++            if len(saved_group["params"]) != len(current_group["params"]):
++                raise ValueError("loaded optimizer parameter group has a different size")
++            restored_group = dict(saved_group)
++            restored_group["params"] = current_group["params"]
++            restored_groups.append(restored_group)
++
++        set_scaled_state = getattr(self.optimizer, "set_scaled_state", None)
++        state_dtype_map = getattr(self.optimizer, "name_to_dtype_map", None)
++        if callable(set_scaled_state) and isinstance(state_dtype_map, dict):
++            # TE FusedAdam serializes precision-aware state in its unscaled representation.
++            # Invoke TE's public scaling API on CUDA in bounded state chunks, then return selected
++            # destinations to CPU instead of installing serialized tensors verbatim.
++            # ``initialize_state_for_loading`` has already populated every state slot in the
++            # supported schema, so preserving ``current_state`` gives TE valid setter
++            # destinations. Unlike torch Optimizer.load_state_dict, a checkpoint that omits a
++            # parameter state retains that initialized value; supported checkpoints are complete.
++            current_state = self.optimizer.state
++            self.optimizer.__setstate__({"state": current_state, "param_groups": restored_groups})
++            mapped_states = {}
++            for key, saved_state in state_dict["state"].items():
++                param = id_map.get(key, key)
++                if id(param) not in current_param_ids:
++                    self.optimizer.state[param] = saved_state
++                    continue
++
++                mapped_states[param] = saved_state
++
++            def restore_scaled_state(param: torch.Tensor, saved_state: dict) -> None:
++                for state_name, value in saved_state.items():
++                    if value is None:
++                        continue
++                    if isinstance(value, torch.Tensor) and state_name in state_dtype_map:
++                        store_remainder = (
++                            bool(getattr(self.optimizer, "store_param_remainders", False))
++                            and state_name == _MASTER_PARAM_KEY
++                            and param.dtype == torch.bfloat16
++                        )
++                        target_dtype = value.dtype if store_remainder else torch.float32
++                        scaled_value = value.to(
++                            device=self._param_devices[param],
++                            dtype=target_dtype,
++                            non_blocking=value.device.type == "cpu" and value.is_pinned(),
++                        )
++                        set_scaled_state(param, state_name, scaled_value)
++                    else:
++                        self.optimizer.state[param][state_name] = value
++
++            for param, saved_state in mapped_states.items():
++                if not self.is_param_offloaded(param):
++                    restore_scaled_state(param, saved_state)
++
++            self._schedule_master_h2d()
++            self._wait_master_h2d()
++            for chunk in self._chunks:
++                for param in chunk.params:
++                    saved_state = mapped_states.get(param)
++                    if saved_state is not None:
++                        restore_scaled_state(param, saved_state)
++                # ``initialize_state_for_loading`` already installed CPU destinations. TE's
++                # setter scales on CUDA and copies into those existing tensors, so there is no
++                # CUDA optimizer state to schedule back through the D2H staging path here.
++            self._release_state_staging_slots()
++            self._schedule_master_d2h()
++            # The TE setter's CUDA-to-CPU copies run on the current stream. This explicit edge
++            # also covers precision-aware optimizers without an MCore-owned master D2H transfer.
++            self._d2h_stream.wait_stream(torch.cuda.current_stream())
++            self._d2h_stream.synchronize()
++        else:
++            restored_state = collections.defaultdict(dict)
++            for key, value in state_dict["state"].items():
++                param = id_map.get(key, key)
++                if id(param) in current_param_ids and isinstance(value, dict):
++                    value = dict(value)
++                    if not self.is_param_offloaded(param):
++                        for state_name, state_value in tuple(value.items()):
++                            if (
++                                self._is_offloadable_state(param, state_name, state_value)
++                                and state_value.device.type == "cpu"
++                            ):
++                                value[state_name] = state_value.to(
++                                    device=self._param_devices[param],
++                                    non_blocking=state_value.is_pinned(),
++                                )
++                restored_state[param] = value
++            self.optimizer.__setstate__({"state": restored_state, "param_groups": restored_groups})
++        self.adopt_cpu_optimizer_state()
++
++    def _validate_master_storage(self) -> None:
++        for param in self._selected_params:
++            if id(param) not in self._explicit_master_param_ids:
++                continue
++            state_master = self.optimizer.state.get(param, {}).get(_MASTER_PARAM_KEY)
++            if isinstance(state_master, torch.Tensor):
++                raise RuntimeError(
++                    "optimizer created state['master_param'] for a parameter that already uses "
++                    "an MCore-owned master parameter"
++                )
++
++    def _master_bindings_are_cuda(self) -> bool:
++        """Return whether every materialized selected master is CUDA-bound."""
++
++        for param in self._selected_params:
++            if id(param) in self._explicit_master_param_ids and not param.data.is_cuda:
++                return False
++            state_master = self.optimizer.state.get(param, {}).get(_MASTER_PARAM_KEY)
++            if isinstance(state_master, torch.Tensor) and not state_master.is_cuda:
++                return False
++        return True
++
++    def assert_master_weights_resident(self, operation: str) -> None:
++        """Reject an external master reader while D2H/H2D changes its canonical binding."""
++
++        if self._master_weights_resident and self._master_bindings_are_cuda():
++            return
++        raise RuntimeError(
++            f"{operation} requires CUDA-resident optimizer master weights, but chunked "
++            "optimizer state offload has rebound at least one selected master to CPU or an "
++            "H2D restore is still pending"
++        )
++
++    def _schedule_master_d2h(self) -> None:
++        if not self._selected_params:
++            return
++        self._validate_master_storage()
++        # A rerun or checkpoint can request offload after prefetch but before step().
++        # Make the current stream depend on the H2D copy before the D2H stream follows it.
++        self._wait_master_h2d()
++
++        transfers = []
++        for param in self._selected_params:
++            if id(param) in self._explicit_master_param_ids and param.data.is_cuda:
++                transfers.append((param, None, param.data))
++            state_master = self.optimizer.state.get(param, {}).get(_MASTER_PARAM_KEY)
++            if isinstance(state_master, torch.Tensor) and state_master.is_cuda:
++                transfers.append((param, _MASTER_PARAM_KEY, state_master))
++        if not transfers:
++            return
++
++        self._master_weights_resident = False
++        self._d2h_stream.wait_stream(torch.cuda.current_stream())
++        with torch.cuda.stream(self._d2h_stream):
++            for param, state_key, gpu_tensor in transfers:
++                cpu_tensor = self._cpu_buffer_for_master(param, gpu_tensor)
++                cpu_tensor.copy_(gpu_tensor, non_blocking=True)
++                gpu_tensor.record_stream(self._d2h_stream)
++                # CPU is the canonical binding as soon as the copy is enqueued. CUDA's
++                # allocator keeps the source alive through record_stream(), and any H2D
++                # consumer waits on the D2H stream before reading this buffer.
++                if state_key is None:
++                    param.data = cpu_tensor
++                else:
++                    self.optimizer.state[param][state_key] = cpu_tensor
++
++    def _schedule_master_h2d(self) -> None:
++        if not self._selected_params or self._master_h2d_event is not None:
++            return
++        self._validate_master_storage()
++
++        transfers = []
++        for param in self._selected_params:
++            if id(param) in self._explicit_master_param_ids and not param.data.is_cuda:
++                transfers.append((param, None, param.data))
++            state_master = self.optimizer.state.get(param, {}).get(_MASTER_PARAM_KEY)
++            if isinstance(state_master, torch.Tensor) and not state_master.is_cuda:
++                transfers.append((param, _MASTER_PARAM_KEY, state_master))
++        if not transfers:
++            self._master_weights_resident = self._master_bindings_are_cuda()
++            return
++
++        self._master_weights_resident = False
++        gpu_transfers = [
++            (
++                param,
++                state_key,
++                cpu_tensor,
++                torch.empty_like(cpu_tensor, device=self._param_devices[param]),
++            )
++            for param, state_key, cpu_tensor in transfers
++        ]
++
++        self._order_h2d_after_source_streams()
++        with torch.cuda.stream(self._h2d_stream):
++            for param, state_key, cpu_tensor, gpu_tensor in gpu_transfers:
++                gpu_tensor.copy_(cpu_tensor, non_blocking=cpu_tensor.is_pinned())
++                gpu_tensor.record_stream(self._h2d_stream)
++                if state_key is None:
++                    param.data = gpu_tensor
++                else:
++                    self.optimizer.state[param][state_key] = gpu_tensor
++                self._cpu_master[param] = cpu_tensor
++
++            event = torch.cuda.Event()
++            event.record(self._h2d_stream)
++
++        self._master_h2d_event = event
++
++    def _wait_master_h2d(self) -> None:
++        if self._master_h2d_event is None:
++            return
++        torch.cuda.current_stream().wait_event(self._master_h2d_event)
++        self._master_h2d_event = None
++        self._master_weights_resident = self._master_bindings_are_cuda()
++
++    def _order_h2d_after_source_streams(self) -> None:
++        """Order H2D after CPU production and compute-stream GPU allocation/use.
++
++        CPU canonical buffers may still be D2H destinations. GPU staging buffers are
++        deliberately allocated on the current compute stream so the caching allocator can
++        recycle them into later forward/backward allocations. The H2D stream must therefore
++        wait for both producer/owner streams before writing either side.
++        """
++
++        self._h2d_stream.wait_stream(self._d2h_stream)
++        self._h2d_stream.wait_stream(torch.cuda.current_stream())
++
++    def _state_staging_views(
++        self, chunk: OptimizerStateChunk
++    ) -> List[tuple[torch.Tensor, str, torch.Tensor, torch.Tensor]]:
++        """Return state views backed by the next reusable CUDA staging slot."""
++
++        entries = []
++        required_numel = collections.defaultdict(int)
++        for param in chunk.params:
++            state = self.optimizer.state.get(param, {})
++            for key, cpu_tensor in self._cpu_state.get(param, {}).items():
++                current = state.get(key)
++                if not isinstance(current, torch.Tensor) or current.is_cuda:
++                    continue
++                pool_key = (self._param_devices[param], cpu_tensor.dtype)
++                entries.append((param, key, cpu_tensor, pool_key))
++                alignment_numel = max(1, 256 // cpu_tensor.element_size())
++                required_numel[pool_key] = (
++                    (required_numel[pool_key] + alignment_numel - 1) // alignment_numel
++                ) * alignment_numel
++                required_numel[pool_key] += cpu_tensor.numel()
++
++        if not entries:
++            return []
++
++        slot = self._state_staging_slots[self._next_state_staging_slot]
++        self._next_state_staging_slot = (self._next_state_staging_slot + 1) % len(
++            self._state_staging_slots
++        )
++        for (device, dtype), numel in required_numel.items():
++            buffer = slot.buffers.get((device, dtype))
++            if buffer is None or buffer.numel() < numel:
++                slot.buffers[(device, dtype)] = torch.empty(numel, dtype=dtype, device=device)
++
++        offsets = collections.defaultdict(int)
++        views = []
++        for param, key, cpu_tensor, pool_key in entries:
++            alignment_numel = max(1, 256 // cpu_tensor.element_size())
++            offset = (
++                (offsets[pool_key] + alignment_numel - 1) // alignment_numel
++            ) * alignment_numel
++            buffer = slot.buffers[pool_key]
++            gpu_tensor = buffer.narrow(0, offset, cpu_tensor.numel()).view(cpu_tensor.shape)
++            offsets[pool_key] = offset + cpu_tensor.numel()
++            views.append((param, key, cpu_tensor, gpu_tensor))
++        return views
++
++    def _release_state_staging_slots(self) -> None:
++        """Drop GPU pool ownership after all live views have been queued for D2H."""
++
++        for slot in self._state_staging_slots:
++            slot.buffers.clear()
++        self._next_state_staging_slot = 0
++
++    def _prefetch_state(self, chunk: OptimizerStateChunk) -> _StatePrefetch:
++        staging_views = self._state_staging_views(chunk)
++        if not staging_views:
++            return _StatePrefetch(None)
++
++        self._order_h2d_after_source_streams()
++        with torch.cuda.stream(self._h2d_stream):
++            for param, key, cpu_tensor, gpu_tensor in staging_views:
++                gpu_tensor.copy_(cpu_tensor, non_blocking=cpu_tensor.is_pinned())
++                gpu_tensor.record_stream(self._h2d_stream)
++                self.optimizer.state[param][key] = gpu_tensor
++            event = torch.cuda.Event()
++            event.record(self._h2d_stream)
++        return _StatePrefetch(event)
++
++    @staticmethod
++    def _wait_state_prefetch(prefetch: _StatePrefetch) -> None:
++        if prefetch.event is not None:
++            torch.cuda.current_stream().wait_event(prefetch.event)
++
++    def prefetch_for_step(self) -> None:
++        """Asynchronously restore masters and the first state chunk for the next update."""
++
++        if not self._selected_params:
++            return
++        self._schedule_master_h2d()
++        if self._chunks and self._first_prefetch is None:
++            self._first_prefetch = self._prefetch_state(self._chunks[0])
++
++    def prefetch_master_for_step(self) -> None:
++        """Asynchronously restore only masters, leaving tensor state CPU-resident."""
++
++        if self._selected_params:
++            self._schedule_master_h2d()
++
++    def ensure_master_for_param_sync(self) -> None:
++        """Ensure selected master weights are available for pre-forward FP8 staging."""
++
++        if self._master_weights_resident and self._master_h2d_event is None:
++            return
++        self._schedule_master_h2d()
++        self._wait_master_h2d()
++
++    def offload_for_forward(self, offload_master: bool = True) -> None:
++        """Start D2H for tensors still resident after an update or load.
++
++        Selected master bindings become CPU tensors as soon as their asynchronous D2H copy is
++        enqueued. CUDA consumers must restore them through this manager, and host consumers must
++        first call :meth:`synchronize_for_checkpoint`. The training loop deliberately calls this
++        only at the optimizer-to-forward lifecycle boundary, where no other master reader runs.
++
++        Args:
++            offload_master: If false, stage only optimizer state. The training loop uses this
++                while an MXFP8 parameter buffer still needs to read updated masters.
++        """
++
++        if not self._selected_params:
++            return
++        if self._first_prefetch is not None:
++            self._wait_state_prefetch(self._first_prefetch)
++            self._first_prefetch = None
++        for chunk in self._chunks:
++            self._schedule_state_d2h(chunk.params)
++        self._release_state_staging_slots()
++        if offload_master:
++            self._schedule_master_d2h()
++
++    def synchronize_for_checkpoint(self) -> None:
++        """Make CPU canonical state stable and visible to distributed checkpointing."""
++
++        self.offload_for_forward()
++        self._d2h_stream.synchronize()
++        self.adopt_cpu_optimizer_state()
++
++    @classmethod
++    def _clone_group_value(cls, value: object) -> object:
++        """Clone mutable group metadata so each chunk starts from one logical step."""
++
++        if isinstance(value, torch.Tensor):
++            return value.clone()
++        if isinstance(value, dict):
++            return {key: cls._clone_group_value(item) for key, item in value.items()}
++        if isinstance(value, list):
++            return [cls._clone_group_value(item) for item in value]
++        if isinstance(value, tuple):
++            return tuple(cls._clone_group_value(item) for item in value)
++        if isinstance(value, set):
++            return {cls._clone_group_value(item) for item in value}
++        return value
++
++    @classmethod
++    def _group_values_equal(cls, left: object, right: object) -> bool:
++        if isinstance(left, torch.Tensor) or isinstance(right, torch.Tensor):
++            compatible = (
++                isinstance(left, torch.Tensor)
++                and isinstance(right, torch.Tensor)
++                and left.shape == right.shape
++                and left.dtype == right.dtype
++                and left.device == right.device
++            )
++            if not compatible:
++                return False
++            # CUDA value comparison would synchronize the host once per chunk. Each subset
++            # starts from its own clone of the same metadata; commit the first result and only
++            # validate structural compatibility for CUDA tensor-valued fields. Snapshot/commit
++            # replaces tensor-valued group fields with clones, so identity-sensitive consumers
++            # must not retain references to those tensors; optimizer CUDA graphs are rejected.
++            return left.is_cuda or torch.equal(left, right)
++        if isinstance(left, dict) or isinstance(right, dict):
++            return (
++                isinstance(left, dict)
++                and isinstance(right, dict)
++                and left.keys() == right.keys()
++                and all(cls._group_values_equal(left[key], right[key]) for key in left)
++            )
++        if isinstance(left, (list, tuple)) or isinstance(right, (list, tuple)):
++            return (
++                isinstance(left, (list, tuple))
++                and isinstance(right, (list, tuple))
++                and len(left) == len(right)
++                and all(cls._group_values_equal(x, y) for x, y in zip(left, right))
++            )
++        try:
++            result = left == right
++        except (TypeError, ValueError):
++            return left is right
++        try:
++            return bool(result)
++        except (TypeError, ValueError):
++            return left is right
++
++    @classmethod
++    def _snapshot_group_metadata(cls, groups: Sequence[dict]) -> List[dict]:
++        return [
++            {key: cls._clone_group_value(value) for key, value in group.items() if key != "params"}
++            for group in groups
++        ]
++
++    def _make_subset_groups(
++        self, params: Sequence[torch.Tensor], base_group_metadata: Sequence[dict]
++    ) -> tuple[List[dict], List[tuple[int, dict]]]:
++        params_by_group = collections.defaultdict(list)
++        for param in params:
++            group_index = self._param_group_index_by_id.get(id(param))
++            if group_index is None:
++                raise RuntimeError(
++                    "optimizer parameter-group membership changed after offload setup"
++                )
++            params_by_group[group_index].append(param)
++
++        groups = []
++        indexed_groups = []
++        for group_index in sorted(params_by_group):
++            group = {
++                key: self._clone_group_value(value)
++                for key, value in base_group_metadata[group_index].items()
++            }
++            group["params"] = params_by_group[group_index]
++            groups.append(group)
++            indexed_groups.append((group_index, group))
++        return groups, indexed_groups
++
++    def _step_subset(
++        self,
++        params: Sequence[torch.Tensor],
++        original_groups: Sequence[dict],
++        base_group_metadata: Sequence[dict],
++        resulting_group_metadata: Dict[int, dict],
++    ) -> None:
++        groups, indexed_groups = self._make_subset_groups(params, base_group_metadata)
++        if not groups:
++            return
++        self.optimizer.param_groups = groups
++        try:
++            self.optimizer.step()
++            for group_index, group in indexed_groups:
++                metadata = self._snapshot_group_metadata([group])[0]
++                previous = resulting_group_metadata.get(group_index)
++                if previous is not None and not self._group_values_equal(previous, metadata):
++                    raise RuntimeError(
++                        "optimizer parameter-group updates differ across state chunks for "
++                        "metadata comparable without CUDA value synchronization; chunked "
++                        "optimizer state offload requires group-level updates to be independent "
++                        "of the parameter subset. CUDA tensor-valued fields are validated only "
++                        "by shape, dtype, and device"
++                    )
++                if previous is None:
++                    resulting_group_metadata[group_index] = metadata
++        finally:
++            self.optimizer.param_groups = original_groups
++
++    @torch.no_grad()
++    def step(self) -> None:
++        """Run the external optimizer over resident parameters and staged state chunks."""
++
++        if not self._selected_params:
++            self.optimizer.step()
++            return
++
++        self.prefetch_for_step()
++        self._wait_master_h2d()
++
++        original_groups = list(self.optimizer.param_groups)
++        base_group_metadata = self._snapshot_group_metadata(original_groups)
++        resulting_group_metadata: Dict[int, dict] = {}
++
++        try:
++            # Resident state needs no transfers and provides useful compute while the first
++            # selected chunk is being prefetched.
++            if self._resident_params:
++                self._step_subset(
++                    self._resident_params,
++                    original_groups,
++                    base_group_metadata,
++                    resulting_group_metadata,
++                )
++
++            current_prefetch = self._first_prefetch
++            self._first_prefetch = None
++            for chunk_index, chunk in enumerate(self._chunks):
++                if current_prefetch is None:
++                    current_prefetch = self._prefetch_state(chunk)
++                self._wait_state_prefetch(current_prefetch)
++
++                next_prefetch = None
++                if chunk_index + 1 < len(self._chunks):
++                    next_prefetch = self._prefetch_state(self._chunks[chunk_index + 1])
++
++                self._step_subset(
++                    chunk.params, original_groups, base_group_metadata, resulting_group_metadata
++                )
++                created_state = self._has_unregistered_cuda_state(chunk.params)
++                self._schedule_state_d2h(chunk.params)
++                if created_state:
++                    # External optimizers commonly allocate moments lazily on their first step.
++                    # That storage is not backed by the reusable pool yet, so drain this one-time
++                    # initialization copy before the next chunk to preserve the peak-memory bound.
++                    self._d2h_stream.synchronize()
++                current_prefetch = next_prefetch
++        finally:
++            self.optimizer.param_groups = original_groups
++            self._release_state_staging_slots()
++
++        for group_index, metadata in resulting_group_metadata.items():
++            original_group = original_groups[group_index]
++            for key in tuple(original_group):
++                if key != "params" and key not in metadata:
++                    del original_group[key]
++            original_group.update(metadata)
+diff --git a/megatron/core/optimizer/distrib_optimizer.py b/megatron/core/optimizer/distrib_optimizer.py
+index 6e093f96f..3b89ce1d9 100644
+--- a/megatron/core/optimizer/distrib_optimizer.py
++++ b/megatron/core/optimizer/distrib_optimizer.py
+@@ -604,6 +604,44 @@ class DistributedOptimizer(MixedPrecisionOptimizer):
+             self.optimizer.param_groups = [g["orig_group"] for g in self.opt_group_ranges]
+             self.optimizer.load_state_dict(self.optimizer.state_dict())
+ 
++        if (
++            self.config.chunked_optimizer_state_offload
++            and self.config.optimizer_state_offload_fraction > 0.0
++        ):
++            separate_master_params = []
++            optimizer_owned_master_dtypes = {}
++            if bool(getattr(self.optimizer, "master_weights", False)):
++                # Precision-aware FusedAdam creates optimizer-owned masters for every
++                # optimizer parameter, including native-fp32 DistributedOptimizer shards.
++                for group in itertools.chain(self.shard_float16_groups, self.shard_fp32_groups):
++                    for param in group:
++                        if not isinstance(param, torch.Tensor):
++                            continue
++                        master_dtype = (
++                            torch.int16
++                            if getattr(self.config, "store_param_remainders", False)
++                            and param.dtype == torch.bfloat16
++                            else self.config.main_params_dtype
++                        )
++                        optimizer_owned_master_dtypes[param] = master_dtype
++            else:
++                separate_master_params = [
++                    param
++                    for group in self.shard_fp32_from_float16_groups
++                    for param in group
++                    if isinstance(param, torch.Tensor)
++                ]
++            state_dtypes = (
++                (self.config.exp_avg_dtype, self.config.exp_avg_sq_dtype)
++                if self.config.use_precision_aware_optimizer
++                else (torch.float32, torch.float32)
++            )
++            self.enable_chunked_optimizer_state_offload(
++                master_params=separate_master_params,
++                state_dtypes=state_dtypes,
++                optimizer_owned_master_dtypes=optimizer_owned_master_dtypes,
++            )
++
+     def _get_model_param_range_map(self, param: torch.nn.Parameter):
+         """
+         Given a model param, get the index sub-range of the param that this
+@@ -833,9 +871,16 @@ class DistributedOptimizer(MixedPrecisionOptimizer):
+                     v["step"] = step.detach().clone()
+ 
+         # Optimizer.
+-        self.optimizer.load_state_dict(
+-            {"state": state_dict_state, "param_groups": state_dict_param_groups}
+-        )
++        optimizer_state_dict = {"state": state_dict_state, "param_groups": state_dict_param_groups}
++        if self._optimizer_state_offloader is None:
++            self.optimizer.load_state_dict(optimizer_state_dict)
++        else:
++            # The distributed checkpoint path has already allocated selected tensor
++            # states on CPU. Avoid Optimizer.load_state_dict's automatic cast to the
++            # parameter device, which would recreate the complete state on CUDA.
++            self._optimizer_state_offloader.load_state_dict_without_device_cast(
++                optimizer_state_dict
++            )
+ 
+         # Grad scaler.
+         if 'grad_scaler' not in state_dict:
+@@ -1169,6 +1214,14 @@ class DistributedOptimizer(MixedPrecisionOptimizer):
+         metadata: Optional[dict] = None,
+     ):
+         """
++        if self._optimizer_state_offloader is not None:
++            if is_loading:
++                self._optimizer_state_offloader.initialize_state_for_loading(
++                    self.init_state_fn, self.config
++                )
++            else:
++                self._optimizer_state_offloader.synchronize_for_checkpoint()
++
+         Chooses between 3 param state sharding implementations as requested by
+         `metadata['distrib_optim_sharding_type']`.
+ 
+@@ -1246,7 +1299,7 @@ class DistributedOptimizer(MixedPrecisionOptimizer):
+                 for k, v in state_dict.items()
+             }
+ 
+-        if is_loading:
++        if is_loading and self._optimizer_state_offloader is None:
+             # Call the distributed optimizer's specialized load_state_dict(),
+             # which conditionally skips re-allocating the optimizer's state if
+             # already initialized, which in turn reduces memory fragmentation.
+@@ -2414,6 +2467,9 @@ class DistributedOptimizer(MixedPrecisionOptimizer):
+         buffer, this method is responsible for copying the updated params
+         from the main shards into the correct position in the grad buffer.
+         """
++        self.ensure_master_weights_for_param_sync()
++        self.assert_master_weights_resident("_copy_main_params_to_model_params")
++
+         if self.is_stub_optimizer:
+             return
+ 
+@@ -2465,6 +2521,9 @@ class DistributedOptimizer(MixedPrecisionOptimizer):
+         param buffer is not mapped to model params for MXFP8 case.
+ 
+         """
++        self.ensure_master_weights_for_param_sync()
++        self.assert_master_weights_resident("_copy_main_params_to_param_buffer")
++
+         for shard_main_group, model_group in zip(
+             self.shard_fp32_from_float16_groups, self.model_float16_groups
+         ):
+@@ -2526,6 +2585,9 @@ class DistributedOptimizer(MixedPrecisionOptimizer):
+         the model params. This copy does not make use of the grad buffer as
+         an intermediary.
+         """
++        self.ensure_master_weights_for_param_sync()
++        self.assert_master_weights_resident("_copy_model_params_to_main_params")
++
+         if isinstance(self.optimizer, HybridDeviceOptimizer):
+             self.optimizer.update_fp32_param_by_new_param()
+             return
+diff --git a/megatron/core/optimizer/layer_wise_optimizer.py b/megatron/core/optimizer/layer_wise_optimizer.py
+index de4396a5b..ef8607ec6 100644
+--- a/megatron/core/optimizer/layer_wise_optimizer.py
++++ b/megatron/core/optimizer/layer_wise_optimizer.py
+@@ -80,8 +80,77 @@ class LayerWiseDistributedOptimizer(ChainedOptimizer):
+                     opt, config, None, init_state_fn_list[i] if init_state_fn_list else None
+                 )
+ 
++        if (
++            config.chunked_optimizer_state_offload
++            and config.optimizer_state_offload_fraction > 0.0
++        ):
++            # Deferred import: muon.py imports this module at load time.
++            from .muon import TensorParallelMuon
++
++            offload_children = []
++            skipped_children = 0
++            state_dtypes = (torch.float32,)
++            for optimizer in optimizers:
++                raw_optimizer = getattr(optimizer, 'optimizer', None)
++                if raw_optimizer is None:
++                    continue
++                # Backport divergence from upstream #6244: this snapshot's dist_muon chain
++                # holds the TensorParallelMuon child plus Adam children (embeddings, norms,
++                # router). Upstream routes Adam through a sibling DistributedOptimizer and
++                # rejects non-Muon children here; we keep them resident on GPU instead.
++                if not isinstance(raw_optimizer, TensorParallelMuon):
++                    skipped_children += 1
++                    continue
++                # The chunk plan below assumes exactly the state schema of
++                # TensorParallelMuon: one fp32 full-size momentum. Reject subclasses rather
++                # than silently underestimating their tensor-state window.
++                assert type(raw_optimizer) is TensorParallelMuon, (
++                    "LayerWise chunked optimizer state offload currently supports exactly "
++                    "TensorParallelMuon with one fp32 full-size momentum tensor; got "
++                    f"{type(raw_optimizer).__name__}"
++                )
++                # Whole-parameter sharding can leave this rank with an optimizer object but
++                # no locally owned Muon parameters. Preserve the no-offloader path for it.
++                if not any(group["params"] for group in raw_optimizer.param_groups):
++                    continue
++                fp32_groups = getattr(optimizer, 'fp32_from_float16_groups', None)
++                assert fp32_groups is not None, (
++                    "chunked optimizer state offload on the Muon child requires bf16 "
++                    "training (Float16 wrapper master weights); fp32 masters would alias "
++                    "the live model parameters"
++                )
++                master_params = [param for group in fp32_groups for param in group]
++                offload_children.append((optimizer, master_params))
++
++            assert len(offload_children) <= 1, (
++                "LayerWise chunked optimizer state offload assumes at most one non-empty "
++                f"TensorParallelMuon child; got {len(offload_children)}"
++            )
++            for optimizer, master_params in offload_children:
++                optimizer.enable_chunked_optimizer_state_offload(
++                    master_params=master_params, state_dtypes=state_dtypes
++                )
++                # No fp8 param gather in this stack, so masters never have to survive a
++                # pre-forward gather; only the state prefetch is deferred to step time.
++                optimizer.set_optimizer_state_offload_deferred_lifecycle(
++                    state_prefetch_to_step=optimizer._optimizer_state_offloader is not None,
++                    master_offload_for_param_sync=False,
++                )
++            if skipped_children:
++                logger.info(
++                    "LayerWise chunked optimizer state offload: enabled on "
++                    f"{len(offload_children)} Muon child(ren); {skipped_children} non-Muon "
++                    "child(ren) keep optimizer state resident on GPU"
++                )
++
+         super().__init__(optimizers)
+ 
++        self._managed_optimizer_state_offload_indices = tuple(
++            index
++            for index, optimizer in enumerate(self.chained_optimizers)
++            if getattr(optimizer, '_optimizer_state_offloader', None) is not None
++        )
++
+         # TODO(kunlun, deyuf): potential future perf optimization
+         # since allreduce is unchanged and handled by megatron DDP, they're already in
+         # contiguous gbuf. So instead of shard param by layer randomly, we can shard by
+@@ -218,6 +287,33 @@ class LayerWiseDistributedOptimizer(ChainedOptimizer):
+             use_decoupled_grad=self.config.use_precision_aware_optimizer_no_fp8_or_ds_fp8,
+         )
+ 
++    def _managed_optimizer_state_offload_child_indices(self) -> tuple:
++        """Return child indices that execute through a chunked state offloader."""
++
++        if (
++            not self.config.chunked_optimizer_state_offload
++            or self.config.optimizer_state_offload_fraction == 0.0
++        ):
++            return ()
++        return self._managed_optimizer_state_offload_indices
++
++    def prefetch_optimizer_state_for_gradient_finalization(self) -> None:
++        """Prefetch all masters and the managed Muon child's first state chunk."""
++
++        self.prefetch_optimizer_master_weights_for_step()
++        managed_indices = self._managed_optimizer_state_offload_child_indices()
++        if managed_indices:
++            self.chained_optimizers[managed_indices[0]].prefetch_optimizer_state_for_step()
++
++    def _before_child_step(self, optimizer_idx: int) -> None:
++        """Ensure the managed Muon child's state is prefetched before child steps."""
++
++        managed_indices = self._managed_optimizer_state_offload_child_indices()
++        if not managed_indices:
++            return
++        if optimizer_idx == 0:
++            self.chained_optimizers[managed_indices[0]].prefetch_optimizer_state_for_step()
++
+     @torch.no_grad()
+     def step(self):  # type: ignore[no-untyped-def]
+         """step function for layer-wise optimizer."""
 diff --git a/megatron/core/optimizer/muon.py b/megatron/core/optimizer/muon.py
 index b6af7a3e1..5044bf00c 100644
 --- a/megatron/core/optimizer/muon.py
@@ -478,8 +1736,393 @@ index b6af7a3e1..5044bf00c 100644
      # set config here to:
      # 1. get adam for rest of layer
      # 2. avoid ChainedOptimizer check fail that assert all optimizers are same kind
+diff --git a/megatron/core/optimizer/optimizer.py b/megatron/core/optimizer/optimizer.py
+index 8d6fb6513..6e198ef48 100644
+--- a/megatron/core/optimizer/optimizer.py
++++ b/megatron/core/optimizer/optimizer.py
+@@ -47,6 +47,7 @@ from ..dist_checkpointing.utils import add_prefix_for_sharding
+ from ..transformer.module import param_is_not_shared
+ from ..utils import log_single_rank
+ from .clip_grads import clip_grad_by_total_norm_fp32, count_zeros_fp32, get_grad_norm_fp32
++from .cpu_offloading.chunked_optimizer_state_offload import ChunkedOptimizerStateOffloader
+ from .grad_scaler import MegatronGradScaler
+ from .optimizer_config import OptimizerConfig
+ 
+@@ -105,6 +106,12 @@ class MegatronOptimizer(ABC):
+         init_state_fn (Callable, optional): function to initialize state in the optimizer.
+     """
+ 
++    # ChainedOptimizer intentionally does not call this base class's constructor.
++    # Keep inherited offload helpers safe when they are invoked on that wrapper.
++    _optimizer_state_offloader: Optional[ChunkedOptimizerStateOffloader] = None
++    _defer_optimizer_state_prefetch_to_step = False
++    _defer_optimizer_master_offload_for_param_sync = False
++
+     def __init__(
+         self,
+         optimizer: torch.optim.Optimizer,
+@@ -120,6 +127,110 @@ class MegatronOptimizer(ABC):
+             )
+         self.config = config
+         self.init_state_fn = init_state_fn
++        self._optimizer_state_offloader: Optional[ChunkedOptimizerStateOffloader] = None
++        self._defer_optimizer_state_prefetch_to_step = False
++        self._defer_optimizer_master_offload_for_param_sync = False
++
++    def enable_chunked_optimizer_state_offload(
++        self,
++        master_params: List[torch.Tensor],
++        state_dtypes: Tuple[torch.dtype, ...],
++        optimizer_owned_master_dtypes: Optional[Dict[torch.Tensor, torch.dtype]] = None,
++        d2h_stream: Optional[torch.cuda.Stream] = None,
++        h2d_stream: Optional[torch.cuda.Stream] = None,
++    ) -> None:
++        """Enable chunked state execution for this wrapped optimizer (PR #6244 backport)."""
++
++        if (
++            self.optimizer is None
++            or not self.config.chunked_optimizer_state_offload
++            or self.config.optimizer_state_offload_fraction == 0.0
++        ):
++            return
++        self._optimizer_state_offloader = ChunkedOptimizerStateOffloader(
++            optimizer=self.optimizer,
++            master_params=master_params,
++            chunk_size_bytes=self.config.optimizer_state_offload_chunk_size_mb * 1024 * 1024,
++            offload_fraction=self.config.optimizer_state_offload_fraction,
++            state_dtypes=state_dtypes,
++            optimizer_owned_master_dtypes=optimizer_owned_master_dtypes,
++            d2h_stream=d2h_stream,
++            h2d_stream=h2d_stream,
++        )
++
++    def set_optimizer_state_offload_deferred_lifecycle(
++        self, *, state_prefetch_to_step: bool, master_offload_for_param_sync: bool
++    ) -> None:
++        """Configure deferred work for an optimizer managed by an outer chain."""
++
++        if (
++            state_prefetch_to_step or master_offload_for_param_sync
++        ) and self._optimizer_state_offloader is None:
++            raise RuntimeError("deferred optimizer-state offload requires an enabled offloader")
++        self._defer_optimizer_state_prefetch_to_step = state_prefetch_to_step
++        self._defer_optimizer_master_offload_for_param_sync = master_offload_for_param_sync
++
++    def offload_optimizer_state_for_forward(self, offload_master: bool = True) -> None:
++        """Begin moving optimizer tensor state and, optionally, master weights to CPU."""
++
++        if self._optimizer_state_offloader is not None:
++            self._optimizer_state_offloader.offload_for_forward(offload_master=offload_master)
++
++    def prefetch_optimizer_state_for_step(self) -> None:
++        """Prefetch master weights and the first optimizer-state chunk."""
++
++        if self._optimizer_state_offloader is not None:
++            self._optimizer_state_offloader.prefetch_for_step()
++
++    def prefetch_optimizer_state_for_gradient_finalization(self) -> None:
++        """Start the optimizer prefetch that may overlap gradient finalization."""
++
++        self.prefetch_optimizer_state_for_step()
++
++    def prefetch_optimizer_master_weights_for_step(self) -> None:
++        """Prefetch master weights without restoring an optimizer-state chunk."""
++
++        if self._optimizer_state_offloader is not None:
++            self._optimizer_state_offloader.prefetch_master_for_step()
++
++    def ensure_master_weights_for_param_sync(self) -> None:
++        """Restore all master weights needed by an explicit parameter staging pass."""
++
++        if self._optimizer_state_offloader is not None:
++            self._optimizer_state_offloader.ensure_master_for_param_sync()
++
++    def ensure_master_weights_for_pre_forward_param_sync(self) -> None:
++        """Restore masters only when this optimizer requires pre-forward parameter sync."""
++
++        if self.optimizer_state_offload_requires_pre_forward_param_sync():
++            self.ensure_master_weights_for_param_sync()
++
++    def assert_master_weights_resident(self, operation: str) -> None:
++        """Assert that an external MCore copy can safely read or write master weights."""
++
++        if self._optimizer_state_offloader is not None:
++            self._optimizer_state_offloader.assert_master_weights_resident(operation)
++
++    def synchronize_optimizer_state_for_checkpoint(self) -> None:
++        """Make CPU canonical optimizer tensors stable for checkpointing."""
++
++        if self._optimizer_state_offloader is not None:
++            self._optimizer_state_offloader.synchronize_for_checkpoint()
++
++    def optimizer_state_offload_requires_pre_forward_param_sync(self) -> bool:
++        """Return whether a parameter gather must consume masters before their D2H copy."""
++
++        return self._defer_optimizer_master_offload_for_param_sync
++
++    def start_param_sync_for_bucket_group_subset(self, force_sync: bool = False) -> None:
++        """Synchronize an optimizer-owned DDP bucket subset, if the optimizer has one."""
++
++        if self.optimizer_state_offload_requires_pre_forward_param_sync():
++            raise NotImplementedError(
++                f"{type(self).__name__} must override "
++                "start_param_sync_for_bucket_group_subset when it requires pre-forward "
++                "optimizer parameter synchronization"
++            )
+ 
+     def get_parameters(self) -> List[torch.nn.Parameter]:
+         """
+@@ -524,6 +635,15 @@ class MixedPrecisionOptimizer(MegatronOptimizer):
+         """Pre-processing gradients before the optimizer step, returns whether inf/nan is found."""
+         timers = self.config.timers
+ 
++        # The training loop starts this earlier to overlap H2D with gradient finalization.
++        # Keep this idempotent fallback so direct optimizer.step() callers restore the master
++        # parameter device before assigning CUDA gradients to it.
++        if self._optimizer_state_offloader is not None:
++            if self._defer_optimizer_state_prefetch_to_step:
++                self._optimizer_state_offloader.prefetch_master_for_step()
++            else:
++                self._optimizer_state_offloader.prefetch_for_step()
++
+         # Copy gradients from model params to main params.
+         if timers is not None:
+             timers('optimizer-copy-to-main-grad', log_level=1).start(
+@@ -565,7 +685,10 @@ class MixedPrecisionOptimizer(MegatronOptimizer):
+                 barrier=self.config.barrier_with_L1_time
+             )
+         if not self.is_stub_optimizer:
+-            self.optimizer.step()
++            if self._optimizer_state_offloader is None:
++                self.optimizer.step()
++            else:
++                self._optimizer_state_offloader.step()
+         if timers is not None:
+             timers('optimizer-inner-step').stop()
+ 
+@@ -771,6 +894,9 @@ class Float16OptimizerWithFloat16Params(MixedPrecisionOptimizer):
+                 model_param.grad = model_param.main_grad
+ 
+     def _copy_main_params_to_model_params(self):
++        self.ensure_master_weights_for_param_sync()
++        self.assert_master_weights_resident("_copy_main_params_to_model_params")
++
+         # Only needed for the float16 params.
+         model_data, main_data = self._get_model_and_main_params_data_float16()
+         _multi_tensor_copy_this_to_that(
+@@ -779,6 +905,8 @@ class Float16OptimizerWithFloat16Params(MixedPrecisionOptimizer):
+ 
+     def _copy_model_params_to_main_params(self, state_dict=None):
+         assert state_dict is None, "Initialize main params from state dict is not supported"
++        self.ensure_master_weights_for_param_sync()
++        self.assert_master_weights_resident("_copy_model_params_to_main_params")
+         # Only needed for the float16 params.
+         model_data, main_data = self._get_model_and_main_params_data_float16()
+         _multi_tensor_copy_this_to_that(
+@@ -804,7 +932,14 @@ class Float16OptimizerWithFloat16Params(MixedPrecisionOptimizer):
+     ):
+ 
+         if is_loading:
+-            self.init_state_fn(self.optimizer, self.config)
++            if self._optimizer_state_offloader is not None:
++                self._optimizer_state_offloader.initialize_state_for_loading(
++                    self.init_state_fn, self.config
++                )
++            else:
++                self.init_state_fn(self.optimizer, self.config)
++        else:
++            self.synchronize_optimizer_state_for_checkpoint()
+ 
+         state_dict = self.state_dict()
+ 
+@@ -859,7 +994,12 @@ class Float16OptimizerWithFloat16Params(MixedPrecisionOptimizer):
+         state_dict[optimizer_key]['param_groups'] = self._filter_and_reorder_param_groups(
+             self.optimizer.param_groups, state_dict[optimizer_key]['param_groups']
+         )
+-        self.optimizer.load_state_dict(state_dict[optimizer_key])
++        if self._optimizer_state_offloader is None:
++            self.optimizer.load_state_dict(state_dict[optimizer_key])
++        else:
++            self._optimizer_state_offloader.load_state_dict_without_device_cast(
++                state_dict[optimizer_key]
++            )
+ 
+         # Grad scaler.
+         if 'grad_scaler' not in state_dict:
+@@ -943,6 +1083,11 @@ class FP32Optimizer(MegatronOptimizer):
+         """Step the optimizer with ready gradients, return successful."""
+         if self.is_stub_optimizer:
+             return True
++        if self._optimizer_state_offloader is not None:
++            raise RuntimeError(
++                "FP32Optimizer.step_with_ready_grads does not support chunked optimizer state "
++                "offload"
++            )
+         timers = self.config.timers
+ 
+         # Update parameters.
+@@ -1102,6 +1247,27 @@ class ChainedOptimizer(MegatronOptimizer):
+         else:
+             self.is_stub_optimizer = True
+         self.chained_optimizers = chained_optimizers
++        self._share_optimizer_state_offload_streams()
++
++    def _share_optimizer_state_offload_streams(self) -> None:
++        """Serialize all nested offload managers on one D2H/H2D stream pair."""
++
++        managers = []
++
++        def collect(current_optimizer: MegatronOptimizer) -> None:
++            manager = getattr(current_optimizer, '_optimizer_state_offloader', None)
++            if manager is not None:
++                managers.append(manager)
++            for child in getattr(current_optimizer, 'chained_optimizers', ()):
++                collect(child)
++
++        collect(self)
++        if len(managers) < 2:
++            return
++
++        d2h_stream, h2d_stream = managers[0].transfer_streams
++        for manager in managers[1:]:
++            manager.use_transfer_streams(d2h_stream, h2d_stream)
+ 
+     @property
+     def optimizer(self):
+@@ -1133,6 +1299,69 @@ class ChainedOptimizer(MegatronOptimizer):
+         for optimizer in self.chained_optimizers:
+             optimizer.zero_grad(set_to_none)
+ 
++    def offload_optimizer_state_for_forward(self, offload_master: bool = True) -> None:
++        """Begin state and optional master D2H on every optimizer in the chain."""
++
++        for optimizer in self.chained_optimizers:
++            optimizer.offload_optimizer_state_for_forward(offload_master=offload_master)
++
++    def prefetch_optimizer_state_for_step(self) -> None:
++        """Eagerly prefetch state/master data for every optimizer in the chain."""
++
++        for optimizer in self.chained_optimizers:
++            optimizer.prefetch_optimizer_state_for_step()
++
++    def prefetch_optimizer_state_for_gradient_finalization(self) -> None:
++        """Start each child's gradient-finalization prefetch policy."""
++
++        for optimizer in self.chained_optimizers:
++            optimizer.prefetch_optimizer_state_for_gradient_finalization()
++
++    def prefetch_optimizer_master_weights_for_step(self) -> None:
++        """Prefetch only master weights for every optimizer in the chain."""
++
++        for optimizer in self.chained_optimizers:
++            optimizer.prefetch_optimizer_master_weights_for_step()
++
++    def ensure_master_weights_for_param_sync(self) -> None:
++        """Restore all child master weights for a general parameter staging pass."""
++
++        for optimizer in self.chained_optimizers:
++            optimizer.ensure_master_weights_for_param_sync()
++
++    def ensure_master_weights_for_pre_forward_param_sync(self) -> None:
++        """Restore only children that require pre-forward parameter synchronization."""
++
++        for optimizer in self.chained_optimizers:
++            optimizer.ensure_master_weights_for_pre_forward_param_sync()
++
++    def assert_master_weights_resident(self, operation: str) -> None:
++        """Assert that every child can safely access its master weights."""
++
++        for optimizer in self.chained_optimizers:
++            optimizer.assert_master_weights_resident(operation)
++
++    def synchronize_optimizer_state_for_checkpoint(self) -> None:
++        """Make every child optimizer's CPU canonical state checkpoint-safe."""
++
++        for optimizer in self.chained_optimizers:
++            optimizer.synchronize_optimizer_state_for_checkpoint()
++
++    def optimizer_state_offload_requires_pre_forward_param_sync(self) -> bool:
++        """Return whether any child must gather parameters before master offload."""
++
++        return any(
++            optimizer.optimizer_state_offload_requires_pre_forward_param_sync()
++            for optimizer in self.chained_optimizers
++        )
++
++    def start_param_sync_for_bucket_group_subset(self, force_sync: bool = False) -> None:
++        """Synchronize only child subsets that require masters before offload."""
++
++        for optimizer in self.chained_optimizers:
++            if optimizer.optimizer_state_offload_requires_pre_forward_param_sync():
++                optimizer.start_param_sync_for_bucket_group_subset(force_sync=force_sync)
++
+     def get_loss_scale(self):
+         if self.chained_optimizers:
+             return self.chained_optimizers[0].get_loss_scale()
+@@ -1237,11 +1466,15 @@ class ChainedOptimizer(MegatronOptimizer):
+ 
+         return found_inf_flag
+ 
++    def _before_child_step(self, optimizer_idx: int) -> None:
++        """Hook for subclasses to enqueue work immediately before a child optimizer step."""
++
+     @torch.no_grad()
+     def step_with_ready_grads(self) -> bool:
+         """Step the optimizer with ready gradients, return successful."""
+         success = True
+         for optimizer_idx, optimizer in enumerate(self.chained_optimizers):
++            self._before_child_step(optimizer_idx)
+             success &= optimizer.step_with_ready_grads()
+             if self.config.overlap_param_gather_with_optimizer_step and optimizer_idx == 0:
+                 assert success
+diff --git a/megatron/core/optimizer/optimizer_config.py b/megatron/core/optimizer/optimizer_config.py
+index 8692d1e9b..c6ba62fcf 100644
+--- a/megatron/core/optimizer/optimizer_config.py
++++ b/megatron/core/optimizer/optimizer_config.py
+@@ -193,6 +193,20 @@ class OptimizerConfig:
+     pin_cpu_params: bool = True
+     """If True, pin the optimizer parameters to CPU memory."""
+ 
++    # --- chunked optimizer-state offload (backport of upstream PR #6244) ---
++    chunked_optimizer_state_offload: bool = False
++    """Keep selected optimizer tensor states and master weights on CPU between updates."""
++
++    optimizer_state_offload_chunk_size_mb: int = 0
++    """Target GPU staging-window size for optimizer tensor state, in MiB.
++
++    Zero restores all selected tensor state together. Master weights are restored in one full
++    window and are not bounded by this value.
++    """
++
++    optimizer_state_offload_fraction: float = 1.0
++    """Fraction of optimizer parameter bundles whose state and master weights are offloaded."""
++
+     ################
+     # Miscellaneous
+     ################
+@@ -214,6 +228,20 @@ class OptimizerConfig:
+     def __post_init__(self):
+         """Check the validity of the config."""
+ 
++        # --- chunked optimizer-state offload validation (PR #6244 backport, adapted:
++        # muon-mode asserts live at the integration site because this snapshot's
++        # get_megatron_muon_optimizer rewrites config.optimizer to 'adam') ---
++        assert (
++            self.optimizer_state_offload_chunk_size_mb >= 0
++        ), "optimizer_state_offload_chunk_size_mb must be non-negative"
++        assert (
++            0.0 <= self.optimizer_state_offload_fraction <= 1.0
++        ), "optimizer_state_offload_fraction must be in [0.0, 1.0]"
++        if self.chunked_optimizer_state_offload and self.optimizer_state_offload_fraction > 0.0:
++            assert (
++                not self.optimizer_cpu_offload
++            ), "chunked_optimizer_state_offload and optimizer_cpu_offload are mutually exclusive"
++
+         # The following condition is used to avoid repetition in distrib_optimizer.py.
+         # This is because in distrib_optimizer.py, the process to handle parameters are
+         # different for different training precision settings. FP8 cases require different
 diff --git a/megatron/training/arguments.py b/megatron/training/arguments.py
-index 757f2b63d..a952a6984 100644
+index 757f2b63d..ef0a3574b 100644
 --- a/megatron/training/arguments.py
 +++ b/megatron/training/arguments.py
 @@ -544,9 +544,44 @@ def validate_args(args, defaults={}):
@@ -536,7 +2179,52 @@ index 757f2b63d..a952a6984 100644
          if args.lr_warmup_fraction is not None:
              assert args.lr_warmup_iters == 0, \
                  'can only specify one of lr-warmup-fraction and lr-warmup-iters'
-@@ -2143,6 +2180,13 @@ def _add_training_args(parser):
+@@ -1294,6 +1331,44 @@ def validate_args(args, defaults={}):
+     if args.multi_latent_attention:
+         assert not args.group_query_attention, "Group query attention is mutually exclusive with multi latent attention."
+ 
++    # Chunked optimizer state offload (PR #6244 backport). A zero fraction disables the
++    # feature entirely, so none of the checkpoint/CUDA-graph restrictions apply then.
++    if args.chunked_optimizer_state_offload and args.optimizer_state_offload_fraction > 0.0:
++        if args.optimizer_state_offload_chunk_size_mb == 0:
++            warn_rank_0(
++                "optimizer state offload is enabled with chunk size 0, so all "
++                "selected optimizer tensor state is temporarily restored together. Set "
++                "--optimizer-state-offload-chunk-size-mb to a positive value to bound the "
++                "tensor-state GPU window. Selected master weights always use one full "
++                "restore window regardless of chunk size."
++            )
++        assert args.optimizer != 'muon', (
++            "chunked optimizer state offload with a Muon optimizer requires the "
++            "LayerWise distributed optimizer — use --optimizer dist_muon; plain 'muon' "
++            "never enables the offloader"
++        )
++        assert args.optimizer == 'dist_muon' or args.use_distributed_optimizer, (
++            "chunked optimizer state offload is only enabled through the LayerWise "
++            "distributed optimizer (--optimizer dist_muon) or the distributed optimizer "
++            "(--use-distributed-optimizer); any other path would silently keep optimizer "
++            "state on GPU"
++        )
++        if not args.no_save_optim or not args.no_load_optim:
++            assert args.ckpt_format == 'torch_dist', (
++                "chunked optimizer state offload requires --ckpt-format torch_dist when "
++                "optimizer state is saved or loaded because its sharded load hooks preserve "
++                "CPU canonical storage"
++            )
++        if not args.no_save_optim:
++            assert not args.async_save, (
++                "chunked optimizer state offload does not support --async-save when optimizer "
++                "state is saved because the background writer can retain tensors backed by "
++                "reusable pinned CPU buffers"
++            )
++        assert args.cuda_graph_impl != 'full_iteration', (
++            "chunked optimizer state offload does not support full-iteration CUDA graphs"
++        )
++
+     # Print arguments.
+     _print_args("arguments", args)
+ 
+@@ -2143,6 +2218,13 @@ def _add_training_args(parser):
                         ' (1024 - 16) / 8 = 126 intervals will increase'
                         'the batch size linearly to 1024. In each interval'
                         'we will use approximately 300000 / 126 = 2380 samples.')
@@ -550,7 +2238,33 @@ index 757f2b63d..a952a6984 100644
      group.add_argument('--decrease-batch-size-if-needed', action='store_true', default=False,
                         help='If set, decrease batch size if microbatch_size * dp_size'
                         'does not divide batch_size. Useful for KSO (Keep Soldiering On)'
-@@ -2994,6 +3038,15 @@ def _add_data_args(parser):
+@@ -2367,6 +2449,25 @@ def _add_training_args(parser):
+                        help='Disable pinning of CPU memory for gradients.')
+     group.add_argument('--no-pin-cpu-params', action='store_false', dest='pin_cpu_params',
+                        help='Disable pinning of CPU memory for parameters.')
++    group.add_argument('--chunked-optimizer-state-offload', action='store_true',
++                       help='Keep selected optimizer tensor states and master weights in CPU '
++                       'memory between updates. GPU tensor-state updates run in bounded chunks, '
++                       'while selected master weights use one full restore window. '
++                       '(PR #6244 backport; supported paths: --optimizer dist_muon or '
++                       '--use-distributed-optimizer.)')
++    group.add_argument('--optimizer-state-offload-chunk-size-mb', type=int, default=0,
++                       help='Target size of each optimizer tensor-state staging buffer in MiB. '
++                       'Two buffers can be live for overlap (roughly 2x this value per active '
++                       'offload manager). Zero temporarily restores all selected tensor state '
++                       'for one full GPU update. A single atomic parameter state may exceed '
++                       'this soft target and is reported at runtime. This value does not bound '
++                       'the selected master-weight window, which is always restored in full.')
++    group.add_argument('--optimizer-state-offload-fraction', type=float, default=1.0,
++                       help='Fraction of optimizer parameter bundles to offload. Selected '
++                       'bundles always include both tensor state and any separate master '
++                       'weight. This is distinct from --optimizer-offload-fraction, which '
++                       'belongs to --optimizer-cpu-offload; the modes are mutually exclusive. '
++                       'Zero disables optimizer state offload even when its flag is set.')
+     group.add_argument('--dataloader-type', type=str, default=None,
+                        choices=['single', 'cyclic', 'external'],
+                        help='Single pass vs multiple pass data loader')
+@@ -2994,6 +3095,15 @@ def _add_data_args(parser):
                         '(3) a list of prefixes e.g. prefix1 prefix2. '
                         'For (3), weights are inferred from the lengths of the contributing datasets. '
                         'This argument is exclusive to the other independent --*-data-path arguments.')
@@ -566,6 +2280,52 @@ index 757f2b63d..a952a6984 100644
      group.add_argument('--split', type=str, default=None,
                         help='Comma-separated list of proportions for training,'
                         ' validation, and test split. For example the split '
+diff --git a/megatron/training/checkpointing.py b/megatron/training/checkpointing.py
+index feacccba1..7d98f99e4 100644
+--- a/megatron/training/checkpointing.py
++++ b/megatron/training/checkpointing.py
+@@ -426,6 +426,28 @@ def save_checkpoint(iteration, model, optimizer, opt_param_scheduler, num_floati
+     start_ckpt = time()
+     args = get_args()
+ 
++    # Chunked optimizer state offload (PR #6244 backport): keep the safety invariant even
++    # when arguments came through a validation path that does not perform the flat CLI
++    # cross-check, or were mutated after startup.
++    optimizer_config = getattr(optimizer, "config", None) if optimizer is not None else None
++    chunked_optimizer_state_offload = bool(
++        optimizer_config is not None
++        and getattr(optimizer_config, "chunked_optimizer_state_offload", False)
++        and getattr(optimizer_config, "optimizer_state_offload_fraction", 1.0) > 0.0
++    )
++    if chunked_optimizer_state_offload and not args.no_save_optim:
++        if args.async_save:
++            raise RuntimeError(
++                "chunked optimizer state offload does not support --async-save when optimizer "
++                "state is saved because reusable pinned CPU buffers cannot be handed to a "
++                "background writer"
++            )
++        if getattr(args, "ckpt_format", None) != "torch_dist":
++            raise RuntimeError(
++                "chunked optimizer state offload requires --ckpt-format torch_dist; checkpoint "
++                "arguments may have overwritten the startup setting during resume"
++            )
++
+     if args.async_save and not is_empty_async_queue():
+         print_rank_0('WARNING: Starting a checkpoint save before previous has finished. Consider increasing the checkpoint interval.')
+ 
+@@ -498,7 +520,11 @@ def save_checkpoint(iteration, model, optimizer, opt_param_scheduler, num_floati
+             optimizer.save_parameter_state(optim_checkpoint_name)
+     
+     # LayerWiseDistributedOptimizer save optimizer state to file on different ranks
+-    if getattr(args, "optimizer", "adam").startswith("dist_") and args.ckpt_format == 'torch':
++    if (
++        getattr(args, "optimizer", "adam").startswith("dist_")
++        and not args.no_save_optim
++        and args.ckpt_format == 'torch'
++    ):
+         dp_rank = mpu.get_data_parallel_rank()
+         optim_checkpoint_name = os.path.join(os.path.dirname(checkpoint_name), f"layer_wise_optimizer_{dp_rank}.pt")
+         ensure_directory_exists(optim_checkpoint_name)
 diff --git a/megatron/training/global_vars.py b/megatron/training/global_vars.py
 index ec402263d..2d0354462 100644
 --- a/megatron/training/global_vars.py
@@ -579,7 +2339,7 @@ index ec402263d..2d0354462 100644
      if build_tokenizer:
          _ = _build_tokenizer(args)
 diff --git a/megatron/training/training.py b/megatron/training/training.py
-index c29c48d4c..a02cb0ea9 100644
+index c29c48d4c..dcac80e74 100644
 --- a/megatron/training/training.py
 +++ b/megatron/training/training.py
 @@ -932,9 +932,32 @@ def update_train_iters(args):
@@ -616,6 +2376,1882 @@ index c29c48d4c..a02cb0ea9 100644
      else:
          # Sample based training with rampup batch size.
          iterations = 0
+@@ -1363,13 +1386,81 @@ def train_step(forward_step_func, data_iterator, model, optimizer, opt_param_sch
+     args = get_args()
+     timers = get_timers()
+ 
++    # Chunked optimizer state offload (PR #6244 backport).
++    optimizer_config = getattr(optimizer, 'config', None)
++    chunked_optimizer_state_offload = bool(
++        optimizer_config is not None
++        and getattr(optimizer_config, 'chunked_optimizer_state_offload', False)
++        and getattr(optimizer_config, 'optimizer_state_offload_fraction', 1.0) > 0.0
++    )
++    pre_forward_param_sync_before_master_offload = (
++        chunked_optimizer_state_offload
++        and optimizer.optimizer_state_offload_requires_pre_forward_param_sync()
++    )
++    delay_master_offload_for_param_buffer = (
++        chunked_optimizer_state_offload
++        and args.reuse_grad_buf_for_mxfp8_param_ag
++        and args.overlap_param_gather
++    )
++    if chunked_optimizer_state_offload:
++        # Prefetch masters and the first state chunk as late as possible so H2D overlaps
++        # gradient finalization. Preserve custom hooks and avoid wrapping more than once.
++        finalize_model_grads_func = getattr(config, 'finalize_model_grads_func', None)
++        if (
++            getattr(
++                finalize_model_grads_func,
++                '_chunked_optimizer_state_offload_wrapped_optimizer',
++                None,
++            )
++            is not optimizer
++        ):
++            base_finalize_model_grads_func = getattr(
++                finalize_model_grads_func,
++                '_chunked_optimizer_state_offload_base_finalize_model_grads_func',
++                None,
++            )
++            if base_finalize_model_grads_func is None:
++                base_finalize_model_grads_func = finalize_model_grads_func or finalize_model_grads
++
++            def finalize_model_grads_with_state_reload(*fmg_args, **fmg_kwargs):
++                optimizer.prefetch_optimizer_state_for_gradient_finalization()
++                return base_finalize_model_grads_func(*fmg_args, **fmg_kwargs)
++
++            setattr(
++                finalize_model_grads_with_state_reload,
++                '_chunked_optimizer_state_offload_wrapped_optimizer',
++                optimizer,
++            )
++            setattr(
++                finalize_model_grads_with_state_reload,
++                '_chunked_optimizer_state_offload_base_finalize_model_grads_func',
++                base_finalize_model_grads_func,
++            )
++            config.finalize_model_grads_func = finalize_model_grads_with_state_reload
++
+     rerun_state_machine = get_rerun_state_machine()
+     while rerun_state_machine.should_run_forward_backward(data_iterator):
++        # Start D2H before zeroing gradients. In the MXFP8 staging path, updated masters
++        # remain readable until their delayed D2H after the main-param copy below.
++        if chunked_optimizer_state_offload and not pre_forward_param_sync_before_master_offload:
++            optimizer.offload_optimizer_state_for_forward(
++                offload_master=not delay_master_offload_for_param_buffer
++            )
++
+         # Set grad to zero.
+         for model_chunk in model:
+             model_chunk.zero_grad_buffer()
+         optimizer.zero_grad()
+ 
++        if pre_forward_param_sync_before_master_offload:
++            # A pre-forward parameter gather consumes fp32 masters. Finish the normally
++            # overlapped gather after grad-buffer reset, then start the master D2H.
++            optimizer.ensure_master_weights_for_pre_forward_param_sync()
++            optimizer.start_param_sync_for_bucket_group_subset(force_sync=True)
++            optimizer.offload_optimizer_state_for_forward(
++                offload_master=not delay_master_offload_for_param_buffer
++            )
++
+         if has_nvidia_modelopt:
+             # [ModelOpt]: Pipeline-parallel Distillation stacks student and teacher tensors
+             adjust_tensor_shapes_fn = get_tensor_shapes_adjust_fn_for_distillation(
+@@ -1386,6 +1477,11 @@ def train_step(forward_step_func, data_iterator, model, optimizer, opt_param_sch
+                 if isinstance(optim_instance, DistributedOptimizer):
+                     optim_instance._copy_main_params_to_param_buffer()
+ 
++        # In the delayed MXFP8 path, optimizer state was offloaded above while masters
++        # remained resident for main-param staging. Start master D2H after that copy.
++        if delay_master_offload_for_param_buffer:
++            optimizer.offload_optimizer_state_for_forward()
++
+         # Forward pass.
+         losses_reduced = forward_backward_func(
+             forward_step_func=forward_step_func,
+@@ -1420,6 +1516,13 @@ def train_step(forward_step_func, data_iterator, model, optimizer, opt_param_sch
+     # Part of MuonClip Optimizer step
+     log_max_attention_logit = 0
+     if args.qk_clip or args.log_max_attention_logit:
++        if chunked_optimizer_state_offload and args.qk_clip:
++            # QK-Clip writes fp32 masters through param.main_param, outside the offload
++            # lifecycle. After the chunked step the master bindings are CPU canonical with
++            # a possibly in-flight D2H, so restore CUDA residency (synchronized) first;
++            # the write then lands on GPU masters and the next offload_for_forward
++            # persists it back to CPU canonical.
++            optimizer.ensure_master_weights_for_param_sync()
+         log_max_attention_logit = clip_qk(model, log_max_only=not args.qk_clip)
+             
+     timers('optimizer').stop()
+diff --git a/tests/unit_tests/dist_checkpointing/test_chunked_offload_s4.py b/tests/unit_tests/dist_checkpointing/test_chunked_offload_s4.py
+new file mode 100644
+index 000000000..0d3ea2957
+--- /dev/null
++++ b/tests/unit_tests/dist_checkpointing/test_chunked_offload_s4.py
+@@ -0,0 +1,131 @@
++# Copyright (c) 2025 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
++"""S4 backport tests: chunked-offload checkpoint compatibility across the offload switch.
++
++Adapted from upstream PR #6244's dist_checkpointing test. The dist_muon chain here is
++this snapshot's LayerWise [Muon, Adam] composition (no sibling DistributedOptimizer),
++so exactly one offload manager exists and the sibling-manager assertions are dropped.
++"""
++
++import os
++
++import pytest
++import torch
++from packaging.version import Version
++
++from megatron.core.dist_checkpointing import load, load_plain_tensors, save
++from tests.unit_tests.dist_checkpointing import (
++    TempNamedDir,
++    initialize_gpt_model,
++    setup_model_and_optimizer,
++)
++from tests.unit_tests.test_utilities import Utils
++
++pytestmark = pytest.mark.skipif(
++    Version(os.getenv('NVIDIA_PYTORCH_VERSION', "24.01")) <= Version("25.05"),
++    reason="Skip muon optimizer for LTS test",
++)
++
++
++def check_equal(input_1, input_2):
++    """Recursive equality over checkpoint dicts (same as test_layer_wise_optimizer.py)."""
++    if isinstance(input_1, dict) and isinstance(input_2, dict):
++        assert input_1.keys() == input_2.keys()
++        for key in input_1:
++            check_equal(input_1[key], input_2[key])
++    elif isinstance(input_1, torch.Tensor) and isinstance(input_2, torch.Tensor):
++        assert torch.equal(input_1.cpu(), input_2.cpu()), "checkpoint tensor mismatch"
++    else:
++        assert input_1 == input_2
++
++
++def _collect_offload_managers(optimizer):
++    managers = []
++    manager = getattr(optimizer, '_optimizer_state_offloader', None)
++    if manager is not None:
++        managers.append(manager)
++    for child in getattr(optimizer, 'chained_optimizers', ()):
++        managers.extend(_collect_offload_managers(child))
++    return managers
++
++
++class TestChunkedOffloadCheckpoint:
++    def setup_method(self, method):
++        pass
++
++    def teardown_method(self, method):
++        Utils.destroy_model_parallel()
++
++    @pytest.mark.parametrize(
++        ("source_offload", "destination_offload"),
++        [(False, True), (True, False), (True, True)],
++    )
++    def test_chunked_offload_dist_ckpt_compatibility(
++        self, tmp_path_dist_ckpt, source_offload, destination_offload
++    ):
++        """dist_muon checkpoints remain bit-equal across every offload on/off switch."""
++
++        Utils.initialize_model_parallel(1, 1)
++
++        with TempNamedDir(
++            tmp_path_dist_ckpt / 'chunked_offload_A', sync=True
++        ) as ckpt_dir_A, TempNamedDir(
++            tmp_path_dist_ckpt / 'chunked_offload_B', sync=True
++        ) as ckpt_dir_B:
++            model_A, optimizer_A = setup_model_and_optimizer(
++                seed=2,
++                tp=1,
++                pp=1,
++                bf16=True,
++                dist_opt=False,
++                initialize_fn=initialize_gpt_model,
++                optimizer='dist_muon',
++                muon_layer_wise=True,
++                chunked_optimizer_state_offload=source_offload,
++                optimizer_state_offload_chunk_size_mb=1,
++            )
++            if source_offload:
++                assert len(_collect_offload_managers(optimizer_A)) == 1
++
++            model_sharded_sd_A = model_A[0].sharded_state_dict()
++            save(optimizer_A.sharded_state_dict(model_sharded_sd_A), ckpt_dir_A)
++
++            model_B, optimizer_B = setup_model_and_optimizer(
++                seed=3,
++                tp=1,
++                pp=1,
++                bf16=True,
++                dist_opt=False,
++                initialize_fn=initialize_gpt_model,
++                optimizer='dist_muon',
++                muon_layer_wise=True,
++                chunked_optimizer_state_offload=destination_offload,
++                optimizer_state_offload_chunk_size_mb=1,
++            )
++
++            model_sharded_sd_B = model_B[0].sharded_state_dict()
++            load_sharded_sd = optimizer_B.sharded_state_dict(
++                model_sharded_sd_B, is_loading=True
++            )
++            optimizer_B.load_state_dict(load(load_sharded_sd, ckpt_dir_A))
++
++            if destination_offload:
++                # The sharded load must preserve CPU canonical storage for the managed
++                # Muon child: masters and full-size state tensors stay on CPU.
++                managers = _collect_offload_managers(optimizer_B)
++                assert len(managers) == 1
++                manager = managers[0]
++                assert manager.selected_params
++                for param in manager.selected_params:
++                    assert param.device.type == 'cpu'
++                    for value in manager.optimizer.state[param].values():
++                        if isinstance(value, torch.Tensor) and value.numel() == param.numel():
++                            assert value.device.type == 'cpu'
++
++            save(optimizer_B.sharded_state_dict(model_sharded_sd_B), ckpt_dir_B)
++
++            Utils.destroy_model_parallel()
++            Utils.initialize_model_parallel(1, 1)
++
++            plain_sd_A = load_plain_tensors(ckpt_dir_A)
++            plain_sd_B = load_plain_tensors(ckpt_dir_B)
++            check_equal(plain_sd_A, plain_sd_B)
+diff --git a/tests/unit_tests/dist_checkpointing/utils.py b/tests/unit_tests/dist_checkpointing/utils.py
+index 60157760a..a442adfc7 100644
+--- a/tests/unit_tests/dist_checkpointing/utils.py
++++ b/tests/unit_tests/dist_checkpointing/utils.py
+@@ -161,7 +161,11 @@ def init_checkpointing_mock_args(args, ckpt_dir, fully_parallel=False):
+ 
+ 
+ def setup_model_and_optimizer(
+-    seed, tp, pp, initialize_fn=initialize_gpt_model, bf16=True, dist_opt=True, optimizer='adam'
++    seed, tp, pp, initialize_fn=initialize_gpt_model, bf16=True, dist_opt=True, optimizer='adam',
++    chunked_optimizer_state_offload=False,
++    optimizer_state_offload_chunk_size_mb=0,
++    optimizer_state_offload_fraction=1.0,
++    muon_layer_wise=False,
+ ):
+     if 'muon' in optimizer and dist_opt:
+         raise ValueError(
+@@ -187,12 +191,17 @@ def setup_model_and_optimizer(
+         params_dtype=torch.bfloat16 if bf16 else torch.float,
+         use_distributed_optimizer=dist_opt,
+         optimizer=optimizer,
++        chunked_optimizer_state_offload=chunked_optimizer_state_offload,
++        optimizer_state_offload_chunk_size_mb=optimizer_state_offload_chunk_size_mb,
++        optimizer_state_offload_fraction=optimizer_state_offload_fraction,
+     )
+ 
+     if 'muon' in optimizer:
+         # Use layer-wise distributed optimizer with Muon
+         optimizer_type = optimizer
+-        optimizer = get_megatron_muon_optimizer(config, model)
++        optimizer = get_megatron_muon_optimizer(
++            config, model, layer_wise_distributed_optimizer=muon_layer_wise
++        )
+     else:
+         optimizer_type = optimizer
+         optimizer = get_megatron_optimizer(config, model)
+diff --git a/tests/unit_tests/test_chunked_offload_s1.py b/tests/unit_tests/test_chunked_offload_s1.py
+new file mode 100644
+index 000000000..c5b7863fc
+--- /dev/null
++++ b/tests/unit_tests/test_chunked_offload_s1.py
+@@ -0,0 +1,1273 @@
++# Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
++
++"""Unit tests for chunked optimizer state and master-weight offload."""
++
++import dataclasses
++import logging
++import sys
++from contextlib import nullcontext
++from types import SimpleNamespace
++from unittest import mock
++
++import pytest
++import torch
++import torch.nn as nn
++
++from megatron.core.distributed import DistributedDataParallel, DistributedDataParallelConfig
++try:
++    from megatron.core.optimizer import (
++        ChainedOptimizer,
++        FP32Optimizer,
++        OptimizerConfig,
++        get_megatron_optimizer,
++    )
++except ImportError:  # S1 표적 백포트: 플러밍 미이식 단계
++    ChainedOptimizer = FP32Optimizer = OptimizerConfig = get_megatron_optimizer = None
++from megatron.core.optimizer.cpu_offloading.chunked_optimizer_state_offload import (
++    ChunkedOptimizerStateOffloader,
++)
++from megatron.core.transformer import TransformerConfig
++from megatron.core.utils import is_te_min_version
++try:
++    from megatron.training.arguments import parse_args, validate_args
++except ImportError:
++    parse_args = validate_args = None
++from tests.unit_tests.test_utilities import Utils
++
++try:
++    from transformer_engine.pytorch.optimizers import FusedAdam  # noqa: F401
++
++    TE_FUSED_ADAM_AVAILABLE = True
++except ImportError:
++    TE_FUSED_ADAM_AVAILABLE = False
++
++
++class SimpleModel(nn.Module):
++    """Small model with enough parameters to exercise multiple state chunks."""
++
++    def __init__(self, hidden_size: int = 256, num_layers: int = 2) -> None:
++        super().__init__()
++        assert num_layers >= 2
++        self.fc1 = nn.Linear(hidden_size, hidden_size)
++        self.hidden_layers = nn.ModuleList(
++            nn.Linear(hidden_size, hidden_size) for _ in range(num_layers - 2)
++        )
++        self.fc2 = nn.Linear(hidden_size, hidden_size)
++
++    def forward(self, inputs: torch.Tensor) -> torch.Tensor:
++        """Run the test MLP."""
++
++        output = torch.relu(self.fc1(inputs))
++        for layer in self.hidden_layers:
++            output = torch.relu(layer(output))
++        return self.fc2(output)
++
++
++@pytest.fixture
++def model_parallel_context():
++    """Always tear down model-parallel state, including on assertion failure or skip."""
++
++    try:
++        Utils.initialize_model_parallel()
++        yield
++    finally:
++        Utils.destroy_model_parallel()
++
++
++@pytest.mark.skip(reason="backport: deprecated alias 미이식(구 오프로더가 이 스냅샷에 없음)")
++def test_legacy_flag_warns_and_enables_chunked_offload():
++    """OptimizerConfig retains and normalizes the deprecated compatibility field."""
++
++    with pytest.warns(FutureWarning, match='offload_optimizer_states is deprecated'):
++        config = OptimizerConfig(
++            optimizer='adam', use_distributed_optimizer=True, offload_optimizer_states=True
++        )
++
++    assert not config.offload_optimizer_states
++    assert config.chunked_optimizer_state_offload
++
++    with mock.patch("megatron.core.optimizer.optimizer_config.warnings.warn") as warn:
++        copied_config = dataclasses.replace(config)
++
++    warn.assert_not_called()
++    assert not copied_config.offload_optimizer_states
++    assert copied_config.chunked_optimizer_state_offload
++
++
++@pytest.mark.skip(reason="backport: deprecated alias 미이식")
++def test_legacy_flag_uses_user_facing_optimizer_error():
++    """An unsupported legacy invocation names the deprecated CLI alias in its failure."""
++
++    with (
++        pytest.warns(FutureWarning, match='offload_optimizer_states is deprecated'),
++        pytest.raises(AssertionError, match='deprecated --offload-optimizer-states alias'),
++    ):
++        OptimizerConfig(optimizer='sgd', offload_optimizer_states=True)
++
++
++@pytest.mark.skip(reason="backport: muon 모드 config 필드(use_layer_wise_*) 부재 — 검증은 통합 지점(S3)으로 이동")
++def test_chunked_optimizer_state_offload_config_accepts_supported_optimizers():
++    """OptimizerConfig accepts the supported Adam and compact LayerWise Muon modes."""
++
++    OptimizerConfig(
++        optimizer='adam', use_distributed_optimizer=True, chunked_optimizer_state_offload=True
++    )
++    OptimizerConfig(
++        optimizer='muon',
++        bf16=True,
++        use_layer_wise_distributed_optimizer=True,
++        use_layer_wise_param_layout=False,
++        chunked_optimizer_state_offload=True,
++    )
++
++
++def test_chunked_optimizer_state_offload_fraction_zero_is_a_noop():
++    """The feature flag may remain set while a zero fraction disables mode restrictions."""
++
++    config = OptimizerConfig(
++        optimizer='sgd', chunked_optimizer_state_offload=True, optimizer_state_offload_fraction=0.0
++    )
++
++    assert config.chunked_optimizer_state_offload
++    assert config.optimizer_state_offload_fraction == 0.0
++
++
++@pytest.mark.parametrize(
++    ('overrides', 'error'),
++    [
++        ({'optimizer': 'sgd'}, 'currently supports Adam and Muon'),
++        ({'use_distributed_optimizer': False}, 'requires use_distributed_optimizer'),
++        (
++            {'optimizer': 'muon', 'use_layer_wise_distributed_optimizer': True},
++            'currently requires bf16',
++        ),
++        (
++            {'use_layer_wise_distributed_optimizer': True},
++            'Adam optimizer state offload does not support',
++        ),
++        ({'optimizer': 'muon', 'bf16': True}, 'requires LayerWiseDistributedOptimizer'),
++        (
++            {
++                'optimizer': 'muon',
++                'bf16': True,
++                'use_layer_wise_distributed_optimizer': True,
++                'use_layer_wise_param_layout': True,
++            },
++            '--use-layer-wise-param-layout to be disabled',
++        ),
++        ({'optimizer_cpu_offload': True}, 'optimizer_cpu_offload are mutually exclusive'),
++        ({'optimizer_state_offload_chunk_size_mb': -1}, 'must be non-negative'),
++        ({'optimizer_state_offload_fraction': 1.1}, 'must be in'),
++        ({'optimizer_cuda_graph': True}, 'does not support optimizer CUDA graphs'),
++    ],
++)
++@pytest.mark.skip(reason="backport: upstream 전용 config 필드 매트릭스 — 이 스냅샷은 최소 검증만(chunk>=0, fraction 범위, cpu_offload 배타)")
++def test_chunked_optimizer_state_offload_config_rejects_unsupported_modes(overrides, error):
++    """Optimizer-owned offload constraints are enforced by OptimizerConfig."""
++
++    config_kwargs = {
++        'optimizer': 'adam',
++        'use_distributed_optimizer': True,
++        'chunked_optimizer_state_offload': True,
++    }
++    config_kwargs.update(overrides)
++    with pytest.raises(AssertionError, match=error):
++        OptimizerConfig(**config_kwargs)
++
++
++@pytest.mark.parametrize(
++    ("flag_name", "chunk_size_mb", "expects_unbounded_window_warning"),
++    # backport: deprecated alias 행("offload_optimizer_states")은 미이식 — 대신
++    # 같은 플래그의 chunk-size-0 행으로 무제한-윈도 경고 경로를 커버.
++    [("chunked_optimizer_state_offload", 1, False), ("chunked_optimizer_state_offload", 0, True)],
++)
++def test_training_args_reject_async_save_with_chunked_state_offload(
++    monkeypatch, flag_name, chunk_size_mb, expects_unbounded_window_warning
++):
++    """Reusable canonical CPU buffers cannot be handed to a background checkpoint writer."""
++
++    monkeypatch.setattr(sys, 'argv', ['test_optimizer_state_offloading.py'])
++    args = parse_args()
++    args.num_layers = 2
++    args.vocab_size = 256
++    args.hidden_size = 64
++    args.num_attention_heads = 4
++    args.max_position_embeddings = 128
++    args.seq_length = 128
++    args.micro_batch_size = 1
++    args.train_iters = 1
++    args.lr = 1e-4
++    args.tokenizer_type = 'NullTokenizer'
++    args.optimizer = 'adam'
++    args.use_distributed_optimizer = True
++    setattr(args, flag_name, True)
++    args.optimizer_state_offload_chunk_size_mb = chunk_size_mb
++    args.ckpt_format = 'torch_dist'
++    args.async_save = True
++    args.use_persistent_ckpt_worker = True
++
++    with mock.patch("megatron.training.arguments.warn_rank_0") as warn:
++        with pytest.raises(AssertionError, match="does not support --async-save"):
++            validate_args(args)
++
++    warning_messages = [call.args[0] for call in warn.call_args_list if call.args]
++    assert any("enabled with chunk size 0" in message for message in warning_messages) is (
++        expects_unbounded_window_warning
++    )
++
++
++def test_training_args_treat_zero_offload_fraction_as_disabled(monkeypatch):
++    """A zero fraction bypasses checkpoint restrictions during startup validation."""
++
++    monkeypatch.setattr(sys, 'argv', ['test_optimizer_state_offloading.py'])
++    args = parse_args()
++    args.num_layers = 2
++    args.vocab_size = 256
++    args.hidden_size = 64
++    args.num_attention_heads = 4
++    args.max_position_embeddings = 128
++    args.seq_length = 128
++    args.micro_batch_size = 1
++    args.train_iters = 1
++    args.lr = 1e-4
++    args.tokenizer_type = 'NullTokenizer'
++    args.optimizer = 'adam'
++    args.use_distributed_optimizer = True
++    args.chunked_optimizer_state_offload = True
++    args.optimizer_state_offload_fraction = 0.0
++    args.ckpt_format = 'torch'
++    args.use_dist_ckpt = False
++    args.async_save = True
++    args.use_persistent_ckpt_worker = True
++
++    validated_args = validate_args(args)
++
++    assert validated_args.async_save
++
++
++def test_training_args_reject_muon_offload_without_distributed_optimizer(monkeypatch):
++    """Muon offload must route non-Muon groups to a sibling DistributedOptimizer."""
++
++    monkeypatch.setattr(sys, 'argv', ['test_optimizer_state_offloading.py'])
++    args = parse_args()
++    args.num_layers = 2
++    args.vocab_size = 256
++    args.hidden_size = 64
++    args.num_attention_heads = 4
++    args.max_position_embeddings = 128
++    args.seq_length = 128
++    args.micro_batch_size = 1
++    args.train_iters = 1
++    args.lr = 1e-4
++    args.tokenizer_type = 'NullTokenizer'
++    args.optimizer = 'muon'
++    args.use_distributed_optimizer = False
++    args.chunked_optimizer_state_offload = True
++    args.ckpt_format = 'torch_dist'
++
++    with pytest.raises(AssertionError, match="requires the LayerWise distributed optimizer"):
++        validate_args(args)
++
++
++def test_training_args_accept_deprecated_dist_muon_offload(monkeypatch):
++    """dist_muon (이 스냅샷의 1급 LayerWise 철자)이 chunked offload와 함께 수용된다.
++
++    backport 주: upstream은 dist_muon→muon+use_layer_wise_distributed_optimizer로
++    정규화하지만 이 스냅샷은 dist_muon이 그대로 유효한 선택지다.
++    """
++
++    monkeypatch.setattr(sys, 'argv', ['test_optimizer_state_offloading.py'])
++    args = parse_args()
++    args.num_layers = 2
++    args.vocab_size = 256
++    args.hidden_size = 64
++    args.num_attention_heads = 4
++    args.max_position_embeddings = 128
++    args.seq_length = 128
++    args.micro_batch_size = 1
++    args.train_iters = 1
++    args.lr = 1e-4
++    args.tokenizer_type = 'NullTokenizer'
++    args.optimizer = 'dist_muon'
++    args.use_distributed_optimizer = False
++    args.chunked_optimizer_state_offload = True
++    args.ckpt_format = 'torch_dist'
++
++    validated_args = validate_args(args)
++
++    assert validated_args.optimizer == 'dist_muon'
++    assert not validated_args.use_distributed_optimizer
++
++
++@pytest.mark.parametrize(
++    ("ckpt_format", "async_save", "no_load_optim"),
++    [("torch", False, True), ("torch_dist", True, False)],
++)
++def test_training_args_narrow_checkpoint_restrictions_to_optimizer_io(
++    monkeypatch, ckpt_format, async_save, no_load_optim
++):
++    """Model-only saves skip offload restrictions not needed by optimizer checkpoint I/O."""
++
++    monkeypatch.setattr(sys, 'argv', ['test_optimizer_state_offloading.py'])
++    args = parse_args()
++    args.num_layers = 2
++    args.vocab_size = 256
++    args.hidden_size = 64
++    args.num_attention_heads = 4
++    args.max_position_embeddings = 128
++    args.seq_length = 128
++    args.micro_batch_size = 1
++    args.train_iters = 1
++    args.lr = 1e-4
++    args.tokenizer_type = 'NullTokenizer'
++    args.optimizer = 'adam'
++    args.use_distributed_optimizer = True
++    args.chunked_optimizer_state_offload = True
++    args.ckpt_format = ckpt_format
++    args.use_dist_ckpt = ckpt_format == "torch_dist"
++    args.async_save = async_save
++    args.use_persistent_ckpt_worker = True
++    args.no_save_optim = True
++    args.no_load_optim = no_load_optim
++
++    validated_args = validate_args(args)
++
++    assert validated_args.ckpt_format == ckpt_format
++    assert validated_args.async_save is async_save
++
++
++def test_standard_chained_optimizer_shares_state_offload_streams():
++    """Ordinary chained Adam-style siblings share transfer ordering, not only LayerWise."""
++
++    class FakeManager:
++        def __init__(self):
++            self.transfer_streams = (object(), object())
++
++        def use_transfer_streams(self, d2h_stream, h2d_stream):
++            self.transfer_streams = (d2h_stream, h2d_stream)
++
++    class FakeOptimizer:
++        def __init__(self, config, manager):
++            self.config = config
++            self._optimizer_state_offloader = manager
++
++    config = object()
++    managers = [FakeManager(), FakeManager()]
++    ChainedOptimizer([FakeOptimizer(config, manager) for manager in managers])
++
++    assert managers[1].transfer_streams[0] is managers[0].transfer_streams[0]
++    assert managers[1].transfer_streams[1] is managers[0].transfer_streams[1]
++
++
++def test_chained_optimizer_forwards_master_residency_assertion():
++    """Chain assertions reach every child while inherited lifecycle defaults remain safe."""
++
++    calls = []
++
++    class FakeOptimizer:
++        def __init__(self, config, name):
++            self.config = config
++
++            self.name = name
++
++        def assert_master_weights_resident(self, operation):
++            calls.append((self.name, operation))
++
++    config = object()
++    optimizer = ChainedOptimizer(
++        [FakeOptimizer(config, 'layerwise'), FakeOptimizer(config, 'distributed')]
++    )
++
++    assert optimizer._optimizer_state_offloader is None
++    optimizer.assert_master_weights_resident("test")
++    assert calls == [('layerwise', 'test'), ('distributed', 'test')]
++    optimizer.set_optimizer_state_offload_deferred_lifecycle(
++        state_prefetch_to_step=False, master_offload_for_param_sync=False
++    )
++    assert not optimizer._defer_optimizer_state_prefetch_to_step
++    assert not optimizer._defer_optimizer_master_offload_for_param_sync
++
++
++def test_chained_master_restore_targets_only_pre_forward_sync_children():
++    """A compact Muon pre-forward restore must not pull sibling DistOpt masters back."""
++
++    events = []
++
++    class FakeOptimizer:
++        def __init__(self, config, name, requires_sync):
++            self.config = config
++            self.name = name
++            self.requires_sync = requires_sync
++
++        def optimizer_state_offload_requires_pre_forward_param_sync(self):
++            checks.append(self.name)
++            return self.requires_sync
++
++        def ensure_master_weights_for_pre_forward_param_sync(self):
++            if self.optimizer_state_offload_requires_pre_forward_param_sync():
++                events.append(self.name)
++
++    config = object()
++    checks = []
++    optimizer = ChainedOptimizer(
++        [FakeOptimizer(config, "layerwise", True), FakeOptimizer(config, "distributed", False)]
++    )
++
++    optimizer.ensure_master_weights_for_pre_forward_param_sync()
++
++    assert events == ["layerwise"]
++    assert checks == ["layerwise", "distributed"]
++
++
++def test_chained_general_master_restore_targets_all_children():
++    """The general chain API preserves the leaf contract by restoring every child."""
++
++    events = []
++
++    class FakeOptimizer:
++        def __init__(self, config, name):
++            self.config = config
++            self.name = name
++
++        def ensure_master_weights_for_param_sync(self):
++            events.append(self.name)
++
++    config = object()
++    optimizer = ChainedOptimizer(
++        [FakeOptimizer(config, "layerwise"), FakeOptimizer(config, "distributed")]
++    )
++
++    optimizer.ensure_master_weights_for_param_sync()
++
++    assert events == ["layerwise", "distributed"]
++
++
++def test_pre_forward_sync_requirement_requires_subset_implementation():
++    """A leaf declaring pre-forward sync must implement its bucket-subset dispatch."""
++
++    optimizer = object.__new__(FP32Optimizer)
++    optimizer._defer_optimizer_master_offload_for_param_sync = True
++
++    with pytest.raises(NotImplementedError, match="must override"):
++        optimizer.start_param_sync_for_bucket_group_subset(force_sync=True)
++
++
++def test_fp32_ready_grad_step_rejects_chunked_state_offloader():
++    """The unsupported common-base FP32 entry point must not bypass its manager."""
++
++    optimizer = object.__new__(FP32Optimizer)
++    optimizer.is_stub_optimizer = False
++    optimizer._optimizer_state_offloader = object()
++
++    with pytest.raises(RuntimeError, match="FP32Optimizer.step_with_ready_grads"):
++        optimizer.step_with_ready_grads()
++
++
++def test_offloader_rejects_two_master_storage_schemes():
++    """One wrapped optimizer cannot alias explicit and optimizer-owned master slots."""
++
++    param = nn.Parameter(torch.ones(2))
++    optimizer = torch.optim.SGD([param], lr=0.1)
++    optimizer.master_weights = True
++    with pytest.raises(ValueError, match="both MCore-owned master parameters"):
++        ChunkedOptimizerStateOffloader(
++            optimizer=optimizer,
++            master_params=[param],
++            chunk_size_bytes=0,
++            offload_fraction=1.0,
++            state_dtypes=(torch.float32,),
++        )
++
++
++def test_oversized_atomic_state_chunks_log_once():
++    """A soft chunk target overflow is visible without splitting optimizer parameters."""
++
++    manager = object.__new__(ChunkedOptimizerStateOffloader)
++    manager.chunk_size_bytes = 1024**2
++    manager._state_bytes_per_param = torch.float32.itemsize
++    manager.optimizer = SimpleNamespace()
++    params = tuple(nn.Parameter(torch.empty(numel)) for numel in (300_000, 400_000, 10))
++
++    with mock.patch(
++        "megatron.core.optimizer.cpu_offloading.chunked_optimizer_state_offload.log_single_rank"
++    ) as log:
++        chunks = manager._build_chunks(params)
++
++    assert [[id(param) for param in chunk.params] for chunk in chunks] == [
++        [id(param)] for param in params
++    ]
++    log.assert_called_once()
++    _, level, _, target_mib, oversized_count, largest_mib, optimizer_name = log.call_args.args
++    assert level == logging.WARNING
++    assert target_mib == 1.0
++    assert oversized_count == 2
++    assert largest_mib == pytest.approx(400_000 * torch.float32.itemsize / 1024**2)
++    assert optimizer_name == "SimpleNamespace"
++
++
++def test_h2d_targets_record_the_transfer_stream():
++    """State and master allocations remain live if an update exits before its H2D completes."""
++
++    class FakeTensor:
++        def __init__(self, *, is_cuda=False, pinned=False):
++            self.is_cuda = is_cuda
++            self.pinned = pinned
++            self.recorded_streams = []
++
++        def is_pinned(self):
++            return self.pinned
++
++        def copy_(self, source, non_blocking=False):
++            return self
++
++        def record_stream(self, stream):
++            self.recorded_streams.append(stream)
++
++    class FakeEvent:
++        def __init__(self):
++            self.recorded_stream = None
++
++        def record(self, stream):
++            self.recorded_stream = stream
++
++    h2d_stream = object()
++    state_param = object()
++    state_cpu = FakeTensor(pinned=True)
++    state_gpu = FakeTensor(is_cuda=True)
++    state_manager = object.__new__(ChunkedOptimizerStateOffloader)
++    state_manager._h2d_stream = h2d_stream
++    state_manager._state_staging_views = lambda chunk: [
++        (state_param, "moment", state_cpu, state_gpu)
++    ]
++    state_manager._order_h2d_after_source_streams = lambda: None
++    state_manager.optimizer = SimpleNamespace(state={state_param: {}})
++
++    class FakeParam:
++        pass
++
++    master_param = FakeParam()
++    master_cpu = FakeTensor(pinned=True)
++    master_gpu = FakeTensor(is_cuda=True)
++    master_param.data = master_cpu
++    master_manager = object.__new__(ChunkedOptimizerStateOffloader)
++    master_manager._selected_params = (master_param,)
++    master_manager._master_h2d_event = None
++    master_manager._explicit_master_param_ids = {id(master_param)}
++    master_manager._master_weights_resident = True
++    master_manager._param_devices = {master_param: object()}
++    master_manager._cpu_master = {}
++    master_manager._h2d_stream = h2d_stream
++    master_manager._validate_master_storage = lambda: None
++    master_manager._order_h2d_after_source_streams = lambda: None
++    master_manager.optimizer = SimpleNamespace(state={master_param: {}})
++
++    with (
++        mock.patch.object(torch.cuda, "stream", side_effect=lambda stream: nullcontext()),
++        mock.patch.object(torch.cuda, "Event", side_effect=FakeEvent),
++        mock.patch.object(torch, "empty_like", return_value=master_gpu),
++    ):
++        state_manager._prefetch_state(object())
++        master_manager._schedule_master_h2d()
++
++    assert state_gpu.recorded_streams == [h2d_stream]
++    assert master_gpu.recorded_streams == [h2d_stream]
++
++
++def test_initialize_state_for_loading_requires_an_initializer():
++    """A missing external optimizer initializer must fail instead of silently skipping state."""
++
++    manager = object.__new__(ChunkedOptimizerStateOffloader)
++
++    with pytest.raises(RuntimeError, match="requires an optimizer state initializer"):
++        manager.initialize_state_for_loading(None, object())
++
++
++@pytest.mark.skipif(not torch.cuda.is_available(), reason="Requires CUDA")
++def test_transfer_stream_adoption_is_idempotent_after_first_use():
++    """Re-adopting the current stream pair is safe even after canonical CPU state exists."""
++
++    param = nn.Parameter(torch.zeros(8, device='cuda'))
++    optimizer = torch.optim.SGD([param], lr=0.1)
++    manager = ChunkedOptimizerStateOffloader(
++        optimizer=optimizer,
++        master_params=[],
++        chunk_size_bytes=0,
++        offload_fraction=1.0,
++        state_dtypes=(torch.float32,),
++    )
++    d2h_stream, h2d_stream = manager.transfer_streams
++    manager._cpu_state[param]['moment'] = torch.empty(param.shape, device='cpu', pin_memory=True)
++
++    manager.use_transfer_streams(d2h_stream, h2d_stream)
++
++    with pytest.raises(RuntimeError, match="cannot change after first use"):
++        manager.use_transfer_streams(torch.cuda.Stream(), h2d_stream)
++
++
++@pytest.mark.skipif(not torch.cuda.is_available(), reason="Requires CUDA")
++def test_chunked_step_releases_staging_slots_when_optimizer_raises():
++    """An optimizer failure must not leave reusable staging buffers owned by the manager."""
++
++    class FailingOptimizer(torch.optim.Optimizer):
++        def __init__(self, params):
++            super().__init__(params, defaults={})
++
++        def step(self, closure=None):
++            raise RuntimeError("optimizer failure")
++
++    param = nn.Parameter(torch.zeros(8, device='cuda'))
++    optimizer = FailingOptimizer([param])
++    manager = ChunkedOptimizerStateOffloader(
++        optimizer=optimizer,
++        master_params=[],
++        chunk_size_bytes=0,
++        offload_fraction=1.0,
++        state_dtypes=(torch.float32,),
++    )
++    cpu_state = torch.empty(param.shape, device='cpu', pin_memory=True)
++    optimizer.state[param]['moment'] = cpu_state
++    manager._cpu_state[param]['moment'] = cpu_state
++
++    with pytest.raises(RuntimeError, match="optimizer failure"):
++        manager.step()
++
++    assert all(not slot.buffers for slot in manager._state_staging_slots)
++    manager.synchronize_for_checkpoint()
++
++
++@pytest.mark.skipif(not torch.cuda.is_available(), reason="Requires CUDA")
++def test_chunked_step_propagates_group_writes_and_clones_tensor_step():
++    """Group metadata is committed once without rescanning original group parameters."""
++
++    class ParamsThatMustNotBeIterated(list):
++        def __iter__(self):
++            raise AssertionError("chunk execution rescanned the full optimizer parameter group")
++
++    class GroupStateOptimizer(torch.optim.Optimizer):
++        def __init__(self, params):
++            super().__init__(
++                params,
++                defaults={"step": torch.tensor(0), "updates": 0, "removed_during_step": True},
++            )
++
++        @torch.no_grad()
++        def step(self, closure=None):
++            for group in self.param_groups:
++                group["step"].add_(1)
++                group["updates"] += 1
++                group["new_field"] = "preserved"
++                group.pop("removed_during_step")
++                for param in group["params"]:
++                    param.add_(1)
++
++    params = [nn.Parameter(torch.zeros(256, device="cuda")) for _ in range(3)]
++    optimizer = GroupStateOptimizer(params)
++    manager = ChunkedOptimizerStateOffloader(
++        optimizer=optimizer,
++        master_params=[],
++        chunk_size_bytes=1024,
++        offload_fraction=1.0,
++        state_dtypes=(torch.float32,),
++    )
++    assert len(manager.chunks) == 3
++    optimizer.param_groups[0]["params"] = ParamsThatMustNotBeIterated(
++        optimizer.param_groups[0]["params"]
++    )
++
++    manager.step()
++
++    group = optimizer.param_groups[0]
++    assert group["step"].item() == 1
++    assert group["updates"] == 1
++    assert group["new_field"] == "preserved"
++    assert "removed_during_step" not in group
++    assert all(torch.equal(param, torch.ones_like(param)) for param in params)
++
++
++@pytest.mark.skipif(not torch.cuda.is_available(), reason="Requires CUDA")
++def test_state_staging_views_are_aligned_and_non_overlapping():
++    """Flat staging pools must preserve a distinct aligned region for every state tensor."""
++
++    params = [nn.Parameter(torch.zeros(size, device="cuda")) for size in (3, 5, 7)]
++    optimizer = torch.optim.SGD(params, lr=0.1)
++    manager = ChunkedOptimizerStateOffloader(
++        optimizer=optimizer,
++        master_params=[],
++        chunk_size_bytes=0,
++        offload_fraction=1.0,
++        state_dtypes=(torch.float32,),
++    )
++    for param in params:
++        cpu_state = torch.empty(param.shape, dtype=torch.float32, device="cpu", pin_memory=True)
++        optimizer.state[param]["moment"] = cpu_state
++        manager._cpu_state[param]["moment"] = cpu_state
++
++    staging_views = manager._state_staging_views(manager.chunks[0])
++    byte_ranges = []
++    for _, _, _, gpu_tensor in staging_views:
++        start = gpu_tensor.data_ptr()
++        assert start % 256 == 0
++        byte_ranges.append((start, start + gpu_tensor.numel() * gpu_tensor.element_size()))
++
++    byte_ranges.sort()
++    assert all(left[1] <= right[0] for left, right in zip(byte_ranges, byte_ranges[1:]))
++
++
++@pytest.mark.skipif(not torch.cuda.is_available(), reason="Requires CUDA")
++def test_state_h2d_waits_for_compute_stream_before_reusing_staging_buffer():
++    """H2D must not overwrite compute-stream storage while prior work still uses it."""
++
++    param = nn.Parameter(torch.zeros(4096, device="cuda"))
++    optimizer = torch.optim.SGD([param], lr=0.1)
++    manager = ChunkedOptimizerStateOffloader(
++        optimizer=optimizer,
++        master_params=[],
++        chunk_size_bytes=0,
++        offload_fraction=1.0,
++        state_dtypes=(torch.float32,),
++    )
++    cpu_state = torch.zeros(param.shape, dtype=torch.float32, device="cpu", pin_memory=True)
++    optimizer.state[param]["moment"] = cpu_state
++    manager._cpu_state[param]["moment"] = cpu_state
++
++    compute_stream = torch.cuda.Stream()
++    with torch.cuda.stream(compute_stream):
++        # Allocate the reusable slot on the compute stream, then make its last compute use
++        # finish well after the tiny CPU-to-GPU copy would finish without stream ordering.
++        staging_views = manager._state_staging_views(manager.chunks[0])
++        manager._next_state_staging_slot = 0
++        torch.cuda._sleep(50_000_000)
++        staging_views[0][3].fill_(7)
++        prefetch = manager._prefetch_state(manager.chunks[0])
++
++    assert prefetch.event is not None
++    prefetch.event.synchronize()
++    torch.cuda.synchronize()
++    torch.testing.assert_close(
++        optimizer.state[param]["moment"], torch.zeros_like(optimizer.state[param]["moment"])
++    )
++    manager.synchronize_for_checkpoint()
++
++
++@pytest.mark.skipif(not torch.cuda.is_available(), reason="Requires CUDA")
++def test_master_h2d_allocates_on_compute_stream():
++    """A restored master window must return to the compute stream's allocator pool."""
++
++    param = nn.Parameter(torch.ones(4096, device="cuda"))
++    optimizer = torch.optim.SGD([param], lr=0.1)
++    manager = ChunkedOptimizerStateOffloader(
++        optimizer=optimizer,
++        master_params=[param],
++        chunk_size_bytes=0,
++        offload_fraction=1.0,
++        state_dtypes=(torch.float32,),
++    )
++    manager.synchronize_for_checkpoint()
++    assert param.device.type == "cpu"
++
++    allocation_streams = []
++    compute_stream = torch.cuda.Stream()
++    empty_like = torch.empty_like
++
++    def record_allocation_stream(*args, **kwargs):
++        allocation_streams.append(torch.cuda.current_stream().cuda_stream)
++        tensor = empty_like(*args, **kwargs)
++        # If master H2D does not wait for this allocation/owner stream, the delayed
++        # sentinel write can race after the CPU master copy and remain visible.
++        torch.cuda._sleep(50_000_000)
++        tensor.fill_(7)
++        return tensor
++
++    with (
++        torch.cuda.stream(compute_stream),
++        mock.patch.object(torch, "empty_like", side_effect=record_allocation_stream),
++    ):
++        manager.prefetch_master_for_step()
++
++    manager.ensure_master_for_param_sync()
++    torch.cuda.synchronize()
++    assert allocation_streams == [compute_stream.cuda_stream]
++    assert param.is_cuda
++    torch.testing.assert_close(param, torch.ones_like(param))
++    manager.synchronize_for_checkpoint()
++
++
++@pytest.mark.skipif(not torch.cuda.is_available(), reason="Requires CUDA")
++def test_state_eligibility_is_identical_for_d2h_and_cpu_adoption():
++    """A scalar tensor is not state for a one-element parameter unless its shape matches."""
++
++    param = nn.Parameter(torch.zeros(1, device="cuda"))
++    optimizer = torch.optim.SGD([param], lr=0.1)
++    manager = ChunkedOptimizerStateOffloader(
++        optimizer=optimizer,
++        master_params=[],
++        chunk_size_bytes=0,
++        offload_fraction=1.0,
++        state_dtypes=(torch.float32,),
++    )
++    optimizer.state[param]["moment"] = torch.ones_like(param)
++    optimizer.state[param]["step"] = torch.ones((), device="cuda")
++    optimizer.state[param]["found_inf"] = torch.ones_like(param)
++
++    manager.synchronize_for_checkpoint()
++
++    assert optimizer.state[param]["moment"].device.type == "cpu"
++    assert optimizer.state[param]["step"].is_cuda
++    assert optimizer.state[param]["found_inf"].is_cuda
++    assert "moment" in manager._cpu_state.get(param, {})
++    assert "step" not in manager._cpu_state.get(param, {})
++    assert "found_inf" not in manager._cpu_state.get(param, {})
++
++
++@pytest.mark.skipif(not torch.cuda.is_available(), reason="Requires CUDA")
++def test_load_releases_cpu_buffers_from_an_old_state_schema():
++    """Replacing checkpoint state must not retain obsolete pinned canonical buffers."""
++
++    param = nn.Parameter(torch.zeros(8, device="cuda"))
++    optimizer = torch.optim.SGD([param], lr=0.1)
++    manager = ChunkedOptimizerStateOffloader(
++        optimizer=optimizer,
++        master_params=[],
++        chunk_size_bytes=0,
++        offload_fraction=1.0,
++        state_dtypes=(torch.float32,),
++    )
++    old_state = torch.empty_like(param, device="cpu", pin_memory=True)
++    new_state = torch.empty_like(param, device="cpu", pin_memory=True)
++    optimizer.state[param]["old_moment"] = old_state
++    manager._cpu_state[param]["old_moment"] = old_state
++    state_dict = optimizer.state_dict()
++    state_dict["state"][0] = {"new_moment": new_state}
++
++    manager.load_state_dict_without_device_cast(state_dict)
++
++    assert "old_moment" not in manager._cpu_state[param]
++    assert manager._cpu_state[param]["new_moment"] is new_state
++
++
++@pytest.mark.skipif(not torch.cuda.is_available(), reason="Requires CUDA")
++def test_partial_load_moves_resident_tensor_state_back_to_cuda():
++    """Fully-parallel CPU loads keep selected state canonical but restore resident moments."""
++
++    params = [nn.Parameter(torch.zeros(8, device="cuda")) for _ in range(2)]
++    optimizer = torch.optim.SGD(params, lr=0.1)
++    manager = ChunkedOptimizerStateOffloader(
++        optimizer=optimizer,
++        master_params=[],
++        chunk_size_bytes=0,
++        offload_fraction=0.5,
++        state_dtypes=(torch.float32,),
++    )
++    state_dict = optimizer.state_dict()
++    state_dict["state"] = {
++        param_id: {
++            "moment": torch.full(param.shape, index + 1.0, dtype=param.dtype, device="cpu"),
++            "step": torch.tensor(index + 1),
++        }
++        for index, (param_id, param) in enumerate(
++            zip(state_dict["param_groups"][0]["params"], params)
++        )
++    }
++
++    manager.load_state_dict_without_device_cast(state_dict)
++
++    selected_param = manager.selected_params[0]
++    resident_param = manager._resident_params[0]
++    assert optimizer.state[selected_param]["moment"].device.type == "cpu"
++    assert optimizer.state[selected_param]["moment"].is_pinned()
++    assert optimizer.state[resident_param]["moment"].is_cuda
++    assert optimizer.state[resident_param]["step"].device.type == "cpu"
++    torch.testing.assert_close(
++        optimizer.state[resident_param]["moment"], torch.full_like(resident_param, 2.0)
++    )
++
++
++@pytest.mark.skipif(not torch.cuda.is_available(), reason="Requires CUDA")
++def test_byte_planning_uses_state_dtypes_and_prioritizes_master_bundles():
++    """A partial budget uses real moment widths and spends bytes on removable masters first."""
++
++    native_param = nn.Parameter(torch.zeros(128, device="cuda"))
++    master_param = nn.Parameter(torch.zeros(128, device="cuda"))
++    optimizer = torch.optim.SGD([native_param, master_param], lr=0.1)
++    manager = ChunkedOptimizerStateOffloader(
++        optimizer=optimizer,
++        master_params=[master_param],
++        chunk_size_bytes=0,
++        offload_fraction=0.5,
++        state_dtypes=(torch.bfloat16, torch.bfloat16),
++    )
++
++    assert manager._estimated_state_bytes(native_param) == 128 * 2 * torch.bfloat16.itemsize
++    assert len(manager.selected_params) == 1
++    assert manager.selected_params[0] is master_param
++
++
++@pytest.mark.skipif(not torch.cuda.is_available(), reason="Requires CUDA")
++def test_precision_aware_master_planning_uses_real_storage():
++    """Precision-aware planner accounts for every declared master using its real dtype."""
++
++    low_precision_param = nn.Parameter(torch.zeros(128, dtype=torch.bfloat16, device="cuda"))
++    native_fp32_param = nn.Parameter(torch.zeros(128, dtype=torch.float32, device="cuda"))
++    optimizer = torch.optim.SGD([native_fp32_param, low_precision_param], lr=0.1)
++    optimizer.master_weights = True
++    manager = ChunkedOptimizerStateOffloader(
++        optimizer=optimizer,
++        master_params=[],
++        chunk_size_bytes=0,
++        offload_fraction=1.0,
++        state_dtypes=(torch.bfloat16, torch.bfloat16),
++        optimizer_owned_master_dtypes={
++            native_fp32_param: torch.float32,
++            low_precision_param: torch.int16,
++        },
++    )
++
++    state_bytes = 128 * 2 * torch.bfloat16.itemsize
++    assert manager._estimated_bundle_bytes(native_fp32_param) == (
++        state_bytes + 128 * torch.float32.itemsize
++    )
++    assert manager._estimated_bundle_bytes(low_precision_param) == (
++        state_bytes + 128 * torch.int16.itemsize
++    )
++
++
++def create_model_and_optimizer(
++    hidden_size: int = 256,
++    num_layers: int = 2,
++    chunked_optimizer_state_offload: bool = True,
++    chunk_size_mb: int = 1,
++    offload_fraction: float = 1.0,
++    include_native_fp32_param: bool = False,
++    **optimizer_kwargs,
++):
++    """Create a bf16 DDP model and DistributedOptimizer."""
++
++    model = SimpleModel(hidden_size=hidden_size, num_layers=num_layers).bfloat16().cuda()
++    if include_native_fp32_param:
++        model.native_fp32_param = nn.Parameter(torch.zeros(hidden_size, device='cuda'))
++    ddp_config = DistributedDataParallelConfig(use_distributed_optimizer=True)
++    model = DistributedDataParallel(
++        TransformerConfig(num_attention_heads=1, num_layers=1), ddp_config, model
++    )
++
++    default_config = dict(
++        optimizer='adam',
++        bf16=True,
++        lr=0.001,
++        use_distributed_optimizer=True,
++        chunked_optimizer_state_offload=chunked_optimizer_state_offload,
++        optimizer_state_offload_chunk_size_mb=chunk_size_mb,
++        optimizer_state_offload_fraction=offload_fraction,
++    )
++    default_config.update(optimizer_kwargs)
++    optimizer = get_megatron_optimizer(OptimizerConfig(**default_config), [model])
++    return model, optimizer
++
++
++@pytest.mark.skipif(
++    not TE_FUSED_ADAM_AVAILABLE or not is_te_min_version("2.1.0.dev0"),
++    reason="Requires TE FusedAdam with precision-aware optimizer support",
++)
++@pytest.mark.usefixtures("model_parallel_context")
++def test_distributed_optimizer_plans_native_fp32_optimizer_owned_master():
++    """DistOpt tells the planner that TE owns a master for native-FP32 shards too."""
++
++    model, optimizer = create_model_and_optimizer(
++        use_precision_aware_optimizer=True, include_native_fp32_param=True, offload_fraction=0.5
++    )
++    dist_optimizer = optimizer.chained_optimizers[0]
++    manager = dist_optimizer._optimizer_state_offloader
++    native_fp32_shards = [param for group in dist_optimizer.shard_fp32_groups for param in group]
++
++    assert native_fp32_shards
++    assert manager is not None
++    assert all(manager._param_has_master(param) for param in native_fp32_shards)
++    assert all(
++        manager._optimizer_owned_master_dtypes[id(param)] == dist_optimizer.config.main_params_dtype
++        for param in native_fp32_shards
++    )
++    del model, optimizer
++
++
++def test_group_metadata_comparison_accepts_bool_convertible_equality():
++    """Non-bool scalar equality results are interpreted through their truth value."""
++
++    class TruthValue:
++        def __bool__(self):
++            return True
++
++    class Metadata:
++        def __eq__(self, other):
++            return TruthValue()
++
++    assert ChunkedOptimizerStateOffloader._group_values_equal(Metadata(), Metadata())
++
++
++def offload_before_forward(optimizer) -> None:
++    """Move selected state/master bundles to CPU and release their CUDA tensors."""
++
++    optimizer.offload_optimizer_state_for_forward()
++    optimizer.zero_grad()
++
++
++def run_forward_backward_step(
++    model, optimizer, hidden_size: int = 256, input_tensor: torch.Tensor | None = None
++) -> None:
++    """Run forward/backward and one chunked optimizer update."""
++
++    if input_tensor is None:
++        input_tensor = torch.randn(8, hidden_size, dtype=torch.bfloat16, device='cuda')
++    output = model(input_tensor)
++    output.sum().backward()
++    optimizer.prefetch_optimizer_state_for_step()
++    optimizer.step()
++    optimizer.zero_grad()
++
++
++@pytest.mark.skipif(not TE_FUSED_ADAM_AVAILABLE, reason="Requires TE FusedAdam")
++@pytest.mark.usefixtures("model_parallel_context")
++def test_chunk_plan_and_initial_master_offload():
++    """The manager builds bounded chunks and moves masters to CPU before the first forward."""
++
++    model, optimizer = create_model_and_optimizer(hidden_size=512, chunk_size_mb=1)
++    dist_optimizer = optimizer.chained_optimizers[0]
++    manager = dist_optimizer._optimizer_state_offloader
++
++    assert manager is not None
++    # Direct manager tests cover exact chunk splitting independently of DP sharding. This
++    # integration test only needs a valid plan before checking the initial master offload.
++    assert manager.chunks
++    assert manager.selected_params
++
++    expected_masters = {
++        id(param): param.detach().clone()
++        for group in dist_optimizer.shard_fp32_from_float16_groups
++        for param in group
++        if manager.is_param_offloaded(param)
++    }
++    offload_before_forward(optimizer)
++    optimizer.synchronize_optimizer_state_for_checkpoint()
++
++    for group in dist_optimizer.shard_fp32_from_float16_groups:
++        for param in group:
++            if manager.is_param_offloaded(param):
++                assert param.device.type == 'cpu'
++                torch.testing.assert_close(param, expected_masters[id(param)].cpu())
++
++    # Public reload entry points restore an offloaded master window before writing it.
++    dist_optimizer.reload_model_params()
++    for group in dist_optimizer.shard_fp32_from_float16_groups:
++        for param in group:
++            if manager.is_param_offloaded(param):
++                assert param.is_cuda
++                torch.testing.assert_close(param, expected_masters[id(param)])
++
++    del model, optimizer
++
++
++@pytest.mark.skipif(not TE_FUSED_ADAM_AVAILABLE, reason="Requires TE FusedAdam")
++@pytest.mark.usefixtures("model_parallel_context")
++def test_chunk_size_zero_uses_one_full_state_window():
++    """Chunk size zero preserves full temporary GPU restore semantics."""
++
++    model, optimizer = create_model_and_optimizer(chunk_size_mb=0)
++    manager = optimizer.chained_optimizers[0]._optimizer_state_offloader
++    assert manager is not None
++    assert len(manager.chunks) == 1
++    del model, optimizer
++
++
++@pytest.mark.skipif(not TE_FUSED_ADAM_AVAILABLE, reason="Requires TE FusedAdam")
++@pytest.mark.usefixtures("model_parallel_context")
++def test_step_leaves_state_and_master_cpu_canonical():
++    """A completed update leaves selected moments and masters CPU-resident before forward."""
++
++    model, optimizer = create_model_and_optimizer(hidden_size=512, chunk_size_mb=1)
++    dist_optimizer = optimizer.chained_optimizers[0]
++    manager = dist_optimizer._optimizer_state_offloader
++
++    offload_before_forward(optimizer)
++    run_forward_backward_step(model, optimizer, hidden_size=512)
++    optimizer.offload_optimizer_state_for_forward()
++
++    for param in manager.selected_params:
++        for key, value in manager.optimizer.state[param].items():
++            if isinstance(value, torch.Tensor) and value.numel() == param.numel():
++                assert value.device.type == 'cpu', f"{key} was not offloaded"
++
++    for group in dist_optimizer.shard_fp32_from_float16_groups:
++        for param in group:
++            if manager.is_param_offloaded(param):
++                assert param.device.type == 'cpu'
++
++    del model, optimizer
++
++
++@pytest.mark.skipif(not TE_FUSED_ADAM_AVAILABLE, reason="Requires TE FusedAdam")
++@pytest.mark.usefixtures("model_parallel_context")
++def test_state_can_offload_before_master_for_mxfp8_staging():
++    """The delayed-master path keeps masters on CUDA until parameter staging completes."""
++
++    model, optimizer = create_model_and_optimizer(hidden_size=512, chunk_size_mb=1)
++    dist_optimizer = optimizer.chained_optimizers[0]
++    manager = dist_optimizer._optimizer_state_offloader
++
++    offload_before_forward(optimizer)
++    run_forward_backward_step(model, optimizer, hidden_size=512)
++    optimizer.offload_optimizer_state_for_forward(offload_master=False)
++
++    for param in manager.selected_params:
++        for key, value in manager.optimizer.state[param].items():
++            if key != "master_param" and isinstance(value, torch.Tensor):
++                if value.numel() == param.numel():
++                    assert value.device.type == "cpu"
++    for group in dist_optimizer.shard_fp32_from_float16_groups:
++        for param in group:
++            if manager.is_param_offloaded(param):
++                assert param.is_cuda
++
++    optimizer.offload_optimizer_state_for_forward()
++    for group in dist_optimizer.shard_fp32_from_float16_groups:
++        for param in group:
++            if manager.is_param_offloaded(param):
++                assert param.device.type == "cpu"
++
++    optimizer.synchronize_optimizer_state_for_checkpoint()
++    del model, optimizer
++
++
++@pytest.mark.skipif(not TE_FUSED_ADAM_AVAILABLE, reason="Requires TE FusedAdam")
++@pytest.mark.usefixtures("model_parallel_context")
++def test_offload_fraction_applies_to_state_master_bundles():
++    """Partial offload selects matching state/master bundles deterministically."""
++
++    model, optimizer = create_model_and_optimizer(
++        hidden_size=512, chunk_size_mb=1, offload_fraction=0.5
++    )
++    dist_optimizer = optimizer.chained_optimizers[0]
++    manager = dist_optimizer._optimizer_state_offloader
++    assert manager is not None
++    total_bytes = sum(manager._estimated_bundle_bytes(param) for param in manager._params)
++    selected_bytes = sum(
++        manager._estimated_bundle_bytes(param) for param in manager.selected_params
++    )
++    assert manager.selected_params
++    assert selected_bytes >= (total_bytes + 1) // 2
++
++    selected_ids = {id(param) for param in manager.selected_params}
++    resident_master = any(
++        id(param) in manager._explicit_master_param_ids and id(param) not in selected_ids
++        for param in manager._params
++    )
++    selected_without_master = any(
++        id(param) not in manager._explicit_master_param_ids for param in manager.selected_params
++    )
++    assert not (resident_master and selected_without_master)
++
++    offload_before_forward(optimizer)
++    for group in dist_optimizer.shard_fp32_from_float16_groups:
++        for param in group:
++            if id(param) in selected_ids:
++                assert param.device.type == 'cpu'
++            else:
++                assert param.is_cuda
++
++    del model, optimizer
++
++
++@pytest.mark.skipif(not TE_FUSED_ADAM_AVAILABLE, reason="Requires TE FusedAdam")
++@pytest.mark.usefixtures("model_parallel_context")
++def test_partial_offload_keeps_data_parallel_ranks_in_sync():
++    """Rank-local partial selections must still produce identical gathered parameters."""
++
++    if torch.distributed.get_world_size() < 2:
++        pytest.skip("Requires multiple data-parallel ranks")
++
++    torch.manual_seed(42)
++    model, optimizer = create_model_and_optimizer(
++        hidden_size=512, chunk_size_mb=1, offload_fraction=0.5
++    )
++    torch.manual_seed(123)
++    for _ in range(2):
++        inputs = torch.randn(8, 512, dtype=torch.bfloat16, device="cuda")
++        offload_before_forward(optimizer)
++        run_forward_backward_step(model, optimizer, hidden_size=512, input_tensor=inputs)
++
++    optimizer.offload_optimizer_state_for_forward()
++    for param in model.parameters():
++        gathered = [torch.empty_like(param) for _ in range(torch.distributed.get_world_size())]
++        torch.distributed.all_gather(gathered, param)
++        for other in gathered[1:]:
++            torch.testing.assert_close(param, other, atol=0, rtol=0)
++
++    optimizer.synchronize_optimizer_state_for_checkpoint()
++    del model, optimizer
++
++
++@pytest.mark.skipif(not TE_FUSED_ADAM_AVAILABLE, reason="Requires TE FusedAdam")
++@pytest.mark.usefixtures("model_parallel_context")
++def test_chunked_step_advances_group_step_once():
++    """Calling the external optimizer for several chunks advances logical step only once."""
++
++    # DistOpt shards the flat parameter buffer across DP ranks. Give every rank about three
++    # small layers so each local shard contains several bundles and must span multiple chunks.
++    num_layers = 3 * torch.distributed.get_world_size()
++    model, optimizer = create_model_and_optimizer(num_layers=num_layers, chunk_size_mb=1)
++    dist_optimizer = optimizer.chained_optimizers[0]
++    manager = dist_optimizer._optimizer_state_offloader
++    assert manager is not None and len(manager.chunks) > 1
++
++    for _ in range(3):
++        offload_before_forward(optimizer)
++        run_forward_backward_step(model, optimizer)
++
++    steps = [
++        group['step']
++        for group in manager.optimizer.param_groups
++        if group['params'] and 'step' in group
++    ]
++    assert steps and all(step == 3 for step in steps)
++
++    del model, optimizer
++
++
++@pytest.mark.skipif(not TE_FUSED_ADAM_AVAILABLE, reason="Requires TE FusedAdam")
++@pytest.mark.usefixtures("model_parallel_context")
++def test_training_matches_non_offloaded_optimizer():
++    """Chunked updates remain numerically equivalent to a full FusedAdam update."""
++
++    torch.manual_seed(42)
++    model_offload, optimizer_offload = create_model_and_optimizer(
++        chunked_optimizer_state_offload=True, chunk_size_mb=1, lr=0.01
++    )
++    torch.manual_seed(42)
++    model_reference, optimizer_reference = create_model_and_optimizer(
++        chunked_optimizer_state_offload=False, lr=0.01
++    )
++
++    torch.manual_seed(123)
++    for _ in range(5):
++        inputs = torch.randn(8, 256, dtype=torch.bfloat16, device='cuda')
++
++        offload_before_forward(optimizer_offload)
++        run_forward_backward_step(model_offload, optimizer_offload, input_tensor=inputs)
++
++        output = model_reference(inputs)
++        output.sum().backward()
++        optimizer_reference.step()
++        optimizer_reference.zero_grad()
++
++    optimizer_offload.offload_optimizer_state_for_forward()
++    for (name_offload, param_offload), (name_reference, param_reference) in zip(
++        model_offload.named_parameters(), model_reference.named_parameters()
++    ):
++        assert name_offload == name_reference
++        torch.testing.assert_close(
++            param_offload,
++            param_reference,
++            atol=1e-5,
++            rtol=1e-4,
++            msg=f"Parameter {name_offload} differs from the full-step reference",
++        )
++
++    del model_offload, optimizer_offload, model_reference, optimizer_reference
+diff --git a/tests/unit_tests/test_chunked_offload_s3_layerwise.py b/tests/unit_tests/test_chunked_offload_s3_layerwise.py
+new file mode 100644
+index 000000000..1fe73794b
+--- /dev/null
++++ b/tests/unit_tests/test_chunked_offload_s3_layerwise.py
+@@ -0,0 +1,310 @@
++# Copyright (c) 2025 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
++"""S3 backport tests: chunked optimizer-state offload through LayerWiseDistributedOptimizer.
++
++Adapted from upstream PR #6244's test_layer_wise_optimizer.py additions. Divergence from
++upstream: this snapshot's dist_muon chain holds the TensorParallelMuon child plus Adam
++children inside one LayerWiseDistributedOptimizer (upstream routes Adam through a sibling
++DistributedOptimizer), so Adam children are skipped rather than rejected, and the GPU
++golden test compares a full dist_muon chain against its non-offloaded twin.
++"""
++
++import os
++from types import SimpleNamespace
++
++import pytest
++import torch
++import torch.nn as nn
++import torch.nn.functional as F
++from packaging.version import Version
++
++from megatron.core.distributed import DistributedDataParallel, DistributedDataParallelConfig
++from megatron.core.optimizer import OptimizerConfig
++from megatron.core.optimizer.layer_wise_optimizer import LayerWiseDistributedOptimizer
++from megatron.core.optimizer.muon import TensorParallelMuon, get_megatron_muon_optimizer
++from megatron.core.transformer import TransformerConfig
++from tests.unit_tests.test_utilities import Utils
++
++# Skip all tests in this file for LTS versions (same gate as test_muon_optimizer.py).
++pytestmark = pytest.mark.skipif(
++    Version(os.getenv('NVIDIA_PYTORCH_VERSION', "24.01")) <= Version("25.05"),
++    reason="Skip muon optimizer for LTS test",
++)
++
++
++# --------------------------------------------------------------------------------------
++# Mock tests (no GPU / no distributed init)
++# --------------------------------------------------------------------------------------
++
++
++def test_layerwise_step_hook_is_noop_without_chunked_offload():
++    """Disabled offload must not inspect child-only manager attributes."""
++
++    optimizer = object.__new__(LayerWiseDistributedOptimizer)
++    optimizer.config = SimpleNamespace(chunked_optimizer_state_offload=False)
++    optimizer.chained_optimizers = [object()]
++
++    assert optimizer._managed_optimizer_state_offload_child_indices() == ()
++    optimizer._before_child_step(0)
++
++
++def _fake_shard_params(self, optimizers):
++    self.dp_cp_params_list = None
++    self.expt_dp_params_list = None
++
++
++class _FakeWrappedOptimizer:
++    def __init__(self, optimizer, config, grad_scaler, init_state_fn):
++        self.optimizer = optimizer
++        self.config = config
++        self.fp32_from_float16_groups = [[]]
++        self._optimizer_state_offloader = None
++        self.enable_calls = []
++        self.deferred_calls = []
++
++    def enable_chunked_optimizer_state_offload(self, master_params, state_dtypes):
++        self.enable_calls.append((master_params, state_dtypes))
++        self._optimizer_state_offloader = object()
++
++    def set_optimizer_state_offload_deferred_lifecycle(
++        self, *, state_prefetch_to_step, master_offload_for_param_sync
++    ):
++        self.deferred_calls.append((state_prefetch_to_step, master_offload_for_param_sync))
++
++
++def _mock_config(fraction):
++    return SimpleNamespace(
++        bf16=True,
++        chunked_optimizer_state_offload=True,
++        optimizer_state_offload_fraction=fraction,
++    )
++
++
++def test_layerwise_fraction_zero_skips_offload_specific_child_inspection(monkeypatch):
++    """A zero fraction must bypass Muon schema inspection and offloader construction."""
++
++    monkeypatch.setattr(
++        "megatron.core.optimizer.layer_wise_optimizer.Float16OptimizerWithFloat16Params",
++        _FakeWrappedOptimizer,
++    )
++    monkeypatch.setattr(LayerWiseDistributedOptimizer, "shard_params", _fake_shard_params)
++
++    optimizer = LayerWiseDistributedOptimizer([object()], _mock_config(fraction=0.0))
++
++    assert optimizer._managed_optimizer_state_offload_child_indices() == ()
++    assert optimizer.chained_optimizers[0].enable_calls == []
++    LayerWiseDistributedOptimizer._before_child_step(optimizer, 0)
++
++
++def _raw_muon_with_params():
++    raw_optimizer = object.__new__(TensorParallelMuon)
++    raw_optimizer.param_groups = [{"params": [object()]}]
++    return raw_optimizer
++
++
++def test_layerwise_offload_rejects_multiple_nonempty_muon_children(monkeypatch):
++    """The supported LayerWise offload schema has at most one local Muon child."""
++
++    monkeypatch.setattr(
++        "megatron.core.optimizer.layer_wise_optimizer.Float16OptimizerWithFloat16Params",
++        _FakeWrappedOptimizer,
++    )
++    monkeypatch.setattr(LayerWiseDistributedOptimizer, "shard_params", _fake_shard_params)
++
++    raw_optimizers = [_raw_muon_with_params() for _ in range(2)]
++
++    with pytest.raises(AssertionError, match="at most one non-empty TensorParallelMuon child"):
++        LayerWiseDistributedOptimizer(raw_optimizers, _mock_config(fraction=1.0))
++
++
++def test_layerwise_adam_children_are_skipped_not_rejected(monkeypatch):
++    """Backport divergence: non-Muon (Adam) chain children stay resident, Muon child enables."""
++
++    monkeypatch.setattr(
++        "megatron.core.optimizer.layer_wise_optimizer.Float16OptimizerWithFloat16Params",
++        _FakeWrappedOptimizer,
++    )
++    monkeypatch.setattr(LayerWiseDistributedOptimizer, "shard_params", _fake_shard_params)
++
++    adam_like = SimpleNamespace(param_groups=[{"params": [object()]}])
++    optimizer = LayerWiseDistributedOptimizer(
++        [_raw_muon_with_params(), adam_like], _mock_config(fraction=1.0)
++    )
++
++    muon_child, adam_child = optimizer.chained_optimizers
++    assert muon_child.enable_calls == [([], (torch.float32,))]
++    assert muon_child.deferred_calls == [(True, False)]
++    assert adam_child.enable_calls == []
++    assert optimizer._managed_optimizer_state_offload_child_indices() == (0,)
++
++
++def test_layerwise_empty_muon_child_keeps_no_offloader_path(monkeypatch):
++    """Whole-parameter sharding can leave a rank with a Muon child that owns no params."""
++
++    monkeypatch.setattr(
++        "megatron.core.optimizer.layer_wise_optimizer.Float16OptimizerWithFloat16Params",
++        _FakeWrappedOptimizer,
++    )
++    monkeypatch.setattr(LayerWiseDistributedOptimizer, "shard_params", _fake_shard_params)
++
++    raw_optimizer = object.__new__(TensorParallelMuon)
++    raw_optimizer.param_groups = [{"params": []}]
++    optimizer = LayerWiseDistributedOptimizer([raw_optimizer], _mock_config(fraction=1.0))
++
++    assert optimizer.chained_optimizers[0].enable_calls == []
++    assert optimizer._managed_optimizer_state_offload_child_indices() == ()
++
++
++def test_layerwise_prefetches_single_managed_child_state():
++    """LayerWise prefetches its single managed child before the chained step."""
++
++    events = []
++
++    def child(name, managed):
++        return SimpleNamespace(
++            _optimizer_state_offloader=object() if managed else None,
++            prefetch_optimizer_master_weights_for_step=lambda: events.append(f"master:{name}"),
++            prefetch_optimizer_state_for_step=lambda: events.append(f"state:{name}"),
++            step_with_ready_grads=lambda: events.append(f"step:{name}") or True,
++        )
++
++    children = [child("a", False), child("b", True), child("c", False)]
++    optimizer = object.__new__(LayerWiseDistributedOptimizer)
++    optimizer.chained_optimizers = children
++    optimizer.config = SimpleNamespace(
++        chunked_optimizer_state_offload=True,
++        optimizer_state_offload_fraction=1.0,
++        overlap_param_gather_with_optimizer_step=False,
++    )
++    optimizer._managed_optimizer_state_offload_indices = (1,)
++
++    optimizer.prefetch_optimizer_state_for_gradient_finalization()
++    assert events == ["master:a", "master:b", "master:c", "state:b"]
++
++    events.clear()
++    assert optimizer.step_with_ready_grads()
++    assert events == ["state:b", "step:a", "step:b", "step:c"]
++
++
++# --------------------------------------------------------------------------------------
++# GPU tests (single rank; same harness pattern as test_muon_optimizer.py)
++# --------------------------------------------------------------------------------------
++
++
++class Net(nn.Module):
++    def __init__(self):
++        super().__init__()
++        self.fc1 = nn.Linear(80, 48)
++        self.fc2 = nn.Linear(48, 32)
++        self.fc3 = nn.Linear(32, 24)
++        self.fc4 = nn.Linear(24, 16)
++        self.fc5 = nn.Linear(16, 10)
++
++    def forward(self, x):
++        x = F.relu(self.fc1(x))
++        x = F.relu(self.fc2(x))
++        x = F.relu(self.fc3(x))
++        x = F.relu(self.fc4(x))
++        x = self.fc5(x)
++        return x
++
++
++class TestLayerWiseMuonChunkedOffload:
++    @pytest.fixture(autouse=True)
++    def setup_and_teardown(self):
++        Utils.initialize_model_parallel()
++        yield
++        Utils.destroy_model_parallel()
++
++    def _create_model_and_optimizer(self, offload: bool, seed: int = 1234):
++        torch.manual_seed(seed)
++        model = Net().bfloat16().cuda()
++        model.requires_grad_(True)
++        ddp_config = DistributedDataParallelConfig(use_distributed_optimizer=False)
++        model = DistributedDataParallel(
++            TransformerConfig(num_attention_heads=1, num_layers=1), ddp_config, model
++        )
++        optimizer_config = OptimizerConfig(
++            optimizer='muon',
++            lr=0.01,
++            weight_decay=0.01,
++            bf16=True,
++            use_distributed_optimizer=False,
++            muon_momentum=0.95,
++            muon_use_nesterov=True,
++            muon_fp32_matmul_prec="medium",
++            muon_num_ns_steps=5,
++            muon_scale_mode="spectral",
++            muon_tp_mode="duplicated",
++            chunked_optimizer_state_offload=offload,
++            optimizer_state_offload_chunk_size_mb=1 if offload else 0,
++            optimizer_state_offload_fraction=1.0,
++        )
++        optimizer = get_megatron_muon_optimizer(
++            config=optimizer_config,
++            model_chunks=[model],
++            use_gloo_process_groups=True,
++            layer_wise_distributed_optimizer=True,
++        )
++        assert isinstance(optimizer, LayerWiseDistributedOptimizer)
++        return model, optimizer
++
++    def test_offloader_enabled_on_muon_child_only(self):
++        """The Muon child gets an offloader; Adam children keep GPU-resident state."""
++
++        model, optimizer = self._create_model_and_optimizer(offload=True)
++
++        muon_child = optimizer.chained_optimizers[0]
++        assert type(muon_child.optimizer) is TensorParallelMuon
++        assert muon_child._optimizer_state_offloader is not None
++        for adam_child in optimizer.chained_optimizers[1:]:
++            assert getattr(adam_child, '_optimizer_state_offloader', None) is None
++        assert optimizer._managed_optimizer_state_offload_child_indices() == (0,)
++
++        # One step, then the forward-phase offload: Muon state and masters must be on CPU.
++        inputs = torch.randn(16, 80, dtype=torch.bfloat16, device='cuda')
++        model(inputs).sum().backward()
++        optimizer.prefetch_optimizer_state_for_gradient_finalization()
++        update_successful, _, _ = optimizer.step()
++        assert update_successful
++
++        optimizer.offload_optimizer_state_for_forward()
++        manager = muon_child._optimizer_state_offloader
++        torch.cuda.synchronize()
++        for param in manager.selected_params:
++            state = manager.optimizer.state[param]
++            for value in state.values():
++                if isinstance(value, torch.Tensor) and value.numel() == param.numel():
++                    assert value.device.type == 'cpu'
++        for group in muon_child.fp32_from_float16_groups:
++            for master in group:
++                if manager.is_param_offloaded(master):
++                    assert master.device.type == 'cpu'
++
++    def test_layerwise_offload_matches_non_offloaded(self):
++        """Golden: 5 offloaded lifecycle steps match the non-offloaded twin exactly."""
++
++        model, optimizer = self._create_model_and_optimizer(offload=True, seed=777)
++        reference_model, reference_optimizer = self._create_model_and_optimizer(
++            offload=False, seed=777
++        )
++        for p, q in zip(model.parameters(), reference_model.parameters()):
++            assert torch.equal(p, q), "twin init mismatch — seed handling broken"
++
++        torch.manual_seed(4242)
++        batches = [torch.randn(16, 80, dtype=torch.bfloat16, device='cuda') for _ in range(5)]
++
++        for step_idx, batch in enumerate(batches):
++            optimizer.offload_optimizer_state_for_forward()
++            optimizer.zero_grad()
++            model(batch).sum().backward()
++            optimizer.prefetch_optimizer_state_for_gradient_finalization()
++            assert optimizer.step()[0]
++
++            reference_optimizer.zero_grad()
++            reference_model(batch).sum().backward()
++            assert reference_optimizer.step()[0]
++
++            for (name, p), (_, q) in zip(
++                model.named_parameters(), reference_model.named_parameters()
++            ):
++                assert torch.equal(p, q), f"step {step_idx}: parameter {name} diverged"
 diff --git a/tests/unit_tests/test_muon_optimizer.py b/tests/unit_tests/test_muon_optimizer.py
 index cc99f7a16..c7d86c7d9 100644
 --- a/tests/unit_tests/test_muon_optimizer.py
