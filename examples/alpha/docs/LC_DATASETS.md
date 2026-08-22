@@ -247,6 +247,24 @@ EDGAR `cik`(같은 기업 연도 시리즈), peS2o field-of-study, repo 단위 �
 > 같은 문서 §3에 filler(§5.1의 "stage2 v5 재패킹") 전제 붕괴 — stage2 unpacked
 > 소실 — 와 대안 옵션도 기록되어 있다.
 
+> **✅ 재패킹 완료 (2026-08-21, 러너북 작업 1 + KO 2종)** — 산출:
+> `LL_preprocessed/v5/cpt_lc_packed_32k_pad16/<ds>/`. pytest 19/19, 도구 내장
+> post-verify 전 종 통과, 러너북 §2.3 %16 EOD-run 경계 표본검사(종당 500 bins)
+> **전 종 misaligned=0**. real 토큰은 구본과 동일 (EN 4종 합 15.56B). **KO 2종이
+> 같은 트리에 추가됨** (`ko_news` 423.8M — NIKL 이벤트-스레드 팩, bin=팩 1개·잘림 0;
+> `ko_grounded` 44.3M — NIKL 그라운디드 합성; 출처·게이트는 각 디렉토리 README).
+>
+> | ds | bins | fill | per-doc pad(%16) |
+> |---|---|---|---|
+> | longblocks | 130,461 | 99.70% | +0.027% |
+> | pg19 | 12,172 | 99.69% | +0.024% |
+> | edgar | 168,789 | 99.96% | +0.026% |
+> | pes2o | 166,034 | 98.72% | +0.053% |
+> | **ko_news** | 13,141 | 98.42% | +0.023% |
+> | **ko_grounded** | 1,515 | 89.32% | +0.104% |
+>
+> 구 `cpt_lc_packed_32k/`는 LC-A 블렌드 yaml이 pad16 경로로 확정된 뒤 삭제 가능.
+
 `run_cpt_lc_v5.sh`로 4종 전체 처리 완료 (convert → tokenize → split(T=64k) →
 bestfit_pack 32k). 산출: `LL_preprocessed/v5/cpt_lc{,_packed_32k}/<ds>/`.
 

@@ -271,8 +271,11 @@ eval_model() {
     if [ "$WANDB_ENABLED" == "true" ]; then
         echo "📊 Uploading summary to WandB..."
         unset WANDB_START_METHOD  # Clean up env from accelerate eval
+        # --scan-dir: 형제 hfmodel_* 를 전부 훑어 한 run에 cumulative_iter 순으로 쌓는다.
+        # (--model-path 단건 호출은 매 평가마다 점 1개짜리 run을 새로 만들어 추이가 안 그려짐)
+        SCAN_DIR="${WANDB_SCAN_DIR:-$(dirname "$MODEL_PATH")}"
         python3 ${SCRIPT_DIR}/upload_benchmarks_to_wandb.py \
-            --model-path "$MODEL_PATH" \
+            --scan-dir "$SCAN_DIR" \
             --project "${WANDB_PROJECT_BENCHMARKS:-alpha-benchmarks}" || \
             echo "⚠️  WandB summary upload failed (non-fatal)"
     fi
