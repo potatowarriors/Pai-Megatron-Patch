@@ -1,8 +1,11 @@
 # LC 재패킹 러너북 — THD+CP용 `--pad-doc-multiple 16` (2026-08-21 작성)
 
-> **상태 (2026-08-22 갱신)**: 작업 1(LC 4종 32k)·작업 2(filler) **완료** — syn_data
-> 세션이 `cpt_lc_packed_32k_pad16/`·`lc_filler_packed_32k_pad16/` 트리를 산출했고,
-> filler preset은 `configs/data/lc_filler_32k_pad16.yaml`로 커밋됨. 산출물 중
+> **상태 (2026-08-22 갱신)**: 작업 1(LC 32k 재패킹, KO 2종 포함 6종) **완료**,
+> 작업 2(filler)는 **대부분 완료** — 일반 11종 + specialized 8/15 산출(합 42.9B+ real),
+> **specialized 잔여 7종은 100코어 노드 인계 진행 중**
+> ([`LC_FILLER_HANDOFF.md`](LC_FILLER_HANDOFF.md) — 재개 절차·동시쓰기 금지 규칙 포함).
+> filler preset은 `configs/data/lc_filler_32k_pad16.yaml`로 커밋됨(specialized 미빌드
+> 경로 포함 — 전 경로 존재 확인 후 학습 투입). 산출물 중
 > ko_news·edgar는 THD+CP 스티치 풀스택 검증(CP{1,2,4} 등가, gdn_cp_port.md
 > 분석노트 3)에 실사용되어 %16 정렬이 실전 확인됨. **작업 3(128k)은 수요 확정** —
 > Muon chunked offload로 128K@CP8이 GO 전환(max-alloc 54.9~58.8GB,

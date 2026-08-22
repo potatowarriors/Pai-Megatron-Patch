@@ -153,8 +153,9 @@ alpha의 **LC-phase → SFT → RL(MOPD)** 훈련 계획을 위한 데이터 준
    (08-22 갱신, 실행 절차는 [`LC_REPACK_RUNBOOK.md`](LC_REPACK_RUNBOOK.md) — 상태 블록 참조):
    ① ~~LC 4종 32k 재패킹~~ **완료 (08-22)** — `cpt_lc_packed_32k_pad16/` 산출,
       ko_news·edgar는 THD+CP 풀스택 검증에 실사용되어 %16 정렬 실전 확인
-   ② ~~filler 소스 결정·생산~~ **완료 (08-22)** — P3 미러(결정 #10),
-      `lc_filler_packed_32k_pad16/` 트리 + `configs/data/lc_filler_32k_pad16.yaml` 커밋
+   ② filler 생산 — P3 미러(결정 #10), 일반 11종 + specialized 8/15 완료(42.9B+ real),
+      **specialized 잔여 7종은 100코어 노드 인계 진행 중**(`LC_FILLER_HANDOFF.md`);
+      `configs/data/lc_filler_32k_pad16.yaml` 커밋(전 경로 존재 확인 후 투입)
    ③ **LC-A training preset 작성만 남음** (CP4·32K·qk-clip 제거·clip-grad ×cp 재검토·
       THD 플래그셋 — 체크리스트는 `LC_ENTRY_GATE.md` 상단 요약).
 
