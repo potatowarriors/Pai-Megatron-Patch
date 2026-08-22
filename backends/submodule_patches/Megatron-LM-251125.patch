@@ -1,3 +1,46 @@
+diff --git a/megatron/core/models/common/embeddings/rope_utils.py b/megatron/core/models/common/embeddings/rope_utils.py
+index e39540eb1..5d0a1e340 100644
+--- a/megatron/core/models/common/embeddings/rope_utils.py
++++ b/megatron/core/models/common/embeddings/rope_utils.py
+@@ -202,7 +202,6 @@ def _apply_rotary_pos_emb_thd(
+     cp_size = cp_group.size()
+     cp_rank = cp_group.rank()
+     seqlens = ((cu_seqlens[1:] - cu_seqlens[:-1]) // cp_size).tolist()
+-
+     # Handle two different frequency tensor formats:
+     # 1. If freqs.size(0) == cu_seqlens[-1]: freqs contains all positions across all sequences
+     #    -> Use offset-based mapping for exact positional correspondence
+diff --git a/megatron/core/models/mamba/mamba_model.py b/megatron/core/models/mamba/mamba_model.py
+index e4074eda8..e6927fced 100644
+--- a/megatron/core/models/mamba/mamba_model.py
++++ b/megatron/core/models/mamba/mamba_model.py
+@@ -177,6 +177,7 @@ class MambaModel(LanguageModule):
+         labels: Tensor = None,
+         inference_context: BaseInferenceContext = None,
+         runtime_gather_output: Optional[bool] = None,
++        packed_seq_params=None,
+         *,
+         inference_params: Optional[BaseInferenceContext] = None,
+     ) -> Tensor:
+@@ -208,10 +209,16 @@ class MambaModel(LanguageModule):
+ 
+         rotary_pos_emb = None
+         if self.position_embedding_type == 'rope':
++            # Mirror gpt_model: for THD (packed) sequences the rotary table must
++            # stay UNSLICED (the thd rope helpers do their own per-segment CP
++            # slicing) and its length must cover the max per-document position.
++            # Without this, CP>1 + THD reads out of the pre-sliced table.
+             rotary_seq_len = self.rotary_pos_emb.get_rotary_seq_len(
+-                inference_context, self.decoder, decoder_input, self.config
++                inference_context, self.decoder, decoder_input, self.config, packed_seq_params
++            )
++            rotary_pos_emb = self.rotary_pos_emb(
++                rotary_seq_len, packed_seq_params=packed_seq_params
+             )
+-            rotary_pos_emb = self.rotary_pos_emb(rotary_seq_len)
+ 
+         # Wrap decoder_input to allow the decoder (MambaBlock) to delete the
+         # reference held by this caller function, enabling early garbage collection
 diff --git a/megatron/core/num_microbatches_calculator.py b/megatron/core/num_microbatches_calculator.py
 index ae7cea92e..ac8b30ea2 100644
 --- a/megatron/core/num_microbatches_calculator.py
@@ -2121,6 +2164,33 @@ index 8692d1e9b..c6ba62fcf 100644
          # The following condition is used to avoid repetition in distrib_optimizer.py.
          # This is because in distrib_optimizer.py, the process to handle parameters are
          # different for different training precision settings. FP8 cases require different
+diff --git a/megatron/core/utils.py b/megatron/core/utils.py
+index 3a153468a..61fc1fdf1 100644
+--- a/megatron/core/utils.py
++++ b/megatron/core/utils.py
+@@ -2013,6 +2013,11 @@ def get_thd_batch_on_this_cp_rank(
+     sequence dimension into multiple chunks, which are parallelized
+     across GPUs in a context parallel group.
+     """
++    # Local import: this module is imported by nearly everything in core, and
++    # the name was missing entirely upstream (latent NameError, function was
++    # never exercised in this snapshot).
++    from megatron.core.packed_seq_params import PackedSeqParams
++
+     packed_seq_params = PackedSeqParams(
+         qkv_format="thd",
+         cu_seqlens_q=cu_seqlens,
+@@ -2040,6 +2045,10 @@ def get_thd_batch_on_this_cp_rank(
+         for key, data in batch.items():
+             if key in {'attention_mask', 'cu_seqlens', 'cu_seqlens_padded', 'max_seqlen'}:
+                 continue
++            # None guard mirrors get_batch_on_this_cp_rank (upstream latent bug:
++            # e.g. attention_mask disabled in the dataloader arrives as None).
++            if data is None:
++                continue
+             batch[key] = data.index_select(1, index)
+ 
+     return batch, packed_seq_params
 diff --git a/megatron/training/arguments.py b/megatron/training/arguments.py
 index 757f2b63d..ef0a3574b 100644
 --- a/megatron/training/arguments.py

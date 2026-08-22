@@ -231,3 +231,43 @@ P3(stage2) 완주 직후 유휴 창구에서 러너북 §1~4 전체 실행. **�
    스루풋 개선용.
 3. **운영 함정**: 연속 torchrun 실행 시 직전 런 잔류로 EADDRINUSE 연쇄 — 런 사이
    `nvidia-smi` compute-proc 0 대기 필수 (게이트 드라이버에 가드 구현).
+
+## 분석노트 3 — THD+CP 스티치와 rope 잠복 버그 (2026-08-22)
+
+브랜치 통합(gdn-cp 머지 → varlen-thd rebase, 충돌 1건: conv bias 가드+seq_idx 결합)
+후 스티치 커밋. 핵심 배선: mixer가 `a2a_cp_to_hp/hp_to_cp`(세그먼트별 순열이
+로드밸런싱 undo를 흡수) + `resolve_cu_seqlens`(%2cp 검증)를 사용, helper는 CP>1에서
+`merge_eod_pad_segments` 후 core의 `get_thd_batch_on_this_cp_rank`(TE
+`thd_get_partitioned_indices`)로 세그먼트별 파티셔닝. merge는 CP=1에도 적용해
+CP 차수 간 의미 동일성 확보(pad-free 데이터에선 no-op).
+
+**검증**: ① mixer torchrun CP{2,4} dense+THD **비트 동일**(diff 0.000e+00; 수동
+파티션 레이아웃 vs TE 커널 교차 assert). CP=8 mixer 토이는 k-head 4 < cp 제약으로
+불가(실모델 k16은 무관). ② 풀스택 analysis_24L, 실 32K pad16(ko_news+edgar 블렌드,
+EP8): CP{1,2,4} 20-iter 궤적 평균 상대 편차 1.2e-4 (max 3.2e-4) — 실행 간 비결정
+포락선 2.7e-3의 1/20. max-alloc 58.4/38.9/29.0GB (CP1/2/4).
+
+**스티치가 드러낸 잠복 버그 4건** (모두 이 스냅샷에서 THD+CP 경로가 한 번도
+실행된 적 없어 잠복):
+1. `core/utils.py get_thd_batch_on_this_cp_rank` — `PackedSeqParams` **import 자체가
+   없음**(NameError). 지연 import로 수정.
+2. 〃 슬라이싱 루프에 dense 버전에는 있는 **None 가드 부재**(attention_mask=None에서
+   AttributeError). 동일 가드 추가.
+3. **mamba_model.forward의 THD rope 미배선** — 진범. gpt_model과 달리
+   `get_rotary_seq_len`/`rotary_pos_emb()`에 packed_seq_params를 안 넘겨
+   `RotaryEmbedding.forward`가 dense CP 관례로 **테이블을 rank별 zigzag로 사전
+   슬라이스**(로컬 길이 16384). THD rope 함수들은 풀 테이블을 받아 자체 CP
+   슬라이싱하므로 fused rope 커널이 테이블 밖을 읽어 **q 5.7%·k 일부 NaN** →
+   3레이어 뒤 MoE 라우터에서 CUDA topk가 NaN에 중복 인덱스를 반환 →
+   routing_map 행합<topk → dispatcher a2a "Split sizes doesn't match" 크래시.
+   증상(MoE)에서 원인(rope)까지 4단계 역추적: split합 73728=16384×4.5의 구조성
+   → routing probs NaN 8191개 → GDN in/out 프로브 무발화(어텐션 산) → rope 직후
+   q/k NaN 실측 → unfused rope로 전환 시 같은 지점 형상 크래시(freqs 8192 vs t
+   16384)가 사전 슬라이스 확정 → 테이블 길이 16384 실측. 수정 = upstream gpt_model
+   미러(2곳) + alpha 래퍼 전달 + helper max_seqlen int화.
+4. (수정 아님, 함정 기록) `--train-iters 2`는 profile 계열 preset의 warmup=2와
+   충돌(`lr_warmup_steps < lr_decay_steps` assert) — 프로브는 4+ iter로.
+
+**LC-A에의 함의**: CP4·32K THD 경로는 이제 실데이터 풀스택으로 확인됨. 남은 것은
+LC-A preset 작성뿐. muon-offload 브랜치도 main에 흡수됐으므로 S5(128K@CP8 실측)는
+main에서 `--chunked-optimizer-state-offload`로 바로 시도 가능.

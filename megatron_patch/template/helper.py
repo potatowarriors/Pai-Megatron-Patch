@@ -21,6 +21,10 @@ from functools import partial
 from megatron.core import mpu
 
 from megatron.training import get_args, get_timers
+# NOTE: megatron.training's tokenizer — alpha initializes the core tokenizer
+# (megatron_patch.tokenizer.build_tokenizer is a separate registry that is NOT
+# built on the alpha pretrain path and would raise NotImplementedError).
+from megatron.training import get_tokenizer as get_core_tokenizer
 from megatron.training.utils import (
     average_losses_across_data_parallel_group,
     get_batch_on_this_cp_rank,
@@ -29,11 +33,13 @@ from megatron.training.utils import (
 
 from megatron.core.models.gpt import GPTModel
 from megatron.core.packed_seq_params import PackedSeqParams
+from megatron.core.utils import get_thd_batch_on_this_cp_rank
 from megatron_patch.data.utils import (
     get_batch_on_this_tp_rank_original,
     get_batch_on_this_tp_rank_idxmap_sft,
     get_position_id_on_this_tp_rank_idxmap_sft_packing,
     cu_seqlens_from_position_ids,
+    merge_eod_pad_segments,
 )
 
 def get_batch(data_iterator):
@@ -44,6 +50,10 @@ def get_batch(data_iterator):
     if (not mpu.is_pipeline_first_stage()) and (not mpu.is_pipeline_last_stage()):
         packed_seq_params = None
         if args.dataset == 'MMAP' and args.train_mode == "finetune" and args.reset_position_ids:
+            assert args.context_parallel_size == 1, (
+                "packed SFT on a middle pipeline stage has no THD+CP wiring "
+                "(cu_seqlens here is unmerged/global); use PP<=2 or CP=1"
+            )
             position_ids = get_position_id_on_this_tp_rank_idxmap_sft_packing(data_iterator)
             position_ids = position_ids[0] # shape: [seq_length]
             # NOTE: cu_seqlens: [0, A1, A1+A2, A1+A2+A3, ..., seq_len]
@@ -84,6 +94,7 @@ def get_batch(data_iterator):
             batch = get_batch_on_this_tp_rank_idxmap_sft(data_iterator, per_seq_average=True)
         
         packed_seq_params = None
+        cu_seqlens = None
         if args.reset_position_ids:
             # sequence-packing, build cu_seqlens
             position_ids = batch.get('position_ids', None)
@@ -93,22 +104,40 @@ def get_batch(data_iterator):
                     "position_ids[0] and therefore requires micro-batch-size 1, got "
                     f"micro batch {position_ids.shape[0]}"
                 )
-                position_ids = position_ids[0] # shape: [seq_length]
                 # NOTE: cu_seqlens: [0, A1, A1+A2, A1+A2+A3, ..., seq_len]
-                cu_seqlens, max_seqlen = cu_seqlens_from_position_ids(position_ids)
+                cu_seqlens, max_seqlen = cu_seqlens_from_position_ids(position_ids[0])
+                # Per-document EOD pad runs (bestfit_pack --pad-doc-multiple) show
+                # up as length-1 all-EOD segments because the position reset fires
+                # after EVERY EOD. Absorb them into the preceding document so each
+                # segment is "document + its pad run" — required for the THD+CP
+                # per-segment % (2*cp) divisibility, and a no-op on pad-free data.
+                cu_seqlens = merge_eod_pad_segments(
+                    cu_seqlens, batch['tokens'][0], get_core_tokenizer().eod
+                )
+                seg_lens = cu_seqlens[1:] - cu_seqlens[:-1]
+                max_seqlen = seg_lens.max().to(torch.int32)
+
+        num_seqs = batch.pop('num_seqs', None)
+        if cu_seqlens is not None and args.context_parallel_size > 1:
+            # THD + CP: every tensor is partitioned PER SEGMENT (each CP rank
+            # gets the load-balanced chunk pair (r, 2cp-1-r) of every packed
+            # segment via TE's thd_get_partitioned_indices). The GDN mixer's
+            # THD a2a permutation and TE's thd attention both assume exactly
+            # this layout. Pads are inline EODs, so padded == actual cu_seqlens.
+            batch, packed_seq_params = get_thd_batch_on_this_cp_rank(
+                batch, cu_seqlens, cu_seqlens, max_seqlen.reshape(1)
+            )
+        else:
+            if cu_seqlens is not None:
                 packed_seq_params = PackedSeqParams(
                     cu_seqlens_q=cu_seqlens,
                     cu_seqlens_kv=cu_seqlens,
                     qkv_format='thd',
-                    max_seqlen_q = max_seqlen,
-                    max_seqlen_kv = max_seqlen,
+                    max_seqlen_q=int(max_seqlen),
+                    max_seqlen_kv=int(max_seqlen),
                 )
-        
-        if packed_seq_params is not None and args.context_parallel_size > 1:
-            raise ValueError('Sequence Packing is not supported when CP>1 !')
-        # slice batch along sequence dimension for context parallelism
-        num_seqs = batch.pop('num_seqs', None)
-        batch = get_batch_on_this_cp_rank(batch)
+            # slice batch along sequence dimension for context parallelism
+            batch = get_batch_on_this_cp_rank(batch)
 
         return (
             batch['tokens'],

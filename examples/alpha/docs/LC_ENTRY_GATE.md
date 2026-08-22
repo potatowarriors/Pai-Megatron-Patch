@@ -17,10 +17,18 @@
 > qk-clip 제거** — `return_max_logit`×thd가 TE 2.9 삼중 비호환(NVTE_DEBUG 채증),
 > P3 종료 max logit 19.375(임계 1/5).
 >
-> **통과 후 작업 순서(§4 갱신)**: gdn-cp 머지 → varlen-thd rebase → **THD+CP
-> 스티치 커밋**(32K@CP1 OOM으로 필수 확정; §1.5 스티치 체크리스트) → LC-A preset
-> 작성(CP4 · 32K · qk-clip 제거 · clip-grad ×cp 재검토 · pad16 데이터+P3 미러 filler
-> · thd 플래그셋). FlashQLA 가드 스왑은 보류.
+> **통과 후 작업 순서(§4 갱신)**: gdn-cp 머지 ✅ → varlen-thd rebase ✅ → **THD+CP
+> 스티치 커밋 ✅ (2026-08-22)** — mixer a2a 배선 + helper `get_thd_batch_on_this_cp_rank`
+> + merge_eod_pad_segments 실전 배선. 검증: mixer torchrun CP{2,4} **비트 동일**(diff
+> 0.0, TE `thd_get_partitioned_indices` 레이아웃 교차검증) + **풀스택 CP{1,2,4}
+> 20-iter 궤적**(analysis_24L, 실 32K pad16 데이터: ko_news+edgar) 평균 상대 편차
+> 1.2e-4 = 실행 간 비결정 포락선(2.7e-3)의 1/20. 스티치 중 **잠복 버그 4건 수정**
+> (mamba_model THD rope 미배선 → CP>1에서 사전 슬라이스된 rope 테이블 OOB 읽기로
+> q/k NaN → MoE 라우터 topk 오염 크래시가 근본 원인; core utils의
+> get_thd_batch_on_this_cp_rank NameError + None 가드 2건; 상세는 gdn_cp_port.md
+> 분석노트 3) → 남은 것: LC-A preset 작성(CP4 · 32K · qk-clip 제거 · clip-grad ×cp
+> 재검토 · pad16 데이터+P3 미러 filler · thd 플래그셋 = --reset-position-ids
+> --no-create-attention-mask-in-dataloader MBS 1). FlashQLA 가드 스왑은 보류.
 
 **트리거**: P3(stage2) 학습 종료 → 8×H100 유휴 → **LC-A(32K) 학습 시작 전에 이 게이트를 통과해야 한다.**
 GPU가 P3에 점유된 동안 준비만 완료해 둔 두 검증 트랙(GDN CP 클러스터 검증 + FlashQLA

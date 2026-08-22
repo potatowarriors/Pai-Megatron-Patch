@@ -92,6 +92,11 @@ class AlphaMambaModel(MambaModel):
                 labels=labels,
                 inference_context=inference_context,
                 runtime_gather_output=runtime_gather_output,
+                # THD rope 배선 (mamba_model에 백포트된 gpt_model 미러):
+                # packed_seq에서 rotary 테이블 사전 CP-슬라이싱을 건너뛰고
+                # 길이를 max_seqlen으로 잡는다. 스태시(decoder override)는
+                # 레이어 전달용으로 그대로 유지.
+                packed_seq_params=packed_seq_params,
                 inference_params=inference_params,
             )
         finally:

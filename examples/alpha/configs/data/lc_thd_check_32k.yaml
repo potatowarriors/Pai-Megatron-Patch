@@ -1,0 +1,10 @@
+# THD+CP 스티치 풀스택 등가 검증 전용 데이터 (LC-A 본 블렌드 아님).
+# cpt_lc_packed_32k_pad16 중 세그먼트 구조 양극단 2종:
+#   ko_news — bin당 문서 수십 개 (bin0에 EOD 190개; 경계 스트레스 최대)
+#   edgar   — bin당 문서 소수 (bin0에 EOD 8개; 긴 문서 케이스)
+# 필수 동반 플래그: --reset-position-ids --no-create-attention-mask-in-dataloader
+# --micro-batch-size 1 (THD), seq-length 32768.
+data-path: "0.5 /home/work/Datasets/LL_preprocessed/v5/cpt_lc_packed_32k_pad16/ko_news/data_text_document 0.5 /home/work/Datasets/LL_preprocessed/v5/cpt_lc_packed_32k_pad16/edgar/data_text_document"
+split: "99,1,0"
+dataset: MMAP
+num-workers: 8

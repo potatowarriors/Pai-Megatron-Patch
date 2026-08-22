@@ -28,9 +28,9 @@ from megatron.core.ssm.mamba_context_parallel import MambaContextParallel
 from megatron.core.ssm.mamba_mixer import MambaMixer, MambaMixerSubmodules, _split_tensor_factory
 
 from megatron_patch.model.qwen3_next.gdn_context_parallel import (
-    build_head_perm_for_split_sections,
-    tensor_a2a_cp2hp,
-    tensor_a2a_hp2cp,
+    a2a_cp_to_hp,
+    a2a_hp_to_cp,
+    resolve_cu_seqlens,
 )
 
 
@@ -343,10 +343,16 @@ class GatedDeltaNetMixer(MambaMixer):
 
 
         seq_len, batch_size, dim = hidden_states.shape
+        cp_size = self.cp.cp_size
+        # Under CP the input is sequence-split (1/cp of the tokens per rank);
+        # conv/GDN below run on the FULL sequence after the cp2hp all-to-all.
+        total_seq_len = seq_len * cp_size
 
         # THD/varlen packing: reset conv receptive field and recurrent state at
         # every cu_seqlens boundary so packed sequences cannot leak into each
         # other. fla's varlen kernels require the flattened batch=1 layout.
+        # cu_seqlens is GLOBAL (dataloader-level, before the CP split); under
+        # CP the per-segment % (2*cp_size) divisibility is validated here.
         cu_seqlens = None
         conv_seq_idx = None
         if packed_seq_params is not None:
@@ -354,23 +360,32 @@ class GatedDeltaNetMixer(MambaMixer):
                 "GatedDeltaNetMixer varlen packing requires micro-batch-size 1 "
                 f"(flattened THD layout), got batch_size={batch_size}"
             )
-            cu_seqlens = packed_seq_params.cu_seqlens_q.to(dtype=torch.long)
-            conv_seq_idx = seq_idx_from_cu_seqlens(cu_seqlens, seq_len)
+            cu_seqlens = resolve_cu_seqlens(
+                packed_seq_params.cu_seqlens_q_padded,
+                packed_seq_params.cu_seqlens_q,
+                total_seq_len,
+                "cu_seqlens_q",
+                cp_size=cp_size,
+            ).to(dtype=torch.long)
+            conv_seq_idx = seq_idx_from_cu_seqlens(cu_seqlens, total_seq_len)
 
         zVQKba, _ = self.in_proj(hidden_states)
 
-        if self.cp.cp_size > 1:
-            # CP a2a: sequence-split -> head-split. After this, each CP rank
-            # holds the FULL sequence in natural order for its 1/cp slice of
-            # every section [z, V, Q, K, b, a], so the tpcp-sized splits below
-            # line up and the recurrence runs unbroken over the whole sequence.
-            head_perm = build_head_perm_for_split_sections(
-                self.in_proj_split_sections, self.cp.cp_size, zVQKba.device
-            )
-            zVQKba = zVQKba.index_select(-1, head_perm)
-            zVQKba = tensor_a2a_cp2hp(
-                zVQKba, seq_dim=0, head_dim=-1, cp_group=self.pg_collection.cp
-            )
+        # CP a2a: sequence-split -> head-split. After this, each CP rank holds
+        # the FULL sequence in natural order for its 1/cp slice of every
+        # section [z, V, Q, K, b, a], so the tpcp-sized splits below line up
+        # and the recurrence runs unbroken over the whole sequence. For THD the
+        # per-segment permutation (which folds the attention-load-balancing
+        # undo) replaces the whole-sequence undo; cp_size == 1 passes through.
+        zVQKba, thd_cp_a2a_inv = a2a_cp_to_hp(
+            zVQKba,
+            tuple(self.in_proj_split_sections),
+            cp_size,
+            self.pg_collection.cp,
+            cu_seqlens,
+            total_seq_len,
+            packed_seq_params,
+        )
 
         zVQKba = rearrange(zVQKba, "l b d -> b l d").contiguous()
 
@@ -457,10 +472,11 @@ class GatedDeltaNetMixer(MambaMixer):
 
         y = rearrange(core_attn_out, "b l h p -> l b (h p)").contiguous()
 
-        if self.cp.cp_size > 1:
-            # CP a2a: head-split -> sequence-split, restoring the attention
-            # load-balanced chunk order expected by the surrounding layers.
-            y = tensor_a2a_hp2cp(y, seq_dim=0, head_dim=-1, cp_group=self.pg_collection.cp)
+        # CP a2a: head-split -> sequence-split, restoring the layout expected
+        # by the surrounding layers (attention load-balanced chunk order; for
+        # THD via the per-segment inverse permutation). cp_size == 1 passes
+        # through unchanged.
+        y = a2a_hp_to_cp(y, cp_size, self.pg_collection.cp, packed_seq_params, thd_cp_a2a_inv)
 
         out, out_bias = self.out_proj(y)
 

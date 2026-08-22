@@ -325,6 +325,145 @@ def run_distributed_equivalence():
     print(f"[rank {rank}] [ok] {checked} parameter grads match after CP all-reduce")
 
 
+# ---------------------------------------------------------------------------
+# Distributed: THD (packed) CP vs CP=1 forward/backward equivalence — the
+# THD+CP stitch (a2a_cp_to_hp / a2a_hp_to_cp with per-segment permutation).
+# ---------------------------------------------------------------------------
+THD_SEQ_LEN = 256
+# Uneven segment lengths, each % 16 == 0 -> divisible by 2*cp for cp in {2,4,8}.
+THD_SEGMENTS = [48, 80, 16, 112]
+
+
+def _thd_partition_index(cu, cp_size, cp_rank, device):
+    """Reference per-segment partitioning: for EVERY segment this rank takes
+    load-balanced natural chunk pair (r, 2cp-1-r), chunk size len/(2cp).
+    Mirrors TE's thd_get_partitioned_indices (cross-checked below)."""
+    idx = []
+    bounds = cu.tolist()
+    for s, e in zip(bounds[:-1], bounds[1:]):
+        h = (e - s) // (2 * cp_size)
+        a = s + cp_rank * h
+        b = s + (2 * cp_size - 1 - cp_rank) * h
+        idx.append(torch.arange(a, a + h, device=device))
+        idx.append(torch.arange(b, b + h, device=device))
+    return torch.cat(idx)
+
+
+def run_distributed_thd_equivalence():
+    from megatron.core import parallel_state, tensor_parallel
+    from megatron.core.packed_seq_params import PackedSeqParams
+
+    dtype = _dtype()
+    rank = dist.get_rank()
+    world = dist.get_world_size()
+    cp_size = world
+
+    if not parallel_state.model_parallel_is_initialized():
+        parallel_state.initialize_model_parallel(
+            tensor_model_parallel_size=1, context_parallel_size=cp_size
+        )
+        tensor_parallel.model_parallel_cuda_manual_seed(SEED)
+
+    tp_group = parallel_state.get_tensor_model_parallel_group()
+    cp_group = parallel_state.get_context_parallel_group()
+    self_groups = [dist.new_group([r]) for r in range(world)]
+    self_group = self_groups[rank]
+
+    pgc_cp = _make_pg_collection(tp_group, cp_group)
+    pgc_ref = _make_pg_collection(self_group, self_group)
+
+    torch.manual_seed(SEED + 7)
+    mixer_cp = _build_mixer(pgc_cp, dtype)
+    with torch.no_grad():
+        for p in mixer_cp.parameters():
+            dist.broadcast(p, src=0)
+    mixer_ref = _build_mixer(pgc_ref, dtype)
+    mixer_ref.load_state_dict(mixer_cp.state_dict())
+
+    assert sum(THD_SEGMENTS) == THD_SEQ_LEN
+    cu = torch.tensor(
+        [0] + torch.cumsum(torch.tensor(THD_SEGMENTS), 0).tolist(),
+        device="cuda",
+        dtype=torch.int32,
+    )
+    max_seqlen = max(THD_SEGMENTS)
+
+    # Cross-check our partition layout against TE's actual kernel helper — the
+    # helper.py data path uses TE, the mixer's a2a perm assumes this layout.
+    idx = _thd_partition_index(cu, cp_size, rank, device="cuda")
+    try:
+        import transformer_engine_torch as tex
+
+        idx_te = tex.thd_get_partitioned_indices(cu, THD_SEQ_LEN, cp_size, rank).to(idx.device)
+        assert torch.equal(idx_te.long(), idx.long()), (
+            "TE thd_get_partitioned_indices layout differs from the layout the "
+            "GDN THD a2a permutation assumes!"
+        )
+        if rank == 0:
+            print("[ok] partition layout cross-checked against TE thd_get_partitioned_indices")
+    except ImportError:
+        pass
+
+    g = torch.Generator(device="cpu").manual_seed(SEED + 11)
+    x_full = torch.randn(THD_SEQ_LEN, 1, HIDDEN, generator=g, dtype=torch.float32)
+    x_full = x_full.to(device="cuda", dtype=dtype)
+
+    psp_ref = PackedSeqParams(
+        cu_seqlens_q=cu,
+        cu_seqlens_kv=cu,
+        qkv_format="thd",
+        max_seqlen_q=max_seqlen,
+        max_seqlen_kv=max_seqlen,
+    )
+    out_ref, _ = mixer_ref(x_full.clone(), packed_seq_params=psp_ref)
+    loss_ref = out_ref.float().sum()
+    loss_ref.backward()
+
+    psp_cp = PackedSeqParams(
+        cu_seqlens_q=cu,
+        cu_seqlens_kv=cu,
+        cu_seqlens_q_padded=cu,
+        cu_seqlens_kv_padded=cu,
+        qkv_format="thd",
+        max_seqlen_q=max_seqlen,
+        max_seqlen_kv=max_seqlen,
+    )
+    x_shard = x_full.index_select(0, idx)
+    out_cp, _ = mixer_cp(x_shard, packed_seq_params=psp_cp)
+    loss_cp = out_cp.float().sum()
+    loss_cp.backward()
+
+    # ---- forward equivalence (per-segment sharded slice of the reference) ----
+    expected_shard = out_ref.detach().index_select(0, idx)
+    torch.testing.assert_close(out_cp.detach().float(), expected_shard.float(), **FWD_TOL)
+    max_diff = (out_cp.detach().float() - expected_shard.float()).abs().max().item()
+    print(f"[rank {rank}] [ok] THD CP={cp_size} forward matches CP=1 (max diff {max_diff:.3e})")
+
+    # ---- loss equivalence ----
+    loss_sum = loss_cp.detach().clone()
+    dist.all_reduce(loss_sum, group=cp_group)
+    torch.testing.assert_close(loss_sum, loss_ref.detach(), rtol=1e-3, atol=1e-2)
+    print(f"[rank {rank}] [ok] THD CP-summed loss matches full-sequence loss")
+
+    # ---- gradient equivalence ----
+    named_cp = dict(mixer_cp.named_parameters())
+    named_ref = dict(mixer_ref.named_parameters())
+    checked = 0
+    for name, p_cp in named_cp.items():
+        if p_cp.grad is None:
+            assert named_ref[name].grad is None, f"{name}: grad presence mismatch"
+            continue
+        g_cp = p_cp.grad.detach().float().clone()
+        dist.all_reduce(g_cp, group=cp_group)
+        g_ref = named_ref[name].grad.detach().float()
+        torch.testing.assert_close(
+            g_cp, g_ref, **GRAD_TOL, msg=lambda m, _n=name: f"THD grad mismatch for {_n}: {m}"
+        )
+        checked += 1
+    assert checked >= 5, f"too few grads checked ({checked}) — wiring problem?"
+    print(f"[rank {rank}] [ok] THD: {checked} parameter grads match after CP all-reduce")
+
+
 def main():
     if "WORLD_SIZE" in os.environ and int(os.environ["WORLD_SIZE"]) > 1:
         local_rank = int(os.environ["LOCAL_RANK"])
@@ -332,6 +471,7 @@ def main():
         dist.init_process_group(backend="nccl")
         try:
             run_distributed_equivalence()
+            run_distributed_thd_equivalence()
             if dist.get_rank() == 0:
                 print("ALL DISTRIBUTED TESTS PASSED")
         finally:
