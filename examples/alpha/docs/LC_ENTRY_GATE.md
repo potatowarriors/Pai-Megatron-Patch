@@ -1,5 +1,27 @@
 # LC Phase 진입 게이트 — P3 종료 직후 실행 체크리스트 (2026-08-18 작성)
 
+> ## ✅ 게이트 실행 결과 (2026-08-22 — **LC-A GO**)
+>
+> P3 완주(iter 26,832, valid 1.1658) 당일 main1 8×H100에서 전 트랙 실행 완료.
+>
+> | # | 항목 | 판정 | 정본 기록 |
+> |---|---|---|---|
+> | 1–4 | GDN CP (유닛·풀스택·QK-Clip·EP8×CP) | ✅ forward max diff 0.0, CP{2,4,8} 궤적 일치 | `gdn_cp_port.md` §H100 검증 결과 (gdn-cp 브랜치 14044db) |
+> | 5 | P3 ckpt CP=2 로드 | ✅ valid 1.165811 (라이브 4자리 일치) | 〃 |
+> | 6 | 메모리 | 32K@CP4 **52.2GB** GO · 64K@CP8 52.2GB GO · 32K@CP1 OOM · **128K@CP8 NO-GO**(full-rc·fused-CE 무효) → LC-B는 64K 시작 | 〃 |
+> | THD | 문서 격리 (§1.5) | ✅ 풀모델 dense-vs-THD \|Δ\|≤0.026 · helper DDP-언랩 결함 수정 | §1.5 (varlen-thd 브랜치 c941d60) |
+> | 7 | FlashQLA 정확도 | ✅ oracle 대비 fla 동급(g≈0 최악 grad qla 68 < fla 130) | `study/flashqla_poc.md` §벤치 결과 (main f7d963a) |
+> | 8 | FlashQLA 성능 | **채택 보류** — LC-A(CP4) 형상은 fla 1.6× 우세, 128K 국면 재평가 | 〃 |
+>
+> **결정 2건(사용자 확정)**: ① LC filler = P3 미러(결정 #10, 08-21) ② **LC preset에서
+> qk-clip 제거** — `return_max_logit`×thd가 TE 2.9 삼중 비호환(NVTE_DEBUG 채증),
+> P3 종료 max logit 19.375(임계 1/5).
+>
+> **통과 후 작업 순서(§4 갱신)**: gdn-cp 머지 → varlen-thd rebase → **THD+CP
+> 스티치 커밋**(32K@CP1 OOM으로 필수 확정; §1.5 스티치 체크리스트) → LC-A preset
+> 작성(CP4 · 32K · qk-clip 제거 · clip-grad ×cp 재검토 · pad16 데이터+P3 미러 filler
+> · thd 플래그셋). FlashQLA 가드 스왑은 보류.
+
 **트리거**: P3(stage2) 학습 종료 → 8×H100 유휴 → **LC-A(32K) 학습 시작 전에 이 게이트를 통과해야 한다.**
 GPU가 P3에 점유된 동안 준비만 완료해 둔 두 검증 트랙(GDN CP 클러스터 검증 + FlashQLA
 커널 벤치)을 한 창구에서 순서대로 소화한다. 예상 소요: 반나절 내외 (§2가 대부분).
