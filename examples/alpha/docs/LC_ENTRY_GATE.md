@@ -84,6 +84,14 @@ CPU 테스트 7종 통과. GPU 검증 항목은 `tests/test_gdn_varlen_thd.py`�
 | 단계 | 내용 | 판정 | 예상 |
 |---|---|---|---|
 | a | `python -m pytest tests/test_gdn_varlen_thd.py -v` (GPU 3종: fla varlen 등가성 / conv seq_idx 등가성 / 격리 네거티브 컨트롤) | ~~ALL PASSED~~ **✅ 2026-08-20 분석 노드에서 10/10 통과** (커널 테스트는 소메모리라 P3 대기 불필요했음). P3 후 재실행은 회귀 확인용 | ~2분 |
+
+**✅ §1.5 클러스터 검증 완료 (2026-08-22, main1 8×H100 — 게이트 판정 6 통과)**:
+
+| 단계 | 결과 |
+|---|---|
+| b+c 풀모델 THD (p3 packed 실데이터, 4096, 30 iter) | ✅ dense 기준선 대비 궤적 \|Δ\|≤0.026·편향 없음·NaN 0. "iter 1 AssertionError" 소멸 |
+| d QK-Clip×THD | ❌ **TE 2.9에서 구조적 비호환 확정** — NVTE_DEBUG: Flash는 max_logit 미지원, Fused는 max_logit+thd 미지원, Unfused는 thd 미지원 → NoBackend. **해소(사용자 확정 08-22): LC preset에서 qk-clip 제거** — 근거: P3 종료 시 max_attention_logit 19.375(임계 100의 1/5, 후반 무발동) + LC constant 극저 LR. `profile_noqkclip.yaml`이 검증에 사용한 변형 |
+| 수정 1건 | `helper.py` forward_step의 시그니처 검사를 DDP/Float16 래퍼 **언랩 후** 수행하도록 수정 — 래퍼 generic 시그니처 탓에 packed_seq_params(및 MTP loss_mask) 전달이 구조적으로 불가능했던 결함. THD 첫 풀모델 가동이 즉시 검출 |
 | b | 1-GPU 스모크: `bash train.sh baseline_48L smoke mock --reset-position-ids --no-create-attention-mask-in-dataloader --micro-batch-size 1` | iter 진행 + NaN 없음 (stage1.yaml 주석의 "iter 1 AssertionError"가 사라졌는지) | ~10분 |
 | c | 4096 등가성 A/B: mock 30 iter, ①현행(reset-attention-mask dense) vs ②THD(위 플래그) — loss 궤적 비교 | 근접(비트일치 아님 — ②는 GDN 문서 간 state까지 격리하므로 미세 개선 방향의 차이만 허용) | ~30분 |
 | d | **QK-Clip×THD**: b/c 실행 중 `max_attention_logit` 로그 정상 확인 (TE fused-attn return_max_logit이 thd 포맷에서 동작하는지 — cuDNN 엔진 부재 크래시 이력 있는 조합) | 무크래시 + 로그값 유효 | b/c에 포함 |
