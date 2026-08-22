@@ -63,3 +63,31 @@ PYTHONPATH=/home/work/vidsearch/envs/flashqla_poc/pylibs \
 - TileLang JIT 산출물 캐시 위치/재컴파일 비용 — 16 rank 동시 첫 호출 시 컴파일 폭주 여부 확인 필요.
 - `enable_fwd_cp_cache=True` 기본값의 메모리 영향 (bench의 peak_gb로 측정).
 - varlen(cu_seqlens)은 batch=1 제약 — THD packing 미채택 상태라 당장 무관.
+
+## 벤치 실행 결과 (2026-08-22, 게이트 §2 — main1 H100 단일 GPU)
+
+결과 JSON: `flashqla_bench_results_20260822_141132.json`. (실행 참고: 251125
+torch-oracle이 신형 fla의 `l2norm(dim=)` 시그니처를 가정 → 벤치 스크립트에
+pure-torch l2norm 주입으로 해소.)
+
+**판정 1·2 (정확도) — ✅ 통과**: qla_vs_oracle이 fla_vs_oracle과 전 항목 동일
+자릿수(일반 조건 fwd mean 3.4e-4 vs 3.8e-4 — qla가 근소 우위). `g≈0` 최악
+조건에서도 급증 없음 — 최악 grad 텐서 max err fla 130.3 vs **qla 68.2**
+(조건 자체의 난이도이며 qla 고유 열화 아님).
+
+**판정 3 (성능) — 조건부: LC-A 형상에서는 fla 유지, 채택 보류**:
+
+| 시나리오 (rank-local 형상) | fla 최속 f+b | qla 최속 f+b | 승자 |
+|---|---|---|---|
+| p3_today (4K, full heads) | 3.42ms | **2.48ms** | qla 1.4× |
+| lc_a_cp1 (32K, full heads) | 8.03ms | **6.42ms** | qla 1.25× |
+| **lc_a_cp4 (32K, heads/4)** | **5.30ms** | 8.35ms | **fla 1.6×** |
+| lc_a_cp8 (32K, heads/8) | **4.30ms** | 8.36ms | **fla 1.9×** |
+| lc_b_cp8 (128K, heads/8) | 13.16ms | **6.01ms** | qla 2.2× |
+
+패턴: TileLang(qla) 커널은 **CP head-split로 head 수가 줄면 backward 병렬성이
+고갈**(8.4ms대 바닥 고정)되고, 시퀀스가 충분히 길면(128K) 회복한다. Triton(fla)은
+head-split에 강함. **LC-A 채택 기준선이 CP4이므로 LC-A는 fla 유지가 정답** —
+가드 스왑(§계획)은 보류. 재평가 시점: 128K 메모리 문제가 풀려 LC-B 후반이
+128K 형상으로 가는 국면(그때 qla 2.2×는 유의미). 메모리는 전 시나리오에서
+qla가 우위(lc_b_cp8 2.41 vs 3.14GB)였음을 부기.

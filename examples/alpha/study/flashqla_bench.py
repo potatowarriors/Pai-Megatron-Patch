@@ -55,7 +55,17 @@ def load_backends(flashqla_path):
 
     oracle = None
     try:
+        import megatron.core.ssm.gated_delta_net as _gdn_mod
         from megatron.core.ssm.gated_delta_net import torch_chunk_gated_delta_rule as oracle
+
+        # The upstream torch oracle calls l2norm(x, dim=-1, eps=...) — a newer-fla
+        # signature. Our pinned fla 0.4.1 l2norm takes no `dim`, so inject a
+        # pure-torch equivalent (normalizes the last dim, same eps semantics as
+        # the in-kernel use_qk_l2norm_in_kernel path).
+        def _l2norm(x, dim=-1, eps=1e-6):
+            return x * torch.rsqrt(x.pow(2).sum(dim=dim, keepdim=True) + eps)
+
+        _gdn_mod.l2norm = _l2norm
     except Exception as e:  # noqa: BLE001
         print(f"[warn] oracle import failed ({type(e).__name__}: {e}); "
               f"correctness checks vs oracle will be skipped")
