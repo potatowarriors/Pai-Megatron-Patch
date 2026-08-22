@@ -49,13 +49,15 @@ no-create-attention-mask-in-dataloader: true
 reset-attention-mask: false
 eod-mask-loss: true
 
-# ── 리컴퓨트 — moe 해제 (32K@CP4 실데이터 A/B, 2026-08-22) ────────────────
-# "layernorm moe" 대비 moe 해제 = 22.1→19.2s/iter (+15.5%, analysis_24L
-# 검증치 +15.2% 재현), max-alloc 51.1→63.8GB (여유 ~15GB). loss iter1 비트동일.
+# ── 리컴퓨트 (layernorm+moe — moe 해제는 본 런에서 OOM으로 되돌림) ────────
+# moe 해제 A/B는 +15.5%였으나(스모크 10-iter, max 63.8GB) **본 런 iter 2에서
+# rank5 OOM(alloc 68.9GB)**: 프로덕션 블렌드의 세그먼트·expert 불균형 편차가
+# 스모크 꼬리를 넘음 — 신뢰성 우선으로 원복 (2026-08-22). 재평가는 checkpoint
+# resume 시점에 MoE 토큰 통계와 함께 (throughput doc 프로토콜).
 # 참고: MBS>1은 THD 경로에서 구조적 불가(helper·mixer assert; 패킹이 MBS 대체) —
 # 마이크로배치당 토큰 2배는 토큰/rank 16384 = 게이트 실측 ~72.5GB로 OOM 경계.
 recompute-granularity: selective
-recompute-modules: "layernorm"
+recompute-modules: "layernorm moe"
 
 # ── MoE 라우팅 (DSV3-strict, P3와 동일) ───────────────────────────────────
 moe-router-load-balancing-type: seq_aux_loss
