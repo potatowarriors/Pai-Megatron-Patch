@@ -122,13 +122,26 @@ offload를 251125 스냅샷에 표적 백포트 → **128K@CP8의 Muon 바닥짐
     역시 iter 9 정확 일치, max-alloc 32.7GB로 오프로드 유지.
   - 스크래치 ckpt(~324GB)는 검증 후 삭제(로그 보존).
 
-## Stage 5~6 (계획)
+## Stage 5 — 표적 검증: 128K@CP8 (✅ 2026-08-22 GO)
 
-- S5: **표적 검증 — 128K@CP8** (gdn-cp 브랜치와 결합 필요: CP는 그 브랜치에만 있음
-  → S5는 gdn-cp 머지 후 rebase 시점에) max-alloc ~47GB 예상 확인. LC preset은
-  qk-clip 제거이므로 clip×offload 상호작용 없음. chunk 크기·fraction 튜닝은 이때.
-- S6: vendored patch 최종화 + gdn_cp_port.md 128K 경로 갱신 + megatron_patch/CLAUDE.md
-  Muon 호환표("CPU Offloading ❌" → chunked offload 지원) 갱신.
+브랜치 통합(gdn-cp·varlen-thd·muon-offload 전부 main 흡수) 직후 main에서 실측.
+baseline_48L(프로덕션 48L), CP8·EP8·MBS1·GBS8, seq 131072, mock, selective
+recompute(layernorm moe), qk-clip 제거 preset, chunk 256MB:
+
+- **max-alloc 54.9~58.8GB — GO** (게이트 실측 대비: 오프로드 없이 ~72.5GB 시도에서
+  4중 OOM). 오프로드 절감 ~21GB = Muon-관리 파라미터(≈2.5B/rank)의 master+momentum
+  산술과 일치.
+- 4-iter 학습 정상(loss 12.06→10.75), iter당 ~22s @ 1M tokens/iter, 오프로더
+  8랭크 전부 활성 로그 확인.
+- **128K 학습이 현 자원(8×H100 단일노드)에서 가능** — gdn_cp_port.md 분석노트 2의
+  경로 ① 실증. THD(pad16 실데이터) 128K 팩이 준비되면 그대로 LC-B 이후 국면에 투입.
+- 잔여 튜닝(운영 시): chunk 크기·fraction 스윕, 22s/iter 중 오프로드 오버헤드 분해.
+
+## Stage 6 (잔여)
+
+- megatron_patch/CLAUDE.md Muon 호환표("CPU Offloading ❌" → chunked offload 지원) 갱신.
+- LC-A preset 작성 시 오프로드 플래그는 **불필요**(32K@CP4는 52GB로 여유) — 128K
+  국면 전용.
 
 ## 규약
 

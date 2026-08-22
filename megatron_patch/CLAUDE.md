@@ -69,7 +69,8 @@ muon_scale_mode: spectral
 | BF16 | ✅ |
 | Distributed Optimizer | ❌ (must be false) |
 | FP16 | ❌ |
-| CPU Offloading | ❌ |
+| CPU Offloading (HybridDeviceOptimizer) | ❌ |
+| **Chunked optimizer-state offload** | ✅ (PR #6244 백포트, 2026-08-22) — `--chunked-optimizer-state-offload --optimizer-state-offload-chunk-size-mb 256`; momentum+fp32 master를 CPU 상주로 두고 step에서 청크 스트리밍. 128K@CP8 실측 −21GB. 상세: `examples/alpha/docs/MUON_OFFLOAD_BACKPORT.md` |
 
 ### QKV / QGKV Split for Per-Projection Newton-Schulz
 

@@ -271,3 +271,8 @@ EP8): CP{1,2,4} 20-iter 궤적 평균 상대 편차 1.2e-4 (max 3.2e-4) — 실�
 **LC-A에의 함의**: CP4·32K THD 경로는 이제 실데이터 풀스택으로 확인됨. 남은 것은
 LC-A preset 작성뿐. muon-offload 브랜치도 main에 흡수됐으므로 S5(128K@CP8 실측)는
 main에서 `--chunked-optimizer-state-offload`로 바로 시도 가능.
+
+**분석노트 2 후속 (2026-08-22)**: 경로 ① 실증 완료 — Muon chunked offload(PR #6244
+백포트, MUON_OFFLOAD_BACKPORT.md) 적용 시 **128K@CP8 max-alloc 54.9~58.8GB로 GO**
+(비적용 ~72.5GB OOM 대비 −21GB). 128K는 더 이상 자원 제약이 아니며, 남은 것은
+128K pad16 데이터 팩(runbook §128k)과 스루풋 튜닝.
