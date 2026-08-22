@@ -30,9 +30,10 @@ from megatron.training.utils import (
 from megatron.core.models.gpt import GPTModel
 from megatron.core.packed_seq_params import PackedSeqParams
 from megatron_patch.data.utils import (
-    get_batch_on_this_tp_rank_original, 
+    get_batch_on_this_tp_rank_original,
     get_batch_on_this_tp_rank_idxmap_sft,
-    get_position_id_on_this_tp_rank_idxmap_sft_packing
+    get_position_id_on_this_tp_rank_idxmap_sft_packing,
+    cu_seqlens_from_position_ids,
 )
 
 def get_batch(data_iterator):
@@ -45,13 +46,8 @@ def get_batch(data_iterator):
         if args.dataset == 'MMAP' and args.train_mode == "finetune" and args.reset_position_ids:
             position_ids = get_position_id_on_this_tp_rank_idxmap_sft_packing(data_iterator)
             position_ids = position_ids[0] # shape: [seq_length]
-            start_indices = (position_ids == 0).nonzero(as_tuple=True)[0]
-            seqlens = start_indices[1:] - start_indices[:-1]
             # NOTE: cu_seqlens: [0, A1, A1+A2, A1+A2+A3, ..., seq_len]
-            cu_seqlens = torch.zeros(start_indices.shape[0] + 1, device=position_ids.device, dtype=torch.int)
-            cu_seqlens[1:-1] = torch.cumsum(seqlens, dim=0)
-            cu_seqlens[-1] = position_ids.shape[0]
-            max_seqlen = torch.max(seqlens.max(), position_ids.max() + 1)
+            cu_seqlens, max_seqlen = cu_seqlens_from_position_ids(position_ids)
             packed_seq_params = PackedSeqParams(
                 cu_seqlens_q=cu_seqlens,
                 cu_seqlens_kv=cu_seqlens,
@@ -92,15 +88,14 @@ def get_batch(data_iterator):
             # sequence-packing, build cu_seqlens
             position_ids = batch.get('position_ids', None)
             if position_ids is not None:
-                # mbs = 1
+                assert position_ids.shape[0] == 1, (
+                    "sequence packing (--reset-position-ids) derives cu_seqlens from "
+                    "position_ids[0] and therefore requires micro-batch-size 1, got "
+                    f"micro batch {position_ids.shape[0]}"
+                )
                 position_ids = position_ids[0] # shape: [seq_length]
-                start_indices = (position_ids == 0).nonzero(as_tuple=True)[0]
-                seqlens = start_indices[1:] - start_indices[:-1]
                 # NOTE: cu_seqlens: [0, A1, A1+A2, A1+A2+A3, ..., seq_len]
-                cu_seqlens = torch.zeros(start_indices.shape[0] + 1, device=position_ids.device, dtype=torch.int)
-                cu_seqlens[1:-1] = torch.cumsum(seqlens, dim=0)
-                cu_seqlens[-1] = position_ids.shape[0]
-                max_seqlen = torch.max(seqlens.max(), position_ids.max() + 1)
+                cu_seqlens, max_seqlen = cu_seqlens_from_position_ids(position_ids)
                 packed_seq_params = PackedSeqParams(
                     cu_seqlens_q=cu_seqlens,
                     cu_seqlens_kv=cu_seqlens,
@@ -188,14 +183,24 @@ def forward_step(data_iterator, model):
         'labels': labels
     }
 
-    if 'loss_mask' in inspect.signature(model.forward).parameters:
+    # Signature checks must run on the UNWRAPPED model: at train time `model` is
+    # DDP(Float16Module(<real model>)) and wrapper forwards are generic
+    # (*inputs, **kwargs), so inspecting the wrapper never finds these params
+    # even when the real model supports them. Kwargs still flow through the
+    # wrappers to the real forward, so only the check needs unwrapping.
+    unwrapped = model
+    while hasattr(unwrapped, 'module'):
+        unwrapped = unwrapped.module
+    forward_params = inspect.signature(unwrapped.forward).parameters
+
+    if 'loss_mask' in forward_params:
         # NOTE: MTP-head (since 0328) requires loss_mask to compute correct loss scale.
         input_kwargs['loss_mask'] = loss_mask
-    
-    if 'packed_seq_params' in inspect.signature(model.forward).parameters:
+
+    if 'packed_seq_params' in forward_params:
         input_kwargs['packed_seq_params'] = packed_seq_params
     else:
-        assert packed_seq_params is None, f"Sequence Packing is not supported for {model}"
+        assert packed_seq_params is None, f"Sequence Packing is not supported for {type(unwrapped).__name__}"
 
     output_tensor = model(**input_kwargs)
 

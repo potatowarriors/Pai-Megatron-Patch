@@ -115,6 +115,72 @@ def get_ltor_position_ids_packed_seq(data):
 
     return position_ids
 
+
+def cu_seqlens_from_position_ids(position_ids):
+    """Derive packing boundaries from per-segment-resetting position ids.
+
+    Given position_ids of shape [seq_length] that restart from 0 at every
+    packed-sequence boundary, return (cu_seqlens, max_seqlen) in the
+    FlashAttention varlen convention: cu_seqlens = [0, A1, A1+A2, ..., seq_len]
+    as int32, max_seqlen as a 0-dim tensor.
+
+    A window holding a single sequence (no interior reset — the common case for
+    long-context bins where one document fills the whole window) yields
+    cu_seqlens = [0, seq_len].
+    """
+    start_indices = (position_ids == 0).nonzero(as_tuple=True)[0]
+    seqlens = start_indices[1:] - start_indices[:-1]
+    cu_seqlens = torch.zeros(
+        start_indices.shape[0] + 1, device=position_ids.device, dtype=torch.int
+    )
+    cu_seqlens[1:-1] = torch.cumsum(seqlens, dim=0)
+    cu_seqlens[-1] = position_ids.shape[0]
+    if seqlens.numel() > 0:
+        max_seqlen = torch.max(seqlens.max(), position_ids.max() + 1)
+    else:
+        # Single segment: seqlens is empty and .max() would raise.
+        max_seqlen = position_ids.max() + 1
+    return cu_seqlens, max_seqlen
+
+
+def merge_eod_pad_segments(cu_seqlens, tokens, eod_id):
+    """Absorb all-EOD segments into their preceding segment.
+
+    Data packed with per-document EOD padding (bestfit_pack --pad-doc-multiple)
+    carries pad runs after each document. GPTDataset's position-id reset fires
+    after EVERY EOD, so each pad token becomes its own length-1 segment in
+    cu_seqlens_from_position_ids' output — breaking the % (2*cp_size)
+    per-segment divisibility that THD+CP requires. Merging every all-EOD
+    segment leftward restores "document + its pad run" as one aligned segment.
+
+    Pad tokens are loss-masked by --eod-mask-loss and sit at the segment END,
+    so under causal attention no content token ever attends to them; merging
+    only affects which segment the (masked) pads belong to.
+
+    Args:
+        cu_seqlens: [N+1] boundaries over `tokens` (any int dtype).
+        tokens: [seq_length] token ids the boundaries refer to.
+        eod_id: the EOD/pad token id.
+
+    Returns:
+        Merged cu_seqlens, same dtype/device as the input. A leading all-EOD
+        segment (nothing before it to merge into) is kept as-is.
+    """
+    cu = cu_seqlens.to(dtype=torch.long)
+    is_eod = (tokens == eod_id).to(torch.long)
+    eod_prefix = torch.cat(
+        [torch.zeros(1, dtype=torch.long, device=tokens.device), torch.cumsum(is_eod, dim=0)]
+    )
+    seg_len = cu[1:] - cu[:-1]
+    seg_eod = eod_prefix[cu[1:]] - eod_prefix[cu[:-1]]
+    all_eod = seg_eod == seg_len  # per segment, in order
+
+    keep = torch.ones(cu.numel(), dtype=torch.bool, device=cu.device)
+    # Interior boundary cu[i] (1 <= i <= N-1) starts segment i: dropping it
+    # merges segment i into segment i-1. Never drop cu[0] or cu[-1].
+    keep[1:-1] = ~all_eod[1:]
+    return cu[keep].to(dtype=cu_seqlens.dtype)
+
 def get_batch_on_this_tp_rank_original(data_iterator, per_seq_average=False):
     args = get_args()
     tokenizer = get_tokenizer()

@@ -22,7 +22,8 @@ from megatron.core.extensions.transformer_engine import (
     TENorm
 )
 from megatron.core.fusions.fused_bias_dropout import get_bias_dropout_add
-from megatron.core.ssm.mamba_layer import MambaLayer, MambaLayerSubmodules
+from megatron.core.ssm.mamba_layer import MambaLayerSubmodules
+from megatron_patch.ssm.mamba_layer import VarlenMambaLayer
 from megatron.core.ssm.mamba_mixer import MambaMixerSubmodules
 from megatron.core.transformer.attention import SelfAttentionSubmodules
 from megatron.core.transformer.enums import AttnMaskType
@@ -187,7 +188,7 @@ def get_alpha_layer_spec(args):
     """
     # Mamba layer spec (GatedDeltaNet)
     mamba_layer_spec = ModuleSpec(
-        module=MambaLayer,
+        module=VarlenMambaLayer,
         submodules=MambaLayerSubmodules(
             mixer=ModuleSpec(
                 module=GatedDeltaNetMixer,
