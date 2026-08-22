@@ -1445,6 +1445,122 @@ index 6e093f96f..3b89ce1d9 100644
          if isinstance(self.optimizer, HybridDeviceOptimizer):
              self.optimizer.update_fp32_param_by_new_param()
              return
+diff --git a/megatron/core/optimizer/layer_wise_optimizer.py b/megatron/core/optimizer/layer_wise_optimizer.py
+index de4396a5b..ef8607ec6 100644
+--- a/megatron/core/optimizer/layer_wise_optimizer.py
++++ b/megatron/core/optimizer/layer_wise_optimizer.py
+@@ -80,8 +80,77 @@ class LayerWiseDistributedOptimizer(ChainedOptimizer):
+                     opt, config, None, init_state_fn_list[i] if init_state_fn_list else None
+                 )
+ 
++        if (
++            config.chunked_optimizer_state_offload
++            and config.optimizer_state_offload_fraction > 0.0
++        ):
++            # Deferred import: muon.py imports this module at load time.
++            from .muon import TensorParallelMuon
++
++            offload_children = []
++            skipped_children = 0
++            state_dtypes = (torch.float32,)
++            for optimizer in optimizers:
++                raw_optimizer = getattr(optimizer, 'optimizer', None)
++                if raw_optimizer is None:
++                    continue
++                # Backport divergence from upstream #6244: this snapshot's dist_muon chain
++                # holds the TensorParallelMuon child plus Adam children (embeddings, norms,
++                # router). Upstream routes Adam through a sibling DistributedOptimizer and
++                # rejects non-Muon children here; we keep them resident on GPU instead.
++                if not isinstance(raw_optimizer, TensorParallelMuon):
++                    skipped_children += 1
++                    continue
++                # The chunk plan below assumes exactly the state schema of
++                # TensorParallelMuon: one fp32 full-size momentum. Reject subclasses rather
++                # than silently underestimating their tensor-state window.
++                assert type(raw_optimizer) is TensorParallelMuon, (
++                    "LayerWise chunked optimizer state offload currently supports exactly "
++                    "TensorParallelMuon with one fp32 full-size momentum tensor; got "
++                    f"{type(raw_optimizer).__name__}"
++                )
++                # Whole-parameter sharding can leave this rank with an optimizer object but
++                # no locally owned Muon parameters. Preserve the no-offloader path for it.
++                if not any(group["params"] for group in raw_optimizer.param_groups):
++                    continue
++                fp32_groups = getattr(optimizer, 'fp32_from_float16_groups', None)
++                assert fp32_groups is not None, (
++                    "chunked optimizer state offload on the Muon child requires bf16 "
++                    "training (Float16 wrapper master weights); fp32 masters would alias "
++                    "the live model parameters"
++                )
++                master_params = [param for group in fp32_groups for param in group]
++                offload_children.append((optimizer, master_params))
++
++            assert len(offload_children) <= 1, (
++                "LayerWise chunked optimizer state offload assumes at most one non-empty "
++                f"TensorParallelMuon child; got {len(offload_children)}"
++            )
++            for optimizer, master_params in offload_children:
++                optimizer.enable_chunked_optimizer_state_offload(
++                    master_params=master_params, state_dtypes=state_dtypes
++                )
++                # No fp8 param gather in this stack, so masters never have to survive a
++                # pre-forward gather; only the state prefetch is deferred to step time.
++                optimizer.set_optimizer_state_offload_deferred_lifecycle(
++                    state_prefetch_to_step=optimizer._optimizer_state_offloader is not None,
++                    master_offload_for_param_sync=False,
++                )
++            if skipped_children:
++                logger.info(
++                    "LayerWise chunked optimizer state offload: enabled on "
++                    f"{len(offload_children)} Muon child(ren); {skipped_children} non-Muon "
++                    "child(ren) keep optimizer state resident on GPU"
++                )
++
+         super().__init__(optimizers)
+ 
++        self._managed_optimizer_state_offload_indices = tuple(
++            index
++            for index, optimizer in enumerate(self.chained_optimizers)
++            if getattr(optimizer, '_optimizer_state_offloader', None) is not None
++        )
++
+         # TODO(kunlun, deyuf): potential future perf optimization
+         # since allreduce is unchanged and handled by megatron DDP, they're already in
+         # contiguous gbuf. So instead of shard param by layer randomly, we can shard by
+@@ -218,6 +287,33 @@ class LayerWiseDistributedOptimizer(ChainedOptimizer):
+             use_decoupled_grad=self.config.use_precision_aware_optimizer_no_fp8_or_ds_fp8,
+         )
+ 
++    def _managed_optimizer_state_offload_child_indices(self) -> tuple:
++        """Return child indices that execute through a chunked state offloader."""
++
++        if (
++            not self.config.chunked_optimizer_state_offload
++            or self.config.optimizer_state_offload_fraction == 0.0
++        ):
++            return ()
++        return self._managed_optimizer_state_offload_indices
++
++    def prefetch_optimizer_state_for_gradient_finalization(self) -> None:
++        """Prefetch all masters and the managed Muon child's first state chunk."""
++
++        self.prefetch_optimizer_master_weights_for_step()
++        managed_indices = self._managed_optimizer_state_offload_child_indices()
++        if managed_indices:
++            self.chained_optimizers[managed_indices[0]].prefetch_optimizer_state_for_step()
++
++    def _before_child_step(self, optimizer_idx: int) -> None:
++        """Ensure the managed Muon child's state is prefetched before child steps."""
++
++        managed_indices = self._managed_optimizer_state_offload_child_indices()
++        if not managed_indices:
++            return
++        if optimizer_idx == 0:
++            self.chained_optimizers[managed_indices[0]].prefetch_optimizer_state_for_step()
++
+     @torch.no_grad()
+     def step(self):  # type: ignore[no-untyped-def]
+         """step function for layer-wise optimizer."""
 diff --git a/megatron/core/optimizer/muon.py b/megatron/core/optimizer/muon.py
 index b6af7a3e1..5044bf00c 100644
 --- a/megatron/core/optimizer/muon.py
@@ -2006,7 +2122,7 @@ index 8692d1e9b..c6ba62fcf 100644
          # This is because in distrib_optimizer.py, the process to handle parameters are
          # different for different training precision settings. FP8 cases require different
 diff --git a/megatron/training/arguments.py b/megatron/training/arguments.py
-index 757f2b63d..a952a6984 100644
+index 757f2b63d..ef0a3574b 100644
 --- a/megatron/training/arguments.py
 +++ b/megatron/training/arguments.py
 @@ -544,9 +544,44 @@ def validate_args(args, defaults={}):
@@ -2063,7 +2179,52 @@ index 757f2b63d..a952a6984 100644
          if args.lr_warmup_fraction is not None:
              assert args.lr_warmup_iters == 0, \
                  'can only specify one of lr-warmup-fraction and lr-warmup-iters'
-@@ -2143,6 +2180,13 @@ def _add_training_args(parser):
+@@ -1294,6 +1331,44 @@ def validate_args(args, defaults={}):
+     if args.multi_latent_attention:
+         assert not args.group_query_attention, "Group query attention is mutually exclusive with multi latent attention."
+ 
++    # Chunked optimizer state offload (PR #6244 backport). A zero fraction disables the
++    # feature entirely, so none of the checkpoint/CUDA-graph restrictions apply then.
++    if args.chunked_optimizer_state_offload and args.optimizer_state_offload_fraction > 0.0:
++        if args.optimizer_state_offload_chunk_size_mb == 0:
++            warn_rank_0(
++                "optimizer state offload is enabled with chunk size 0, so all "
++                "selected optimizer tensor state is temporarily restored together. Set "
++                "--optimizer-state-offload-chunk-size-mb to a positive value to bound the "
++                "tensor-state GPU window. Selected master weights always use one full "
++                "restore window regardless of chunk size."
++            )
++        assert args.optimizer != 'muon', (
++            "chunked optimizer state offload with a Muon optimizer requires the "
++            "LayerWise distributed optimizer — use --optimizer dist_muon; plain 'muon' "
++            "never enables the offloader"
++        )
++        assert args.optimizer == 'dist_muon' or args.use_distributed_optimizer, (
++            "chunked optimizer state offload is only enabled through the LayerWise "
++            "distributed optimizer (--optimizer dist_muon) or the distributed optimizer "
++            "(--use-distributed-optimizer); any other path would silently keep optimizer "
++            "state on GPU"
++        )
++        if not args.no_save_optim or not args.no_load_optim:
++            assert args.ckpt_format == 'torch_dist', (
++                "chunked optimizer state offload requires --ckpt-format torch_dist when "
++                "optimizer state is saved or loaded because its sharded load hooks preserve "
++                "CPU canonical storage"
++            )
++        if not args.no_save_optim:
++            assert not args.async_save, (
++                "chunked optimizer state offload does not support --async-save when optimizer "
++                "state is saved because the background writer can retain tensors backed by "
++                "reusable pinned CPU buffers"
++            )
++        assert args.cuda_graph_impl != 'full_iteration', (
++            "chunked optimizer state offload does not support full-iteration CUDA graphs"
++        )
++
+     # Print arguments.
+     _print_args("arguments", args)
+ 
+@@ -2143,6 +2218,13 @@ def _add_training_args(parser):
                         ' (1024 - 16) / 8 = 126 intervals will increase'
                         'the batch size linearly to 1024. In each interval'
                         'we will use approximately 300000 / 126 = 2380 samples.')
@@ -2077,7 +2238,33 @@ index 757f2b63d..a952a6984 100644
      group.add_argument('--decrease-batch-size-if-needed', action='store_true', default=False,
                         help='If set, decrease batch size if microbatch_size * dp_size'
                         'does not divide batch_size. Useful for KSO (Keep Soldiering On)'
-@@ -2994,6 +3038,15 @@ def _add_data_args(parser):
+@@ -2367,6 +2449,25 @@ def _add_training_args(parser):
+                        help='Disable pinning of CPU memory for gradients.')
+     group.add_argument('--no-pin-cpu-params', action='store_false', dest='pin_cpu_params',
+                        help='Disable pinning of CPU memory for parameters.')
++    group.add_argument('--chunked-optimizer-state-offload', action='store_true',
++                       help='Keep selected optimizer tensor states and master weights in CPU '
++                       'memory between updates. GPU tensor-state updates run in bounded chunks, '
++                       'while selected master weights use one full restore window. '
++                       '(PR #6244 backport; supported paths: --optimizer dist_muon or '
++                       '--use-distributed-optimizer.)')
++    group.add_argument('--optimizer-state-offload-chunk-size-mb', type=int, default=0,
++                       help='Target size of each optimizer tensor-state staging buffer in MiB. '
++                       'Two buffers can be live for overlap (roughly 2x this value per active '
++                       'offload manager). Zero temporarily restores all selected tensor state '
++                       'for one full GPU update. A single atomic parameter state may exceed '
++                       'this soft target and is reported at runtime. This value does not bound '
++                       'the selected master-weight window, which is always restored in full.')
++    group.add_argument('--optimizer-state-offload-fraction', type=float, default=1.0,
++                       help='Fraction of optimizer parameter bundles to offload. Selected '
++                       'bundles always include both tensor state and any separate master '
++                       'weight. This is distinct from --optimizer-offload-fraction, which '
++                       'belongs to --optimizer-cpu-offload; the modes are mutually exclusive. '
++                       'Zero disables optimizer state offload even when its flag is set.')
+     group.add_argument('--dataloader-type', type=str, default=None,
+                        choices=['single', 'cyclic', 'external'],
+                        help='Single pass vs multiple pass data loader')
+@@ -2994,6 +3095,15 @@ def _add_data_args(parser):
                         '(3) a list of prefixes e.g. prefix1 prefix2. '
                         'For (3), weights are inferred from the lengths of the contributing datasets. '
                         'This argument is exclusive to the other independent --*-data-path arguments.')
@@ -2093,6 +2280,52 @@ index 757f2b63d..a952a6984 100644
      group.add_argument('--split', type=str, default=None,
                         help='Comma-separated list of proportions for training,'
                         ' validation, and test split. For example the split '
+diff --git a/megatron/training/checkpointing.py b/megatron/training/checkpointing.py
+index feacccba1..7d98f99e4 100644
+--- a/megatron/training/checkpointing.py
++++ b/megatron/training/checkpointing.py
+@@ -426,6 +426,28 @@ def save_checkpoint(iteration, model, optimizer, opt_param_scheduler, num_floati
+     start_ckpt = time()
+     args = get_args()
+ 
++    # Chunked optimizer state offload (PR #6244 backport): keep the safety invariant even
++    # when arguments came through a validation path that does not perform the flat CLI
++    # cross-check, or were mutated after startup.
++    optimizer_config = getattr(optimizer, "config", None) if optimizer is not None else None
++    chunked_optimizer_state_offload = bool(
++        optimizer_config is not None
++        and getattr(optimizer_config, "chunked_optimizer_state_offload", False)
++        and getattr(optimizer_config, "optimizer_state_offload_fraction", 1.0) > 0.0
++    )
++    if chunked_optimizer_state_offload and not args.no_save_optim:
++        if args.async_save:
++            raise RuntimeError(
++                "chunked optimizer state offload does not support --async-save when optimizer "
++                "state is saved because reusable pinned CPU buffers cannot be handed to a "
++                "background writer"
++            )
++        if getattr(args, "ckpt_format", None) != "torch_dist":
++            raise RuntimeError(
++                "chunked optimizer state offload requires --ckpt-format torch_dist; checkpoint "
++                "arguments may have overwritten the startup setting during resume"
++            )
++
+     if args.async_save and not is_empty_async_queue():
+         print_rank_0('WARNING: Starting a checkpoint save before previous has finished. Consider increasing the checkpoint interval.')
+ 
+@@ -498,7 +520,11 @@ def save_checkpoint(iteration, model, optimizer, opt_param_scheduler, num_floati
+             optimizer.save_parameter_state(optim_checkpoint_name)
+     
+     # LayerWiseDistributedOptimizer save optimizer state to file on different ranks
+-    if getattr(args, "optimizer", "adam").startswith("dist_") and args.ckpt_format == 'torch':
++    if (
++        getattr(args, "optimizer", "adam").startswith("dist_")
++        and not args.no_save_optim
++        and args.ckpt_format == 'torch'
++    ):
+         dp_rank = mpu.get_data_parallel_rank()
+         optim_checkpoint_name = os.path.join(os.path.dirname(checkpoint_name), f"layer_wise_optimizer_{dp_rank}.pt")
+         ensure_directory_exists(optim_checkpoint_name)
 diff --git a/megatron/training/global_vars.py b/megatron/training/global_vars.py
 index ec402263d..2d0354462 100644
 --- a/megatron/training/global_vars.py
@@ -2106,7 +2339,7 @@ index ec402263d..2d0354462 100644
      if build_tokenizer:
          _ = _build_tokenizer(args)
 diff --git a/megatron/training/training.py b/megatron/training/training.py
-index c29c48d4c..a02cb0ea9 100644
+index c29c48d4c..dcac80e74 100644
 --- a/megatron/training/training.py
 +++ b/megatron/training/training.py
 @@ -932,9 +932,32 @@ def update_train_iters(args):
@@ -2143,9 +2376,117 @@ index c29c48d4c..a02cb0ea9 100644
      else:
          # Sample based training with rampup batch size.
          iterations = 0
+@@ -1363,13 +1386,81 @@ def train_step(forward_step_func, data_iterator, model, optimizer, opt_param_sch
+     args = get_args()
+     timers = get_timers()
+ 
++    # Chunked optimizer state offload (PR #6244 backport).
++    optimizer_config = getattr(optimizer, 'config', None)
++    chunked_optimizer_state_offload = bool(
++        optimizer_config is not None
++        and getattr(optimizer_config, 'chunked_optimizer_state_offload', False)
++        and getattr(optimizer_config, 'optimizer_state_offload_fraction', 1.0) > 0.0
++    )
++    pre_forward_param_sync_before_master_offload = (
++        chunked_optimizer_state_offload
++        and optimizer.optimizer_state_offload_requires_pre_forward_param_sync()
++    )
++    delay_master_offload_for_param_buffer = (
++        chunked_optimizer_state_offload
++        and args.reuse_grad_buf_for_mxfp8_param_ag
++        and args.overlap_param_gather
++    )
++    if chunked_optimizer_state_offload:
++        # Prefetch masters and the first state chunk as late as possible so H2D overlaps
++        # gradient finalization. Preserve custom hooks and avoid wrapping more than once.
++        finalize_model_grads_func = getattr(config, 'finalize_model_grads_func', None)
++        if (
++            getattr(
++                finalize_model_grads_func,
++                '_chunked_optimizer_state_offload_wrapped_optimizer',
++                None,
++            )
++            is not optimizer
++        ):
++            base_finalize_model_grads_func = getattr(
++                finalize_model_grads_func,
++                '_chunked_optimizer_state_offload_base_finalize_model_grads_func',
++                None,
++            )
++            if base_finalize_model_grads_func is None:
++                base_finalize_model_grads_func = finalize_model_grads_func or finalize_model_grads
++
++            def finalize_model_grads_with_state_reload(*fmg_args, **fmg_kwargs):
++                optimizer.prefetch_optimizer_state_for_gradient_finalization()
++                return base_finalize_model_grads_func(*fmg_args, **fmg_kwargs)
++
++            setattr(
++                finalize_model_grads_with_state_reload,
++                '_chunked_optimizer_state_offload_wrapped_optimizer',
++                optimizer,
++            )
++            setattr(
++                finalize_model_grads_with_state_reload,
++                '_chunked_optimizer_state_offload_base_finalize_model_grads_func',
++                base_finalize_model_grads_func,
++            )
++            config.finalize_model_grads_func = finalize_model_grads_with_state_reload
++
+     rerun_state_machine = get_rerun_state_machine()
+     while rerun_state_machine.should_run_forward_backward(data_iterator):
++        # Start D2H before zeroing gradients. In the MXFP8 staging path, updated masters
++        # remain readable until their delayed D2H after the main-param copy below.
++        if chunked_optimizer_state_offload and not pre_forward_param_sync_before_master_offload:
++            optimizer.offload_optimizer_state_for_forward(
++                offload_master=not delay_master_offload_for_param_buffer
++            )
++
+         # Set grad to zero.
+         for model_chunk in model:
+             model_chunk.zero_grad_buffer()
+         optimizer.zero_grad()
+ 
++        if pre_forward_param_sync_before_master_offload:
++            # A pre-forward parameter gather consumes fp32 masters. Finish the normally
++            # overlapped gather after grad-buffer reset, then start the master D2H.
++            optimizer.ensure_master_weights_for_pre_forward_param_sync()
++            optimizer.start_param_sync_for_bucket_group_subset(force_sync=True)
++            optimizer.offload_optimizer_state_for_forward(
++                offload_master=not delay_master_offload_for_param_buffer
++            )
++
+         if has_nvidia_modelopt:
+             # [ModelOpt]: Pipeline-parallel Distillation stacks student and teacher tensors
+             adjust_tensor_shapes_fn = get_tensor_shapes_adjust_fn_for_distillation(
+@@ -1386,6 +1477,11 @@ def train_step(forward_step_func, data_iterator, model, optimizer, opt_param_sch
+                 if isinstance(optim_instance, DistributedOptimizer):
+                     optim_instance._copy_main_params_to_param_buffer()
+ 
++        # In the delayed MXFP8 path, optimizer state was offloaded above while masters
++        # remained resident for main-param staging. Start master D2H after that copy.
++        if delay_master_offload_for_param_buffer:
++            optimizer.offload_optimizer_state_for_forward()
++
+         # Forward pass.
+         losses_reduced = forward_backward_func(
+             forward_step_func=forward_step_func,
+@@ -1420,6 +1516,13 @@ def train_step(forward_step_func, data_iterator, model, optimizer, opt_param_sch
+     # Part of MuonClip Optimizer step
+     log_max_attention_logit = 0
+     if args.qk_clip or args.log_max_attention_logit:
++        if chunked_optimizer_state_offload and args.qk_clip:
++            # QK-Clip writes fp32 masters through param.main_param, outside the offload
++            # lifecycle. After the chunked step the master bindings are CPU canonical with
++            # a possibly in-flight D2H, so restore CUDA residency (synchronized) first;
++            # the write then lands on GPU masters and the next offload_for_forward
++            # persists it back to CPU canonical.
++            optimizer.ensure_master_weights_for_param_sync()
+         log_max_attention_logit = clip_qk(model, log_max_only=not args.qk_clip)
+             
+     timers('optimizer').stop()
 diff --git a/tests/unit_tests/test_chunked_offload_s1.py b/tests/unit_tests/test_chunked_offload_s1.py
 new file mode 100644
-index 000000000..f79bf2859
+index 000000000..c5b7863fc
 --- /dev/null
 +++ b/tests/unit_tests/test_chunked_offload_s1.py
 @@ -0,0 +1,1273 @@
@@ -2328,9 +2669,10 @@ index 000000000..f79bf2859
 +
 +@pytest.mark.parametrize(
 +    ("flag_name", "chunk_size_mb", "expects_unbounded_window_warning"),
-+    [("chunked_optimizer_state_offload", 1, False), ("offload_optimizer_states", 0, True)],
++    # backport: deprecated alias 행("offload_optimizer_states")은 미이식 — 대신
++    # 같은 플래그의 chunk-size-0 행으로 무제한-윈도 경고 경로를 커버.
++    [("chunked_optimizer_state_offload", 1, False), ("chunked_optimizer_state_offload", 0, True)],
 +)
-+@pytest.mark.skip(reason="backport: arguments.py 훅은 S3에서 최소분 이식")
 +def test_training_args_reject_async_save_with_chunked_state_offload(
 +    monkeypatch, flag_name, chunk_size_mb, expects_unbounded_window_warning
 +):
@@ -2366,7 +2708,6 @@ index 000000000..f79bf2859
 +    )
 +
 +
-+@pytest.mark.skip(reason="backport: arguments.py 훅은 S3에서 최소분 이식")
 +def test_training_args_treat_zero_offload_fraction_as_disabled(monkeypatch):
 +    """A zero fraction bypasses checkpoint restrictions during startup validation."""
 +
@@ -2396,7 +2737,6 @@ index 000000000..f79bf2859
 +    assert validated_args.async_save
 +
 +
-+@pytest.mark.skip(reason="backport: upstream 'muon' 모드 인자 체계 상이(이 스냅샷은 dist_muon)")
 +def test_training_args_reject_muon_offload_without_distributed_optimizer(monkeypatch):
 +    """Muon offload must route non-Muon groups to a sibling DistributedOptimizer."""
 +
@@ -2421,9 +2761,12 @@ index 000000000..f79bf2859
 +        validate_args(args)
 +
 +
-+@pytest.mark.skip(reason="backport: deprecated alias 미이식")
 +def test_training_args_accept_deprecated_dist_muon_offload(monkeypatch):
-+    """The deprecated dist_muon spelling normalizes to the supported LayerWise mode."""
++    """dist_muon (이 스냅샷의 1급 LayerWise 철자)이 chunked offload와 함께 수용된다.
++
++    backport 주: upstream은 dist_muon→muon+use_layer_wise_distributed_optimizer로
++    정규화하지만 이 스냅샷은 dist_muon이 그대로 유효한 선택지다.
++    """
 +
 +    monkeypatch.setattr(sys, 'argv', ['test_optimizer_state_offloading.py'])
 +    args = parse_args()
@@ -2444,8 +2787,7 @@ index 000000000..f79bf2859
 +
 +    validated_args = validate_args(args)
 +
-+    assert validated_args.optimizer == 'muon'
-+    assert validated_args.use_layer_wise_distributed_optimizer
++    assert validated_args.optimizer == 'dist_muon'
 +    assert not validated_args.use_distributed_optimizer
 +
 +
@@ -2453,7 +2795,6 @@ index 000000000..f79bf2859
 +    ("ckpt_format", "async_save", "no_load_optim"),
 +    [("torch", False, True), ("torch_dist", True, False)],
 +)
-+@pytest.mark.skip(reason="backport: arguments.py 훅은 S3에서 최소분 이식")
 +def test_training_args_narrow_checkpoint_restrictions_to_optimizer_io(
 +    monkeypatch, ckpt_format, async_save, no_load_optim
 +):
@@ -3422,6 +3763,322 @@ index 000000000..f79bf2859
 +        )
 +
 +    del model_offload, optimizer_offload, model_reference, optimizer_reference
+diff --git a/tests/unit_tests/test_chunked_offload_s3_layerwise.py b/tests/unit_tests/test_chunked_offload_s3_layerwise.py
+new file mode 100644
+index 000000000..1fe73794b
+--- /dev/null
++++ b/tests/unit_tests/test_chunked_offload_s3_layerwise.py
+@@ -0,0 +1,310 @@
++# Copyright (c) 2025 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
++"""S3 backport tests: chunked optimizer-state offload through LayerWiseDistributedOptimizer.
++
++Adapted from upstream PR #6244's test_layer_wise_optimizer.py additions. Divergence from
++upstream: this snapshot's dist_muon chain holds the TensorParallelMuon child plus Adam
++children inside one LayerWiseDistributedOptimizer (upstream routes Adam through a sibling
++DistributedOptimizer), so Adam children are skipped rather than rejected, and the GPU
++golden test compares a full dist_muon chain against its non-offloaded twin.
++"""
++
++import os
++from types import SimpleNamespace
++
++import pytest
++import torch
++import torch.nn as nn
++import torch.nn.functional as F
++from packaging.version import Version
++
++from megatron.core.distributed import DistributedDataParallel, DistributedDataParallelConfig
++from megatron.core.optimizer import OptimizerConfig
++from megatron.core.optimizer.layer_wise_optimizer import LayerWiseDistributedOptimizer
++from megatron.core.optimizer.muon import TensorParallelMuon, get_megatron_muon_optimizer
++from megatron.core.transformer import TransformerConfig
++from tests.unit_tests.test_utilities import Utils
++
++# Skip all tests in this file for LTS versions (same gate as test_muon_optimizer.py).
++pytestmark = pytest.mark.skipif(
++    Version(os.getenv('NVIDIA_PYTORCH_VERSION', "24.01")) <= Version("25.05"),
++    reason="Skip muon optimizer for LTS test",
++)
++
++
++# --------------------------------------------------------------------------------------
++# Mock tests (no GPU / no distributed init)
++# --------------------------------------------------------------------------------------
++
++
++def test_layerwise_step_hook_is_noop_without_chunked_offload():
++    """Disabled offload must not inspect child-only manager attributes."""
++
++    optimizer = object.__new__(LayerWiseDistributedOptimizer)
++    optimizer.config = SimpleNamespace(chunked_optimizer_state_offload=False)
++    optimizer.chained_optimizers = [object()]
++
++    assert optimizer._managed_optimizer_state_offload_child_indices() == ()
++    optimizer._before_child_step(0)
++
++
++def _fake_shard_params(self, optimizers):
++    self.dp_cp_params_list = None
++    self.expt_dp_params_list = None
++
++
++class _FakeWrappedOptimizer:
++    def __init__(self, optimizer, config, grad_scaler, init_state_fn):
++        self.optimizer = optimizer
++        self.config = config
++        self.fp32_from_float16_groups = [[]]
++        self._optimizer_state_offloader = None
++        self.enable_calls = []
++        self.deferred_calls = []
++
++    def enable_chunked_optimizer_state_offload(self, master_params, state_dtypes):
++        self.enable_calls.append((master_params, state_dtypes))
++        self._optimizer_state_offloader = object()
++
++    def set_optimizer_state_offload_deferred_lifecycle(
++        self, *, state_prefetch_to_step, master_offload_for_param_sync
++    ):
++        self.deferred_calls.append((state_prefetch_to_step, master_offload_for_param_sync))
++
++
++def _mock_config(fraction):
++    return SimpleNamespace(
++        bf16=True,
++        chunked_optimizer_state_offload=True,
++        optimizer_state_offload_fraction=fraction,
++    )
++
++
++def test_layerwise_fraction_zero_skips_offload_specific_child_inspection(monkeypatch):
++    """A zero fraction must bypass Muon schema inspection and offloader construction."""
++
++    monkeypatch.setattr(
++        "megatron.core.optimizer.layer_wise_optimizer.Float16OptimizerWithFloat16Params",
++        _FakeWrappedOptimizer,
++    )
++    monkeypatch.setattr(LayerWiseDistributedOptimizer, "shard_params", _fake_shard_params)
++
++    optimizer = LayerWiseDistributedOptimizer([object()], _mock_config(fraction=0.0))
++
++    assert optimizer._managed_optimizer_state_offload_child_indices() == ()
++    assert optimizer.chained_optimizers[0].enable_calls == []
++    LayerWiseDistributedOptimizer._before_child_step(optimizer, 0)
++
++
++def _raw_muon_with_params():
++    raw_optimizer = object.__new__(TensorParallelMuon)
++    raw_optimizer.param_groups = [{"params": [object()]}]
++    return raw_optimizer
++
++
++def test_layerwise_offload_rejects_multiple_nonempty_muon_children(monkeypatch):
++    """The supported LayerWise offload schema has at most one local Muon child."""
++
++    monkeypatch.setattr(
++        "megatron.core.optimizer.layer_wise_optimizer.Float16OptimizerWithFloat16Params",
++        _FakeWrappedOptimizer,
++    )
++    monkeypatch.setattr(LayerWiseDistributedOptimizer, "shard_params", _fake_shard_params)
++
++    raw_optimizers = [_raw_muon_with_params() for _ in range(2)]
++
++    with pytest.raises(AssertionError, match="at most one non-empty TensorParallelMuon child"):
++        LayerWiseDistributedOptimizer(raw_optimizers, _mock_config(fraction=1.0))
++
++
++def test_layerwise_adam_children_are_skipped_not_rejected(monkeypatch):
++    """Backport divergence: non-Muon (Adam) chain children stay resident, Muon child enables."""
++
++    monkeypatch.setattr(
++        "megatron.core.optimizer.layer_wise_optimizer.Float16OptimizerWithFloat16Params",
++        _FakeWrappedOptimizer,
++    )
++    monkeypatch.setattr(LayerWiseDistributedOptimizer, "shard_params", _fake_shard_params)
++
++    adam_like = SimpleNamespace(param_groups=[{"params": [object()]}])
++    optimizer = LayerWiseDistributedOptimizer(
++        [_raw_muon_with_params(), adam_like], _mock_config(fraction=1.0)
++    )
++
++    muon_child, adam_child = optimizer.chained_optimizers
++    assert muon_child.enable_calls == [([], (torch.float32,))]
++    assert muon_child.deferred_calls == [(True, False)]
++    assert adam_child.enable_calls == []
++    assert optimizer._managed_optimizer_state_offload_child_indices() == (0,)
++
++
++def test_layerwise_empty_muon_child_keeps_no_offloader_path(monkeypatch):
++    """Whole-parameter sharding can leave a rank with a Muon child that owns no params."""
++
++    monkeypatch.setattr(
++        "megatron.core.optimizer.layer_wise_optimizer.Float16OptimizerWithFloat16Params",
++        _FakeWrappedOptimizer,
++    )
++    monkeypatch.setattr(LayerWiseDistributedOptimizer, "shard_params", _fake_shard_params)
++
++    raw_optimizer = object.__new__(TensorParallelMuon)
++    raw_optimizer.param_groups = [{"params": []}]
++    optimizer = LayerWiseDistributedOptimizer([raw_optimizer], _mock_config(fraction=1.0))
++
++    assert optimizer.chained_optimizers[0].enable_calls == []
++    assert optimizer._managed_optimizer_state_offload_child_indices() == ()
++
++
++def test_layerwise_prefetches_single_managed_child_state():
++    """LayerWise prefetches its single managed child before the chained step."""
++
++    events = []
++
++    def child(name, managed):
++        return SimpleNamespace(
++            _optimizer_state_offloader=object() if managed else None,
++            prefetch_optimizer_master_weights_for_step=lambda: events.append(f"master:{name}"),
++            prefetch_optimizer_state_for_step=lambda: events.append(f"state:{name}"),
++            step_with_ready_grads=lambda: events.append(f"step:{name}") or True,
++        )
++
++    children = [child("a", False), child("b", True), child("c", False)]
++    optimizer = object.__new__(LayerWiseDistributedOptimizer)
++    optimizer.chained_optimizers = children
++    optimizer.config = SimpleNamespace(
++        chunked_optimizer_state_offload=True,
++        optimizer_state_offload_fraction=1.0,
++        overlap_param_gather_with_optimizer_step=False,
++    )
++    optimizer._managed_optimizer_state_offload_indices = (1,)
++
++    optimizer.prefetch_optimizer_state_for_gradient_finalization()
++    assert events == ["master:a", "master:b", "master:c", "state:b"]
++
++    events.clear()
++    assert optimizer.step_with_ready_grads()
++    assert events == ["state:b", "step:a", "step:b", "step:c"]
++
++
++# --------------------------------------------------------------------------------------
++# GPU tests (single rank; same harness pattern as test_muon_optimizer.py)
++# --------------------------------------------------------------------------------------
++
++
++class Net(nn.Module):
++    def __init__(self):
++        super().__init__()
++        self.fc1 = nn.Linear(80, 48)
++        self.fc2 = nn.Linear(48, 32)
++        self.fc3 = nn.Linear(32, 24)
++        self.fc4 = nn.Linear(24, 16)
++        self.fc5 = nn.Linear(16, 10)
++
++    def forward(self, x):
++        x = F.relu(self.fc1(x))
++        x = F.relu(self.fc2(x))
++        x = F.relu(self.fc3(x))
++        x = F.relu(self.fc4(x))
++        x = self.fc5(x)
++        return x
++
++
++class TestLayerWiseMuonChunkedOffload:
++    @pytest.fixture(autouse=True)
++    def setup_and_teardown(self):
++        Utils.initialize_model_parallel()
++        yield
++        Utils.destroy_model_parallel()
++
++    def _create_model_and_optimizer(self, offload: bool, seed: int = 1234):
++        torch.manual_seed(seed)
++        model = Net().bfloat16().cuda()
++        model.requires_grad_(True)
++        ddp_config = DistributedDataParallelConfig(use_distributed_optimizer=False)
++        model = DistributedDataParallel(
++            TransformerConfig(num_attention_heads=1, num_layers=1), ddp_config, model
++        )
++        optimizer_config = OptimizerConfig(
++            optimizer='muon',
++            lr=0.01,
++            weight_decay=0.01,
++            bf16=True,
++            use_distributed_optimizer=False,
++            muon_momentum=0.95,
++            muon_use_nesterov=True,
++            muon_fp32_matmul_prec="medium",
++            muon_num_ns_steps=5,
++            muon_scale_mode="spectral",
++            muon_tp_mode="duplicated",
++            chunked_optimizer_state_offload=offload,
++            optimizer_state_offload_chunk_size_mb=1 if offload else 0,
++            optimizer_state_offload_fraction=1.0,
++        )
++        optimizer = get_megatron_muon_optimizer(
++            config=optimizer_config,
++            model_chunks=[model],
++            use_gloo_process_groups=True,
++            layer_wise_distributed_optimizer=True,
++        )
++        assert isinstance(optimizer, LayerWiseDistributedOptimizer)
++        return model, optimizer
++
++    def test_offloader_enabled_on_muon_child_only(self):
++        """The Muon child gets an offloader; Adam children keep GPU-resident state."""
++
++        model, optimizer = self._create_model_and_optimizer(offload=True)
++
++        muon_child = optimizer.chained_optimizers[0]
++        assert type(muon_child.optimizer) is TensorParallelMuon
++        assert muon_child._optimizer_state_offloader is not None
++        for adam_child in optimizer.chained_optimizers[1:]:
++            assert getattr(adam_child, '_optimizer_state_offloader', None) is None
++        assert optimizer._managed_optimizer_state_offload_child_indices() == (0,)
++
++        # One step, then the forward-phase offload: Muon state and masters must be on CPU.
++        inputs = torch.randn(16, 80, dtype=torch.bfloat16, device='cuda')
++        model(inputs).sum().backward()
++        optimizer.prefetch_optimizer_state_for_gradient_finalization()
++        update_successful, _, _ = optimizer.step()
++        assert update_successful
++
++        optimizer.offload_optimizer_state_for_forward()
++        manager = muon_child._optimizer_state_offloader
++        torch.cuda.synchronize()
++        for param in manager.selected_params:
++            state = manager.optimizer.state[param]
++            for value in state.values():
++                if isinstance(value, torch.Tensor) and value.numel() == param.numel():
++                    assert value.device.type == 'cpu'
++        for group in muon_child.fp32_from_float16_groups:
++            for master in group:
++                if manager.is_param_offloaded(master):
++                    assert master.device.type == 'cpu'
++
++    def test_layerwise_offload_matches_non_offloaded(self):
++        """Golden: 5 offloaded lifecycle steps match the non-offloaded twin exactly."""
++
++        model, optimizer = self._create_model_and_optimizer(offload=True, seed=777)
++        reference_model, reference_optimizer = self._create_model_and_optimizer(
++            offload=False, seed=777
++        )
++        for p, q in zip(model.parameters(), reference_model.parameters()):
++            assert torch.equal(p, q), "twin init mismatch — seed handling broken"
++
++        torch.manual_seed(4242)
++        batches = [torch.randn(16, 80, dtype=torch.bfloat16, device='cuda') for _ in range(5)]
++
++        for step_idx, batch in enumerate(batches):
++            optimizer.offload_optimizer_state_for_forward()
++            optimizer.zero_grad()
++            model(batch).sum().backward()
++            optimizer.prefetch_optimizer_state_for_gradient_finalization()
++            assert optimizer.step()[0]
++
++            reference_optimizer.zero_grad()
++            reference_model(batch).sum().backward()
++            assert reference_optimizer.step()[0]
++
++            for (name, p), (_, q) in zip(
++                model.named_parameters(), reference_model.named_parameters()
++            ):
++                assert torch.equal(p, q), f"step {step_idx}: parameter {name} diverged"
 diff --git a/tests/unit_tests/test_muon_optimizer.py b/tests/unit_tests/test_muon_optimizer.py
 index cc99f7a16..c7d86c7d9 100644
 --- a/tests/unit_tests/test_muon_optimizer.py

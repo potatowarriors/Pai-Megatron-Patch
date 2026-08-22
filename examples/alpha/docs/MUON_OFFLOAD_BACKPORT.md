@@ -60,11 +60,48 @@ offload를 251125 스냅샷에 표적 백포트 → **128K@CP8의 Muon 바닥짐
 - 교훈: 앵커 치환 스크립트는 `count==1` assert로 원자성 확보 — 동일 docstring이
   4개 클래스에 존재(`init_state_fn`)해 클래스 고유 문맥으로 앵커를 확장해야 했음.
 
-## Stage 3~6 (계획)
+## Stage 3 — layer_wise/arguments/training 통합 (✅ 08-22)
 
-- S3: layer_wise 통합(+87 패턴 재작성: TensorParallelMuon 타입 가드, fp32_from_float16
-  master 추출, enable 호출; fp8/overlap 분기는 우리 스택 미사용이라 생략) + arguments/
-  training 최소 훅 → analysis_24L mock ON/OFF A/B **bit-identical + 메모리·오버헤드 실측**.
+- **layer_wise_optimizer.py** (✅): `__init__`에 enable 블록 — Muon 자식(`type is
+  TensorParallelMuon`)만 오프로드, **Adam 자식은 GPU 상주로 스킵** (upstream은 Adam을
+  형제 DistOpt로 라우팅해 비-Muon 자식을 reject — 우리 dist_muon 체인은 [muon, adam*]
+  단일 layer_wise라 의도적 분기; INFO 로그로 스킵 수 명시). master =
+  `fp32_from_float16_groups`, state_dtypes=(fp32,), deferred lifecycle =
+  state_prefetch_to_step만 (fp8 param gather 없음). 오버라이드 3종:
+  `prefetch_optimizer_state_for_gradient_finalization`(전 자식 master + 관리 자식 첫
+  state 청크), `_before_child_step`(idx 0에서 관리 자식 state prefetch),
+  `_managed_optimizer_state_offload_child_indices`. 순환 import 회피: muon.py가 이
+  모듈을 로드하므로 TensorParallelMuon은 지연 import.
+- **arguments.py** (✅): 플래그 3종 + validate_args 블록(chunk 0 경고 · muon 단독
+  거부("requires the LayerWise") · dist_muon/DistOpt 외 경로 거부 · optim save/load 시
+  torch_dist 요구 · async_save 거부 · full_iteration CUDA graph 거부). deprecated
+  `--offload-optimizer-states` alias는 미이식(구 오프로더가 이 스냅샷에 없음).
+- **training.py train_step** (✅): finalize_model_grads 래퍼(중복 래핑 방지 attr 스탬프,
+  prefetch가 grad finalization과 오버랩) + rerun 루프 진입부 offload_for_forward
+  (pre-forward param-sync/mxfp8 지연 분기는 충실 이식하되 우리 스택에선 항상 비활성).
+- **checkpointing.py** (✅): save_checkpoint 진입 안전 불변식(async/비-torch_dist 저장
+  런타임 거부) + layer_wise torch-format 저장의 `no_save_optim` 가드.
+- **검증 (유닛)**: 전 스위트 **74 passed / 20 skipped / 0 failed** —
+  `test_chunked_offload_s3_layerwise.py` 신규 8종(층위 mock 6 + GPU 2: dist_muon 실체인
+  Muon-자식-단독 활성/step 후 momentum·master CPU 상주, **5스텝 골든 `torch.equal`
+  bit-identical**) + s1의 training_args 5종 해제·적응(7케이스) + muon 20/step-GBS 8 무회귀.
+- **analysis_24L mock ON/OFF A/B** (✅ 08-22, 4×H100 EP=4/DP=4, 16 iter, chunk 256MB):
+  - **메모리: max-alloc 47.40 → 32.68 GB (−14.7 GB, −31%)** — Muon 자식의 momentum+master
+    오프로드 실효 확인.
+  - **오버헤드: iter당 6.3–6.9s → 6.8–7.3s (~+5–7%)**.
+  - **등가성 — 판정 기준 교정**: 최초 계획한 bit-identical은 **풀모델에선 성립 불가능한
+    기준**이었다. 동일 구성 OFF↔OFF 재실행도 iter 3부터 분기(평균 상대 |Δ| 2.7e-3,
+    iter 1–2는 4개 런 전부 bitwise 일치 — 비결정성이 momentum≠0인 두 번째 step부터
+    유입; GDN triton/MoE 경로의 알려진 실행 간 비결정성, STAGE2_CURRICULUM_LOG 참조).
+    4런 6쌍 비교(iters 3–16): **ON↔OFF 교차 편차(1.7–2.7e-3)가 OFF↔OFF·ON↔ON
+    자기 산포(2.7e-3/3.3e-3)와 동급 이하** → 계통 편향 없음 = PASS. 오프로더 수학
+    자체의 정확성은 결정론적 모델의 유닛 골든(5스텝 `torch.equal`)이 담보.
+  - **QK-Clip×offload 계약**: clip_qk는 `param.main_param.data`(fp32 master)에 오프로더
+    수명주기 밖 쓰기를 한다. chunked step 종료 시 master는 GPU 상주이고 D2H는 다음
+    iter의 offload_for_forward에서 일어나므로 현행 시퀀스에서 clip 쓰기는 보존되지만,
+    train_step에 `ensure_master_weights_for_param_sync()`를 clip 직전에 명시해 향후
+    수명주기 변경(지연 master offload 등)에도 안전하게 고정 (상주 시 no-op). LC preset은
+    qk-clip 제거 확정이라 실전 경로엔 이 상호작용 자체가 없음.
 - S4: 체크포인트 round-trip (오프로드 ON 저장 ↔ OFF 재개 양방향 bit-identical).
 - S5: **표적 검증 — 128K@CP8** (gdn-cp 브랜치와 결합 필요: CP는 그 브랜치에만 있음
   → S5는 gdn-cp 머지 후 rebase 시점에) max-alloc ~47GB 예상 확인.
