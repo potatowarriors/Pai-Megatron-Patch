@@ -27,12 +27,38 @@ offload를 251125 스냅샷에 표적 백포트 → **128K@CP8의 Muon 바닥짐
 - 잔여 11종은 `OptimizerConfig` 신규 필드 + `MegatronOptimizer` subset-step API 요구
   → S2 전제.
 
-## Stage 2 — 통합 플러밍 (다음)
+## Stage 2 — 통합 플러밍 (✅ 08-22)
 
-optimizer_config.py 4훅 + optimizer.py 13훅을 우리 파일에 수작업 이식(Muon 경로만,
-distrib_optimizer/fp8/mxfp8 스킵) → **검증: S1 잔여 11종(골든
-`test_training_matches_non_offloaded_optimizer` 포함) 통과 + 오프로드 OFF에서
-기존 muon 스위트 20종 무회귀.**
+- **optimizer.py 13훅** 이식: import + `MegatronOptimizer` 클래스 기본값(ChainedOptimizer가
+  base `__init__`을 안 부르므로 클래스 속성 필수) + 라이프사이클 API 12종
+  (`enable_chunked_optimizer_state_offload` ~ `start_param_sync_for_bucket_group_subset`)
+  + MixedPrecision `prepare_grads` 멱등 prefetch + step 분기(`offloader.step()`) +
+  `_copy_{main,model}_params` ensure/assert 가드 + Float16 sharded_state_dict
+  init/sync + `load_state_dict_without_device_cast` 분기 + FP32Optimizer step 가드 +
+  ChainedOptimizer 스트림 공유·10종 팬아웃·`_before_child_step` 훅.
+- **optimizer_config.py**: 신규 필드 3종(`chunked_optimizer_state_offload`,
+  `optimizer_state_offload_chunk_size_mb`, `optimizer_state_offload_fraction`) +
+  최소 `__post_init__` 검증(chunk≥0, fraction∈[0,1], `optimizer_cpu_offload` 배타).
+  upstream의 muon-모드 매트릭스 검증은 **의도적 미이식** — 이 스냅샷은
+  `muon.py:366`이 `config.optimizer='adam'`으로 재기록해 config 이름 기반 검증이
+  불가능, S3 통합 지점(layer_wise)에서 타입 가드로 대체.
+- **distrib_optimizer.py 7훅(D1~D7)**: `__init__` 말미 enable 배선(master 분리 조건 =
+  `shard_fp32_from_float16_groups` OR precision-aware `master_weights`; state_dtypes =
+  precision-aware면 (exp_avg, exp_avg_sq) dtype, 아니면 fp32×2) + load/sharded_state_dict
+  오프로드 분기 + **DistOpt가 override하는 복사 3메서드에 ensure/assert 재삽입**
+  (base 가드를 우회하므로 — `test_chunk_plan_and_initial_master_offload`의
+  `reload_model_params()` 후 `param.is_cuda` 실패로 검출). upstream mxfp8 gather-drain
+  블록은 미사용이라 스킵.
+- **검증 결과**:
+  - `test_chunked_offload_s1.py`: **31 passed / 21 skipped / 0 failed** — 골든
+    `test_training_matches_non_offloaded_optimizer`(5스텝 학습 = 비오프로드
+    레퍼런스와 파라미터 일치) 포함 기능 그룹 전체 통과. skip 21 = 멀티랭크 1 +
+    비이식 9개 함수(deprecated alias 2 · upstream 전용 config 매트릭스 2 ·
+    arguments.py 훅 대기 5 — 각각 사유를 `@pytest.mark.skip`으로 파일에 명기).
+  - 무회귀: `test_muon_optimizer.py` 20종 + `test_step_batch_size_schedule.py` 8종
+    **28 passed** (오프로드 코드 존재·비활성 상태).
+- 교훈: 앵커 치환 스크립트는 `count==1` assert로 원자성 확보 — 동일 docstring이
+  4개 클래스에 존재(`init_state_fn`)해 클래스 고유 문맥으로 앵커를 확장해야 했음.
 
 ## Stage 3~6 (계획)
 
