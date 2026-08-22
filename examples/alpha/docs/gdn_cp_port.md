@@ -176,3 +176,42 @@ bash train.sh baseline_48L profile mock \
   `_build_thd_cp_a2a_perm` 포팅 + `helper.py` 차단 해제 + QK-Clip(thd에서 max_logit
   미지원)과의 충돌 해소가 한 묶음. LC 레시피에서 문서 격리 채택 여부 결정 후 진행.
 - inference/decode 경로 CP (학습 전용; `mamba_mixer` decode는 CP=1 assert 유지).
+
+## H100 클러스터 검증 결과 (2026-08-22 — 게이트 §1 실측, main1 8×H100)
+
+P3(stage2) 완주 직후 유휴 창구에서 러너북 §1~4 전체 실행. **판정 1~4 전부 통과, LC-A GO.**
+
+| # | 항목 | 결과 |
+|---|---|---|
+| 1 | 포팅 유닛테스트 (sm90+실 NCCL) | ✅ 단일/2-rank/4-rank ALL PASSED, **forward max diff 0.000e+00** (+ THD perm 14/14) |
+| 2 | Muon+QK-Clip+EP8×CP full-stack | ✅ CP{2,4,8} iter-1 lm_loss \|Δ\|≤6e-5 vs CP1, 16-iter 궤적 일치, NaN 0 |
+| 3 | QK-Clip+CP | ✅ max_logit 로깅 + threshold=1 강제 발동 무크래시 |
+| 4 | EP8×CP 프로세스 그룹 | ✅ CP{2,4,8} init 성공 |
+| 5 | stage2 ckpt CP=2 로드 | ✅ iter 26,832 torch_dist 복제 로드, valid loss **1.165811** = 라이브 종료값 4자리 일치 |
+| 6 | 메모리 (아래 표) | 32K/64K GO, **128K NO-GO** |
+
+### VRAM 실측 (max allocated, MBS=1 GBS=8, --no-create-attention-mask-in-dataloader)
+
+| 구성 | recompute | max alloc | 판정 |
+|---|---|---|---|
+| 32K@CP4 | selective(prod) | **52.2 GB** | ✅ LC-A 기준선 (TFLOP/s 117) |
+| 32K@CP8 | selective | **47.2 GB** | ✅ (iter 7.1s vs CP4 5.2s — 처리량은 CP4 우세) |
+| **64K@CP8** | selective | **52.2 GB** | ✅ **LC-B 시작점 — 코드 무변경 GO** (TFLOP/s ~150) |
+| 32K@CP1 | selective | OOM (74.8GB) | ❌ CP=1+THD 폴백 불가 → **THD+CP 스티치가 LC-A 필수** |
+| 128K@CP8 | selective | OOM (iter1 62.3GB 후 iter2 사망) | ❌ |
+| 128K@CP8 | full uniform-1 (`profile_fullrc.yaml`) | OOM (72.5GB) | ❌ |
+| 128K@CP8 | full + `--cross-entropy-loss-fusion te` | OOM (73.0GB — CE 융합 무효과) | ❌ **LC-B는 64K로 시작, 128K는 후속 안건** |
+
+### 분석·주의 노트
+
+1. **grad norm ∝ CP는 관례**: `helper.py` loss_func가 CP>1에서 loss에 ×cp를 곱해
+   dp-cp 그래디언트 정규화와 상쇄시키는 upstream 관례 — 로깅 norm이 CP 배수로 보이나
+   궤적 동일이 실증하듯 동역학 무영향. **단 LC preset의 `clip-grad` 임계는 이 스케일을
+   반영해 재검토할 것** (성숙 모델에서 클리핑 발동 시점이 CP에 따라 달라질 수 있음).
+2. **128K@CP8 바닥짐 분해(추정)**: Muon 상태+params+fp32 grads ~45.5GB(dp=1이라 샤딩
+   불가) + full-rc 잔여/transient + NCCL/TE ≈ 72GB — 활성값 레버(full-rc)와 CE 융합
+   모두 피크 불변으로 실증. 후속 후보: upstream PR #5982(gdn_in_proj_conv selective
+   recompute — 단독으론 부족하나 64K selective 헤드룸·스루풋 개선용) 포팅,
+   `expandable_segments`, 메모리 피크 정밀 프로파일.
+3. **운영 함정**: 연속 torchrun 실행 시 직전 런 잔류로 EADDRINUSE 연쇄 — 런 사이
+   `nvidia-smi` compute-proc 0 대기 필수 (게이트 드라이버에 가드 구현).
