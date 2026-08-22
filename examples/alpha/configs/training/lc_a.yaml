@@ -6,25 +6,27 @@
 # + LC_REPACK_RUNBOOK.md §3.1 + gdn_cp_port.md 분석노트 3):
 # - CP4·32K·THD: 32K@CP1은 OOM(게이트 실측), CP4는 52.2GB GO. 문서 격리는 dense
 #   mask가 O(seq²)라 THD/cu_seqlens 경로 필수 — 아래 THD 플래그셋과 MBS 1은 세트.
-# - 예산 14B tokens (러너북 §3.1의 12~16B 중간값) = 427,264 samples @ 32768.
-# - GBS 256 = 8.4M tok/iter (P3 12.6M과 ProLong류 4M의 중간; 총 1,669 iters).
-# - LR: P3 종료 레짐(2.5e-5 상수) 승계 하향 2e-5, WSD(말미 ~9% cosine → 2e-6).
+# - 예산 14B tokens (러너북 §3.1의 12~16B 중간값) = 427,392 samples @ 32768.
+# - GBS 384 = 12.58M tok/iter — **Nemotron 3 Ultra LC 레시피의 '토큰 배치 유지'**
+#   (LC_DATASETS.md §5.1: iter당 토큰 상수 25,165,824 = pretraining GBS 6144×4096).
+#   alpha 등가 = P3의 3072×4096 토큰량을 32K에서 보존 → 384. 총 1,113 iters.
+# - LR: **7.5e-6 constant, decay 없음** — P3 종료 LR 7.5e-6(min 도달, 정본
+#   STAGE2_CURRICULUM_LOG 08-22 행) 그대로 + Nemotron 3 LC 선례(constant 2.5e-6 =
+#   자사 pretraining min-lr). warmup 50 iter만 유지(no-load-optim Muon 재예열).
 # - qk-clip 계열 전부 제거 (사용자 확정 08-22): return_max_logit×thd가 TE 2.9
 #   삼중 비호환 + P3 종료 max logit 19.375(임계의 1/5). log-max-attention-logit도
 #   같은 이유로 금지.
 #
 # ── 조정 가능 노브(변경 시 이 블록만 보면 됨) ────────────────────────────
-#   train-samples(예산) · global-batch-size · lr/lr-wsd-decay-samples · save-interval
+#   train-samples(예산) · global-batch-size(토큰 배치 유지 산식) · lr · save-interval
 
-# ── 예산 / LR (WSD, stage2_ab 구조 승계) ───────────────────────────────────
-train-samples: 427264             # 14B tokens / 32768; 1,669 iters @ GBS 256
-lr-warmup-samples: 25600          # 100 iters — no-load-optim/finetune 후 Muon 재예열
-lr-decay-samples: 427264
-lr-wsd-decay-samples: 38144       # 149 iters ≈ 8.9% (stage1/2 비율 승계)
-lr: 2.0e-5
-min-lr: 2.0e-6
-lr-decay-style: WSD
-lr-wsd-decay-style: cosine
+# ── 예산 / LR (constant — Nemotron 3 LC 선례) ─────────────────────────────
+train-samples: 427392             # 14.005B tokens / 32768; 1,113 iters @ GBS 384
+lr-warmup-samples: 19200          # 50 iters — no-load-optim/finetune 후 Muon 재예열
+lr-decay-samples: 427392          # constant지만 scheduler assert(warmup<decay)용
+lr: 7.5e-6
+min-lr: 7.5e-6
+lr-decay-style: constant
 
 # ── 병렬화 (LC-A 확정: CP4; 게이트 32K@CP4 52.2GB GO) ─────────────────────
 tensor-model-parallel-size: 1
@@ -35,8 +37,8 @@ context-parallel-size: 4
 
 # ── 배치 / 시퀀스 (THD는 MBS 1 필수 — helper가 assert) ────────────────────
 seq-length: 32768
-micro-batch-size: 1
-global-batch-size: 256
+micro-batch-size: 1               # THD 필수(helper assert) — 배치 확장은 GBS로만
+global-batch-size: 384
 
 # ── THD 문서 격리 플래그셋 (셋이 한 몸 — LC_ENTRY_GATE §1.5) ──────────────
 # reset-position-ids: EOD마다 position 리셋 → helper가 cu_seqlens 유도(+ pad
@@ -83,12 +85,12 @@ no-weight-decay-cond-type: apply_wd_to_qk_layernorm
 # ── Precision ─────────────────────────────────────────────────────────────
 bf16: true
 
-# ── 체크포인트 / 평가 (~1.7k iters 규모에 맞춤) ───────────────────────────
-save-interval: 250                # ~250 iter ≈ 7~8h 간격 예상
+# ── 체크포인트 / 평가 (1,113 iters 규모에 맞춤) ───────────────────────────
+save-interval: 100                # ~100 iter ≈ 7h 간격 예상 (1,113 iters 규모)
 no-save-optim: true               # Muon은 warmup 복구 검증됨 (stage1 선례)
 ckpt-format: torch_dist
 eval-iters: 4                     # 32K eval은 고비용 — 소표본
-eval-interval: 250
+eval-interval: 100
 
 # ── 로깅 / 런타임 (P3와 동일) ─────────────────────────────────────────────
 log-interval: 1
