@@ -16,8 +16,11 @@
 # ── TODO (스모크·블렌드 확정 후 채움) ─────────────────────────────────────
 #  1. load: LC 최종 체크포인트 경로 (LC-A ~08-25 종료, LC-B 여부 결정 대기)
 #  2. train-samples: 블렌드 예산 확정 후 (ultra3는 204,800 샘플 = 60.4B tok)
-#  3. CP4+offload vs CP8 판정: 64k@CP4 = 16k tok/rank ≈ 게이트 실측 72.5GB OOM
-#     경계 → 스모크에서 실측. CP8이면 DP=1 (128k@CP8 게이트 검증 구성).
+#  3. ~~CP4+offload vs CP8 판정~~ 해소 (08-23 스모크 A/B, chat_v3_if bins):
+#     CP8/DP1 = 109.8s/iter·111.9 TFLOP/s·max-alloc 52~56GB
+#     CP4+offload/DP2 = 71.7s/iter·171.5 TFLOP/s·max-alloc 55.0GB(안정) → 1.53×
+#     ⚠️ 단문 위주 스모크 — 본 런 전 장문 버킷(proofs·arc)으로 메모리 재확인
+#     (LC-A 교훈: 프로덕션 블렌드 편차가 스모크 꼬리를 넘을 수 있음).
 #  4. optimizer: dist_muon 유지 vs Adam 전환 (Nemotron은 Adam; 우리는 전
 #     스테이지 Muon — 전환 시 QGKV split 무관해지고 lr 재보정 필요)
 #  5. cross-entropy-fusion-impl te가 라벨 -100 을 올바르게 처리하는지 스모크
@@ -39,12 +42,16 @@ lr: 1.5e-5
 min-lr: 1.0e-6
 lr-decay-style: cosine
 
-# ── 병렬화 (TODO 3: 스모크로 CP4+offload vs CP8 판정) ─────────────────────
+# ── 병렬화 (08-23 A/B 확정: CP4+offload/DP2 — 위 주석 3 실측 1.53×) ───────
 tensor-model-parallel-size: 1
 pipeline-model-parallel-size: 1
 expert-model-parallel-size: 8
 expert-tensor-parallel-size: 1
-context-parallel-size: 8
+context-parallel-size: 4
+
+# ── Muon chunked offload (CP4/DP2 를 가능케 하는 조건 — MUON_OFFLOAD_BACKPORT) ──
+chunked-optimizer-state-offload: true
+optimizer-state-offload-chunk-size-mb: 256
 
 # ── 배치 / 시퀀스 (THD는 MBS 1 필수 — helper assert) ──────────────────────
 seq-length: 65536
@@ -85,7 +92,7 @@ muon-extra-scale-factor: 0.2
 init-method-std: 0.008
 
 # clip-grad ×cp 산식 (lc_a.yaml 실측 주석 참조): 실효 클리핑 1.0 기준 = 1.0×cp
-clip-grad: 8.0                    # CP8 기준; CP4 채택 시 4.0
+clip-grad: 4.0                    # CP4 확정
 
 # ── LayerNorm WD (P3/LC-A와 동일) ─────────────────────────────────────────
 no-weight-decay-cond-type: apply_wd_to_qk_layernorm
