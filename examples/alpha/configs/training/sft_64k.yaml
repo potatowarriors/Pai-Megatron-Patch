@@ -38,7 +38,11 @@ train-mode: finetune              # idxmap 2S 문서 분해 + 라벨/마스크 �
 # 근거: Ultra3 함의 epoch 역산(60.4B ≈ SWE-v1 1.1ep 앵커와 일치) → alpha 는
 # SWE-v3(9.78B) 전량 1ep 고정 + 나머지 비율 배분 + chat E_max 4~5 정합.
 # 블렌드 가중치 표는 convert_sft_64k.sh 헤더 (yaml 은 bins 완성 후 작성).
-train-samples: 610368             # 40.0B / 65536 = 9,537 iters @ GBS 64 (~4일)
+train-samples: 610368             # 40.0B / 65536 = 9,537 iters @ GBS 64
+                                  # 실블렌드 스모크 실측 88.2s/iter → **~9.7일**
+                                  # (chat 단독 71.7s와 달리 장문 세그먼트 +23%).
+                                  # 단축 옵션: LC 종료 후 main1 합류 2-node
+                                  # (DiLoCo-SFT 또는 sync-DP) ≈ ~5일.
 lr-warmup-samples: 28672          # ~4.7% (ultra3 150/3200 미러) = 448 iters
 lr-decay-samples: 610368
 lr: 1.5e-5
@@ -119,7 +123,9 @@ log-memory-to-tensorboard: true
 log-validation-ppl-to-tensorboard: true
 log-throughput: true
 tensorboard-queue-size: 1
-distributed-timeout-minutes: 60
+# 21종 블렌드 첫 캐시 빌드가 60분을 넘겨 NCCL 타임아웃(스모크 실측 80분+) —
+# 콜드 캐시 재빌드 시나리오 대비 여유. 웜 캐시면 수 분.
+distributed-timeout-minutes: 180
 manual-gc: true
 manual-gc-interval: 5
 overlap-grad-reduce: true

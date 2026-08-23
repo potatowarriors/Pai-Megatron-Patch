@@ -597,6 +597,13 @@ def main():
     builder.finalize(args.output_prefix + "_text_document.idx")
     t_all = time.time() - t0
 
+    if num_bins < 100:
+        # 전역 split "99,1,0" 에서 1% < 1 doc 이면 valid 가 0-doc — Megatron
+        # GPTDataset 의 epoch 루프가 무한 대기(NCCL 타임아웃으로 위장; identity
+        # 19-bins 실사고 2026-08-23). 입력 반복(×k) 등으로 bins 를 늘릴 것.
+        print(f"[warn] bins={num_bins} < 100 — 블렌드 split 1% 가 0-doc 이 되어 "
+              f"valid 인덱스 빌드가 무한 대기할 수 있음 (입력 반복으로 증폭 권장)")
+
     stats = {
         "input": args.input,
         "seq_length": args.seq_length,
