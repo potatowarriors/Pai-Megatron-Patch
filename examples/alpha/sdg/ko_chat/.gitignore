@@ -1,0 +1,6 @@
+out/
+artifacts/
+serve/logs/
+__pycache__/
+*.parquet
+seeds_*.jsonl
