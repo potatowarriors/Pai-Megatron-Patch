@@ -190,6 +190,16 @@ def test_null_user_content_drops():
     assert norm is None and why == "null_content"
 
 
+def test_null_system_with_restored_user_ok():
+    # 복원본 정상 형태: 시드에 system 없음 → system null + user 채워짐
+    row = {"messages": [{"role": "system", "content": None},
+                        {"role": "user", "content": "restored prompt"},
+                        {"role": "assistant", "content": "a"}]}
+    norm, why = normalize_row(row)
+    assert norm is not None, why
+    assert norm["messages"][0]["content"] == ""
+
+
 def test_null_assistant_content_with_tool_calls_ok():
     row = {"messages": [
         {"role": "user", "content": "q"},

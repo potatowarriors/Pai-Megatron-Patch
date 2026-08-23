@@ -181,8 +181,13 @@ def normalize_row(row: dict) -> Tuple[Optional[dict], Optional[str]]:
                 return None, "bad_row"
         if content is None:
             # assistant + tool_calls 는 정상 관례 (content 없는 도구 호출 턴).
-            # 그 외 null 은 라이선스 마스킹 (Chat-v3) — 복원 전 투입 금지.
+            # system null 은 복원본의 정상 형태 (prepare_chat_prompts 는 시드에
+            # system 이 없으면 null 로 남김; 비학습 구간이라 "" 와 렌더 등가).
+            # 라이선스 마스킹 판별은 user null 이 담당 (마스킹 행은 항상
+            # 첫 user 도 null — 복원 전 투입 금지).
             if role == "assistant" and tool_calls:
+                content = ""
+            elif role == "system":
                 content = ""
             else:
                 return None, "null_content"
