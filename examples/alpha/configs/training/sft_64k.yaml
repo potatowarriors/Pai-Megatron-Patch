@@ -105,7 +105,9 @@ bf16: true
 
 # ── 체크포인트 / 평가 ─────────────────────────────────────────────────────
 save-interval: 100
-no-save-optim: true
+# optimizer state 저장이 기본 (사용자 확정 2026-08-23, 63c466f 하우스 룰 반전):
+# 재개 시 Muon momentum·스케줄러 무봉합 복원. SFT 는 조기중단 가드(과적합 시
+# 중간 ckpt 채택) 운용이라 무봉합 재개 가치가 특히 큼.
 ckpt-format: torch_dist
 eval-iters: 4
 eval-interval: 100
