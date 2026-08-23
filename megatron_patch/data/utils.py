@@ -319,9 +319,23 @@ def get_batch_on_this_tp_rank_original(data_iterator, per_seq_average=False):
 
     return batch
 
+def _resolve_sft_tokenizer():
+    """SFT 배치 경로용 tokenizer 해석.
+
+    qwen류 경로는 megatron_patch 레지스트리(--patch-tokenizer-type)를 쓰지만
+    alpha는 core tokenizer만 빌드한다 — 레지스트리 호출이 NotImplementedError
+    ("None tokenizer")로 죽는다 (template/helper.py 상단 NOTE와 동일 사유,
+    2026-08-23 SFT 64k 스모크에서 검출). 레지스트리 우선, 실패 시 core 폴백.
+    """
+    try:
+        return get_tokenizer()
+    except NotImplementedError:
+        from megatron.training import get_tokenizer as get_core_tokenizer
+        return get_core_tokenizer()
+
+
 def get_position_id_on_this_tp_rank_idxmap_sft_packing(data_iterator):
     args = get_args()
-    tokenizer = get_tokenizer()
     def _broadcast(item):
         if item is None:
             return
@@ -347,7 +361,6 @@ def get_position_id_on_this_tp_rank_idxmap_sft_packing(data_iterator):
 
 def get_batch_on_this_tp_rank_idxmap_sft(data_iterator, per_seq_average=False):
     args = get_args()
-    tokenizer = get_tokenizer()
     def _broadcast(item):
         if item is None:
             return
@@ -376,6 +389,7 @@ def get_batch_on_this_tp_rank_idxmap_sft(data_iterator, per_seq_average=False):
             tokens[tokens < 0] = - tokens[tokens < 0] - 1
         else:
             tokens[tokens < 0] = - tokens[tokens < 0] - 1
+            tokenizer = _resolve_sft_tokenizer()
             attention_mask, _, position_ids = get_ltor_masks_and_position_ids(
                 tokens,
                 tokenizer.eod,

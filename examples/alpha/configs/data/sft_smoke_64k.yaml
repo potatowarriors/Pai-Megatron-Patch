@@ -1,0 +1,9 @@
+# SFT 64K 스모크용 단일 데이터셋 — chat_v3_if (fit@64k 100%, fill 99.69%)
+# build_alpha_sft_idxmap.py 산출 (2S 문서 = [ids|labels], %16 세그먼트).
+# 본 블렌드(sft_64k_blend.yaml)는 전수 측정 완료 후 별도 작성.
+# 주의: train.sh smoke 자동감지는 정확일치라 이 프리셋은 wandb 를 자동으로
+# 끄지 않음 — 스모크 실행 시 WANDB_MODE=disabled 를 명시할 것.
+data-path: "1.0 /home/work/Datasets/LL_preprocessed/v5/sft_packed_64k_pad16/chat_v3_if/data_text_document"
+split: "99,1,0"
+dataset: MMAP
+num-workers: 8

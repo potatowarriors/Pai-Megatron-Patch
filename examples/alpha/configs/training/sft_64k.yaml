@@ -1,0 +1,123 @@
+# SFT 64K — post-LC supervised fine-tuning (초안 2026-08-23, 스모크 전 미검증)
+#
+#   bash train.sh baseline_48L sft_64k <sft_data_preset>
+#
+# 설계 근거:
+# - 데이터: build_alpha_sft_idxmap.py 산출 idxmap (2S 문서 = [ids|labels],
+#   스팬 마스킹 라벨, %16 세그먼트). 소비 경로는 --dataset MMAP +
+#   --train-mode finetune + --reset-position-ids (helper.py가 THD+CP까지 배선).
+# - max-seq 64k 확정 근거: fit@64k 96.8% (SFT_RL_DATASETS.md §2.4);
+#   전수 재측정(sft_measure) 완료 후 재확인.
+# - Nemotron 3 Ultra stage1_sft 대조 (reference/Nemotron ultra3 default.yaml):
+#   LR 1.5e-5 cosine → 1e-6 (paper §3.1), warmup 150/3200 iters (~4.7%),
+#   adam betas (0.9, 0.98), wd 0.1, clip 1.0, GBS 64 @ pack 294912, bf16,
+#   per-token loss. alpha 규모/토크나이저에 맞춘 조정은 TODO 표기.
+#
+# ── TODO (스모크·블렌드 확정 후 채움) ─────────────────────────────────────
+#  1. load: LC 최종 체크포인트 경로 (LC-A ~08-25 종료, LC-B 여부 결정 대기)
+#  2. train-samples: 블렌드 예산 확정 후 (ultra3는 204,800 샘플 = 60.4B tok)
+#  3. CP4+offload vs CP8 판정: 64k@CP4 = 16k tok/rank ≈ 게이트 실측 72.5GB OOM
+#     경계 → 스모크에서 실측. CP8이면 DP=1 (128k@CP8 게이트 검증 구성).
+#  4. optimizer: dist_muon 유지 vs Adam 전환 (Nemotron은 Adam; 우리는 전
+#     스테이지 Muon — 전환 시 QGKV split 무관해지고 lr 재보정 필요)
+#  5. cross-entropy-fusion-impl te가 라벨 -100 을 올바르게 처리하는지 스모크
+#     에서 확인 (loss_mask 곱으로 가려지지만 fused 커널의 -100 인덱싱 검증)
+#
+# 함정 (2026-08-23 실측): --eval-iters 0 금지 — split에 valid(1%)가 있으면
+# valid 요청 샘플 0이어도 dataloader가 생성되어 sampler assert
+# ("no sample to consume: 0"). 스모크는 exit-interval로만 줄일 것.
+
+# ── SFT 소비 경로 (셋이 계약 — build_alpha_sft_idxmap.py docstring) ───────
+train-mode: finetune              # idxmap 2S 문서 분해 + 라벨/마스크 소비
+# dataset: MMAP 은 data preset 쪽에 (lc_a_32k_blend.yaml 관례)
+
+# ── 예산 / LR (ultra3 paper §3.1 시작점 — TODO 2 확정 전 임시) ────────────
+train-samples: 65536              # TODO: 블렌드 확정 후 (임시 = 1024 iters @ GBS 64)
+lr-warmup-samples: 3072           # ~4.7% (ultra3 150/3200 미러)
+lr-decay-samples: 65536
+lr: 1.5e-5
+min-lr: 1.0e-6
+lr-decay-style: cosine
+
+# ── 병렬화 (TODO 3: 스모크로 CP4+offload vs CP8 판정) ─────────────────────
+tensor-model-parallel-size: 1
+pipeline-model-parallel-size: 1
+expert-model-parallel-size: 8
+expert-tensor-parallel-size: 1
+context-parallel-size: 8
+
+# ── 배치 / 시퀀스 (THD는 MBS 1 필수 — helper assert) ──────────────────────
+seq-length: 65536
+micro-batch-size: 1
+global-batch-size: 64             # ultra3 미러 = 4.2M tok/iter; TODO 2와 함께 재검토
+
+# ── THD 문서 격리 플래그셋 (LC-A와 동일 — LC_ENTRY_GATE §1.5) ─────────────
+# SFT 경로는 position-id를 음수 마커에서 유도 (EOD 무관); eod-mask-loss는
+# pretrain 경로 전용이라 SFT에선 미사용 — 혼동 방지 위해 명시적으로 끔.
+reset-position-ids: true
+no-create-attention-mask-in-dataloader: true
+reset-attention-mask: false
+eod-mask-loss: false
+
+# ── 리컴퓨트 (LC-A 안전측 유지; 64k 메모리 실측 후 moe 해제 재평가) ───────
+recompute-granularity: selective
+recompute-modules: "layernorm moe"
+
+# ── MoE 라우팅 (DSV3-strict, P3/LC-A와 동일) ──────────────────────────────
+moe-router-load-balancing-type: seq_aux_loss
+moe-router-score-function: sigmoid
+moe-router-enable-expert-bias: true
+moe-router-bias-update-rate: 0.001
+moe-token-dispatcher-type: alltoall
+
+# ── Optimizer (TODO 4; 당분간 전 스테이지 연속성 위해 Muon 유지) ──────────
+optimizer: dist_muon
+weight-decay: 0.1
+adam-beta1: 0.9
+adam-beta2: 0.95
+muon-momentum: 0.95
+muon-use-nesterov: true
+muon-num-ns-steps: 5
+muon-scale-mode: spectral
+muon-fp32-matmul-prec: medium
+muon-tp-mode: blockwise
+muon-extra-scale-factor: 0.2
+init-method-std: 0.008
+
+# clip-grad ×cp 산식 (lc_a.yaml 실측 주석 참조): 실효 클리핑 1.0 기준 = 1.0×cp
+clip-grad: 8.0                    # CP8 기준; CP4 채택 시 4.0
+
+# ── LayerNorm WD (P3/LC-A와 동일) ─────────────────────────────────────────
+no-weight-decay-cond-type: apply_wd_to_qk_layernorm
+
+# ── Precision ─────────────────────────────────────────────────────────────
+bf16: true
+
+# ── 체크포인트 / 평가 ─────────────────────────────────────────────────────
+save-interval: 100
+no-save-optim: true
+ckpt-format: torch_dist
+eval-iters: 4
+eval-interval: 100
+
+# ── 로깅 / 런타임 (LC-A와 동일) ───────────────────────────────────────────
+log-interval: 1
+log-timers-to-tensorboard: true
+log-memory-to-tensorboard: true
+log-validation-ppl-to-tensorboard: true
+log-throughput: true
+tensorboard-queue-size: 1
+distributed-timeout-minutes: 60
+manual-gc: true
+manual-gc-interval: 5
+overlap-grad-reduce: true
+attention-backend: auto
+cross-entropy-loss-fusion: true
+cross-entropy-fusion-impl: te
+wandb-project: alpha-posttraining
+
+# ── Stage 전환 (dataset 변경 → finetune: true, 카운터 리셋) ────────────────
+# TODO 1: LC 최종 체크포인트로 교체
+# load: <LC 최종 ckpt>
+finetune: true
+no-load-optim: true
