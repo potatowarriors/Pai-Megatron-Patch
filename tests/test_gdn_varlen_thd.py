@@ -319,3 +319,17 @@ def test_snap_cu_seqlens_is_noop_on_clean_pad16():
     cu = torch.tensor([0] + list(torch.cumsum(torch.tensor(lens), 0)), dtype=torch.int32)
     snapped = snap_cu_seqlens_to_grid(cu, 16)
     assert torch.equal(snapped, cu)
+
+
+def test_snap_cu_seqlens_rejects_non_pad16_packing():
+    """pad16 아닌 패킹(예: SFT 임의 경계)을 CP>1 경로에 넣는 실수는 하드 에러."""
+    import pytest
+    import torch
+    from megatron_patch.data.utils import snap_cu_seqlens_to_grid
+
+    torch.manual_seed(0)
+    lens = torch.randint(50, 500, (100,))          # 임의 길이 100개 대화
+    lens[-1] += 32768 - int(lens.sum()) % 32768    # 총합만 32768로
+    cu = torch.tensor([0] + list(torch.cumsum(lens, 0)), dtype=torch.int32)
+    with pytest.raises(ValueError, match="does not look --pad-doc-multiple"):
+        snap_cu_seqlens_to_grid(cu, 16)

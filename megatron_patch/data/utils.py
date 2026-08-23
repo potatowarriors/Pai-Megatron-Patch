@@ -204,6 +204,20 @@ def snap_cu_seqlens_to_grid(cu_seqlens, grid):
     keep = (cu_seqlens % grid) == 0
     keep[0] = True
     keep[-1] = True
+    removed = int((~keep).sum())
+    interior = cu_seqlens.numel() - 2
+    # 안전판: 잡탕 EOD 오염은 bin당 경계 소수(실측 1~3)만 제거한다. 경계의
+    # 25%+(또는 8개+) 제거는 "데이터 자체가 pad16 정렬이 아님"의 신호 — 그대로
+    # 진행하면 진짜 문서/대화 경계를 무음 파괴하고 mixer의 %2cp 가드까지
+    # 중화되므로 하드 에러. (예: pad16 없이 패킹된 SFT를 CP>1로 학습하는 실수.)
+    if interior > 0 and removed > max(8, interior // 4):
+        raise ValueError(
+            f"snap_cu_seqlens_to_grid: {removed}/{interior} interior boundaries are "
+            f"off the %{grid} grid — this data does not look --pad-doc-multiple "
+            f"{grid} packed. CP>1 THD training requires pad16-aligned packing "
+            "(bestfit_pack.py --pad-doc-multiple 16); refusing to silently merge "
+            "real document boundaries."
+        )
     return cu_seqlens[keep]
 
 
