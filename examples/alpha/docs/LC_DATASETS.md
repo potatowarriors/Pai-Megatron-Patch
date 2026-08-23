@@ -265,6 +265,27 @@ EDGAR `cik`(같은 기업 연도 시리즈), peS2o field-of-study, repo 단위 �
 >
 > 구 `cpt_lc_packed_32k/`는 LC-A 블렌드 yaml이 pad16 경로로 확정된 뒤 삭제 가능.
 
+> **✅ filler 재생산 완료 (2026-08-23, 러너북 §3 — P3 미러, 결정 #10)** — 산출:
+> `LL_preprocessed/v5/lc_filler_packed_32k_pad16/` (일반 11종 + specialized 15종).
+> 블렌드 `configs/data/lc_filler_32k_pad16.yaml` 26멤버 전 경로 완비, %16 EOD-run
+> 경계 표본검사 전 종 bad=0 + 32멤버 deep preflight 통과
+> (`scripts/lc_a_preflight.py --deep specialized`). 실행 기록: `LC_FILLER_HANDOFF.md` §6.
+>
+> | 그룹 | real tokens | 주요 구성 |
+> |---|---|---|
+> | 일반 filler 11종 | 42.90B | korean_web 16.96 · fw2hq 5.72 · math 4.53 · code 5종 7.04 · cc_code 4.94 · cchq 2종 3.71 |
+> | specialized v1 (6종) | 272.56B | rqa 137.20 · stem_sft 81.81 · math_textbooks 25.73 · infinibyte_reasoning 19.36 · wiki_rewrite 7.25 · scientific_coding 1.21 |
+> | specialized v1.1 (5종) | 9.17B | code_concepts 7.22 · multiple_choice 1.56 · 외 3종 0.40 |
+> | specialized v1.2 (4종) | 40.37B | fact_seeking 32.79 · multiple_choice 6.89 · generative 0.67 · moral_scenarios 0.015 |
+> | **합계** | **365.01B** | specialized 15종 322.10B — 계획치(~322B) 부합 |
+>
+> - fact_seeking fill 88.43%는 pad16 구조 비용(문서 5.74억 개 × 평균 ~57 real tok →
+>   문서당 ~7.5tok 패딩). **가중/집계는 반드시 real tokens 기준** — 나머지 종은 fill 97~99.7%.
+> - 운영 노트: 초단문 셋은 bestfit_pack emit이 NFS 대역이 아니라 **per-doc Python
+>   천장(~35k docs/s ≈ 9MB/s)** 에 걸림 (fact_seeking emit 단독 6.5h). 128k filler
+>   재패킹(러너북 작업 3) 시간 예산은 문서 길이 분포부터 확인할 것.
+> - unpacked 전량 보존(`KEEP_UNPACKED=1`) — 128k 재패킹 재료.
+
 `run_cpt_lc_v5.sh`로 4종 전체 처리 완료 (convert → tokenize → split(T=64k) →
 bestfit_pack 32k). 산출: `LL_preprocessed/v5/cpt_lc{,_packed_32k}/<ds>/`.
 

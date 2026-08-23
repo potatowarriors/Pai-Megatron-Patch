@@ -13,6 +13,7 @@ alpha의 **LC-phase → SFT → RL(MOPD)** 훈련 계획을 위한 데이터 준
 | **LongBlocks LC doc-QA (완성본)** | `…/LongBlocks/_jsonl/` | 45파일 / 191,758샘플 / 30G | ✅ **pre-tokenize까지 완료** (08-06) |
 | **LC pre-tokenized 4종** | `LL_preprocessed/v5/cpt_lc/` + **`cpt_lc_packed_32k_pad16/`** | unpacked 24.21B tok (272G) · **32k pad16 packed 15.56B/477,456 bins** · **≥64k 보존 8.65B** | ✅ **pad16 재패킹 완료 (08-21, 러너북 작업 1)** — %16 정렬 검증 전 종 0 miss. 구 `cpt_lc_packed_32k/`(pad 없음, THD+CP 비호환)는 블렌드 yaml 전환 후 삭제 가능 |
 | **LC KO 2종 (자체 제작, syn_data)** | `LL_preprocessed/v5/cpt_lc_packed_32k_pad16/{ko_news,ko_grounded}/` | **ko_news 423.8M/13,141 bins (fill 98.4%, 잘림 0)** · **ko_grounded 44.3M/1,515 bins** | ✅ pad16 형식으로 인계 완료 (08-21) — NIKL 이벤트-스레드 팩 + 그라운디드 합성. 출처·게이트는 각 디렉토리 README, 128k용 ≥64k KO는 syn_data 대기 |
+| **LC-A filler (P3 미러, 일반 11종 + specialized 15종)** | `LL_preprocessed/v5/lc_filler_packed_32k_pad16/` (+unpacked `lc_filler/` 보존) | **real 365.01B** (일반 42.90B + specialized 322.10B; stem_sft 81.8B·rqa 137.2B) | ✅ **완료 (08-23)** — %16 표본검사 전 종 bad=0, 블렌드 `lc_filler_32k_pad16.yaml` 26멤버 완비. 집계는 `LC_DATASETS.md` §6.5 filler 표, 실행 기록 `LC_FILLER_HANDOFF.md` §6 |
 | Nemotron post-training v3 (49종) | `LL_datasets/posttraining/{SFT,RL}` | SFT 988G + RL 62G | ✅ 다운로드·검증 완료 |
 | 블렌드 레시피 분석 | `posttraining/RL/nemotron_blend_recipe.json` | — | ✅ |
 | chat template | `examples/alpha/tokenizer_v5/chat_template.jinja` | — | ✅ 등록·24테스트 통과 |
@@ -153,11 +154,14 @@ alpha의 **LC-phase → SFT → RL(MOPD)** 훈련 계획을 위한 데이터 준
    (08-22 갱신, 실행 절차는 [`LC_REPACK_RUNBOOK.md`](LC_REPACK_RUNBOOK.md) — 상태 블록 참조):
    ① ~~LC 4종 32k 재패킹~~ **완료 (08-22)** — `cpt_lc_packed_32k_pad16/` 산출,
       ko_news·edgar는 THD+CP 풀스택 검증에 실사용되어 %16 정렬 실전 확인
-   ② filler 생산 — P3 미러(결정 #10), 일반 11종 + specialized 8/15 완료(42.9B+ real),
-      **specialized 잔여 7종은 100코어 노드 인계 진행 중**(`LC_FILLER_HANDOFF.md`);
-      `configs/data/lc_filler_32k_pad16.yaml` 커밋(전 경로 존재 확인 후 투입)
-   ③ **LC-A training preset 작성만 남음** (CP4·32K·qk-clip 제거·clip-grad ×cp 재검토·
-      THD 플래그셋 — 체크리스트는 `LC_ENTRY_GATE.md` 상단 요약).
+   ② ~~filler 생산~~ **완료 (08-23)** — P3 미러(결정 #10), 일반 11종 42.90B +
+      specialized **15/15** 322.10B = **365.01B real** (`LC_DATASETS.md` §6.5 filler 표,
+      실행 기록 `LC_FILLER_HANDOFF.md` §6). yaml 26멤버 전 경로 완비, %16 표본검사
+      전 종 bad=0 + 32멤버 deep preflight (`scripts/lc_a_preflight.py`).
+   ③ ~~LC-A training preset~~ **완료 → LC-A 본 런 개시 (08-23)** —
+      run `outputs/alpha_baseline_48L_lc_a_20260822_191424`, P3(iter 26832)에서
+      CP4·32K·THD·GBS384·LR 7.5e-6 constant, ~4분/iter(~3일). moe recompute 해제는
+      본 런 iter 2 OOM으로 원복(9b1e7b1) — resume 시 재평가.
 
 **C. G0 시스템 게이트** (H100 유휴 시)
    zero-shot RULER/NLL(8k~64k) — CPT 예산·직행 가능성 캘리브레이션.

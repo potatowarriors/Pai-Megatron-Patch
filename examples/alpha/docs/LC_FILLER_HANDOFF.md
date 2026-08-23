@@ -1,5 +1,13 @@
 # LC-A filler 작업 인계 — 100코어 노드 이어서 실행 (2026-08-22 18:00 작성)
 
+> **✅ 완료 (2026-08-23 새벽, 220코어 분석노드)** — §2 재개 실행으로 잔여 7종 전부
+> 빌드·검증 통과. **specialized 15/15 PACKED**, yaml 미빌드 경로 0 (§3-(a) 통과).
+> 상세는 아래 §6 완료 보고. §3-(b) %16 표본검사도 검사 세션이 통과시킴
+> (15종 × 50 bins bad=0 + 32멤버 deep preflight; `scripts/lc_a_preflight.py`).
+> **LC-A 학습 개시됨**: `outputs/alpha_baseline_48L_lc_a_20260822_191424`
+> (P3 iter 26832에서 CP4·32K·THD·GBS384·LR 7.5e-6, ~3일 예상).
+> 남은 것: (c)~(e) 문서 추기·커밋(사용자 승인 대기).
+
 **목적**: 8코어 세션에서 진행하던 LC-A filler 구축(러너북 `LC_REPACK_RUNBOOK.md` §3,
 P3 미러 결정)을 **100코어 노드에서 이어서 완료**하기 위한 상태 스냅샷 + 재개 절차.
 남은 것은 specialized 재생산 후반부와 마무리 검증·문서화뿐이다.
@@ -84,6 +92,34 @@ grep -o '/home[^ "]*data_text_document' \
 
 1. **preprocess의 파일 탐색은 심링크 불추종** — 서브셋 스테이징은 하드링크
    (`lc_filler_subset.py --stage`가 처리).
+0. *(2026-08-23 추가)* **emit 병목은 두 종류** — 러너북 함정 5번("emit은 NFS 상한")은
+   긴 문서 셋에만 맞다. 초단문 셋(fact_seeking, 평균 ~57tok/doc)은 bin당 멤버 ~512개의
+   per-doc Python 오버헤드(pread+frombuffer+pad concat, ~35k docs/s)가 천장 —
+   **~9MB/s**로 NFS 상한의 1/20. 페이지 캐시 워밍 무효(이미 캐시 히트 상태였음).
+   128k filler 재패킹 시간 예산 산정 시 문서 길이 분포를 먼저 볼 것.
+
+## 6. 완료 보고 (2026-08-23, 이번 세션 실행분 7종)
+
+`run_stage3_v5.sh all` (NCORES=192, 220코어 노드) 총 ~9.5h. 전부 내장 post-verify
+(전 bin 32768 · 토큰 보존 · round-trip 20/20) 통과, exit 0.
+
+| 서브셋 | real tokens | fill | packed 크기 |
+|---|---|---|---|
+| v1/stem_sft | 81.81B | 99.69% | 305.7 GB |
+| v1/scientific_coding | 1.21B | 99.24% | 4.5 GB |
+| v1/wiki_rewrite | 7.25B | 99.28% | 27.2 GB |
+| v1.2/fact_seeking | 32.79B | **88.43%** | 138.1 GB |
+| v1.2/generative | 0.67B | 98.34% | 2.5 GB |
+| v1.2/moral_scenarios | 0.015B | 97.76% | 0.06 GB |
+| v1.2/multiple_choice | 6.89B | 97.44% | 26.4 GB |
+| **합계 (신규 7종)** | **130.64B** | | ~504 GB |
+
+- fact_seeking fill 88.4% = pad16 구조 비용(문서 5.74억 개 × 평균 ~57 real tok →
+  문서당 평균 ~7.5tok 패딩). 블렌드 가중/토큰 집계는 반드시 **real tokens** 기준.
+- BFP truncation: fact_seeking 0, multiple_choice 10(>32k 장문 — eod-unmasked leak
+  ~0.0000%, 수용). KEEP_UNPACKED=1로 unpacked 전부 보존(128k 재패킹 재료).
+- ⚠️ 실행 중 노드 시계가 NFS 서버 시간대(~9h 뒤)로 스텝 보정됨 — 일부 로그의
+  음수 소요시간(-31783s)과 mtime 혼동은 이 때문. 산출물 무결성 무관.
 2. **tokenize 파티션도 megatron→TE→triton import** — GPU 없는 노드는 `_cpu_shims`를
    env 전체에 export (bestfit_pack 라인에만 걸면 tokenize가 죽는다).
 3. 생성 커맨드 체인엔 fail-fast/exists-skip 가드 명시 (`A && B`만 쓰면 실패가 다음
