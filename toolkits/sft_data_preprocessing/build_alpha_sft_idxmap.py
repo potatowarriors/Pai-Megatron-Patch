@@ -169,6 +169,12 @@ def normalize_row(row: dict) -> Tuple[Optional[dict], Optional[str]]:
             return None, "bad_row"
         content = m.get("content")
         tool_calls = m.get("tool_calls") or None
+        # SWE-v3 등: tool_calls 필드 전체가 JSON 문자열로 인코딩된 경우
+        if isinstance(tool_calls, str):
+            try:
+                tool_calls = json.loads(tool_calls) or None
+            except json.JSONDecodeError:
+                return None, "bad_row"
         if content is None:
             # assistant + tool_calls 는 정상 관례 (content 없는 도구 호출 턴).
             # 그 외 null 은 라이선스 마스킹 (Chat-v3) — 복원 전 투입 금지.
@@ -183,6 +189,13 @@ def normalize_row(row: dict) -> Tuple[Optional[dict], Optional[str]]:
         if tool_calls:
             fixed = []
             for tc in tool_calls:
+                if isinstance(tc, str):
+                    try:
+                        tc = json.loads(tc)
+                    except json.JSONDecodeError:
+                        return None, "bad_row"
+                if not isinstance(tc, dict):
+                    return None, "bad_row"
                 fn = tc.get("function", tc)
                 args = fn.get("arguments")
                 if isinstance(args, str):
