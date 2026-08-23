@@ -112,7 +112,8 @@ class MetaTranslation(Exception):
     pass
 
 
-def translate_message(client, role, content, prev_pair, constraint_ctx=None):
+def translate_message(client, role, content, prev_pair, constraint_ctx=None,
+                      temperature=0.3):
     """한 발화 번역. prev_pair=(원문,번역) 직전 턴. constraint_ctx=첫 사용자 턴 KO."""
     if not content or not content.strip():
         return content or ""
@@ -134,7 +135,7 @@ def translate_message(client, role, content, prev_pair, constraint_ctx=None):
         user_msg = f"{ctx}다음 {speaker}를 번역하세요:\n\n{chunk}"
         req = [{"role": "system", "content": TRANSLATE_SYSTEM},
                {"role": "user", "content": user_msg}]
-        out = client.chat(req, max_tokens=TRANSLATE_MAX_TOKENS, temperature=0.3).strip()
+        out = client.chat(req, max_tokens=TRANSLATE_MAX_TOKENS, temperature=temperature).strip()
         if META_RE.search(out) and not META_RE.search(chunk):
             out = client.chat(req, max_tokens=TRANSLATE_MAX_TOKENS, temperature=0.0).strip()
             if META_RE.search(out):
@@ -161,28 +162,58 @@ def hangul_ratio(text: str) -> float:
 
 
 def qc_checks(src_msgs, out_msgs, mode):
+    """규칙 게이트. 실패 시 {kind, reason, idx} 반환, 통과면 None.
+
+    kind 는 process_record 의 복구 경로 분기용:
+      low_hangul       → LLM 재판정 (영문/코드 출력 요구는 정당 — 사용자 지적 2026-08-23)
+      codefence        → 해당 턴 1회 재번역(temp 0) 후 재판정
+      그 외            → 즉시 리젝
+    """
     final = out_msgs[-1]["content"]
     if not final.strip():
-        return "empty_final"
+        return {"kind": "hard", "reason": "empty_final", "idx": None}
     for m in out_msgs:
         if m["content"] and SPECIAL_TOKEN_RE.search(m["content"]):
-            return "special_token_literal"
-    if hangul_ratio(final) < HANGUL_MIN_RATIO:
-        return f"low_hangul_ratio:{hangul_ratio(final):.2f}"
+            return {"kind": "hard", "reason": "special_token_literal", "idx": None}
     user_text = " ".join(m["content"] for m in out_msgs if m["role"] == "user")
     if LEAK_RE.search(final) and not LEAK_RE.search(user_text):
-        return "teacher_leak"
+        return {"kind": "hard", "reason": "teacher_leak", "idx": None}
     n_translated = len(out_msgs) if mode == "full_translate" else len(out_msgs) - 1
-    for s, o in zip(src_msgs[:n_translated], out_msgs[:n_translated]):
+    for i, (s, o) in enumerate(zip(src_msgs[:n_translated], out_msgs[:n_translated])):
         if not s["content"]:
             continue
         if s["content"].count("```") != o["content"].count("```"):
-            return "codefence_mismatch"
+            return {"kind": "codefence", "reason": "codefence_mismatch", "idx": i}
         if len(s["content"]) > 200 and len(o["content"]) < 0.25 * len(s["content"]):
-            return f"translation_collapse:{len(o['content'])}/{len(s['content'])}"
+            return {"kind": "hard", "idx": None,
+                    "reason": f"translation_collapse:{len(o['content'])}/{len(s['content'])}"}
         if META_RE.search(o["content"]) and not META_RE.search(s["content"]):
-            return "meta_translation_leak"
+            return {"kind": "hard", "reason": "meta_translation_leak", "idx": None}
+    r = hangul_ratio(final)
+    if r < HANGUL_MIN_RATIO:
+        return {"kind": "low_hangul", "reason": f"low_hangul_ratio:{r:.2f}", "idx": None}
     return None
+
+
+def low_hangul_is_legit(client, out_msgs):
+    """비한글 위주 답변이 요청상 정당한지 1회 LLM 재판정.
+
+    정당한 사례: 영문 작성/교정/번역 요청, 코드·설정파일·정규식 작성,
+    표·로그 해석 등. 하드 임계값으로는 이들을 오탐으로 버리게 된다
+    (r1 실측: 리젝의 70%가 이 게이트 — 사용자 지적으로 도입)."""
+    user_last = [m for m in out_msgs if m["role"] == "user"][-1]["content"]
+    final = out_msgs[-1]["content"]
+    q = ("다음은 한국어 대화의 마지막 사용자 요청과 AI 답변입니다. 답변 본문이 "
+         "한국어 산문 위주가 아닌 것(영문 텍스트·코드·표 위주)이 사용자 요청의 "
+         "성격상 정당한지 판정하세요. 영문 작성·번역·코드 작성 요청 등이면 "
+         "정당합니다. 한국어로 설명해야 할 요청인데 답변이 외국어라면 부당합니다.\n\n"
+         f"[사용자 요청]\n{user_last[:800]}\n\n[답변 앞부분]\n{final[:1000]}\n\n"
+         "정당하면 '예', 부당하면 '아니오'만 출력하세요.")
+    try:
+        out = client.chat([{"role": "user", "content": q}], max_tokens=5, temperature=0.0)
+        return out.strip().startswith("예")
+    except Exception:  # noqa: BLE001 — 판정 실패 시 보수적으로 리젝 유지
+        return False
 
 
 def decide_mode(row):
@@ -227,6 +258,23 @@ def process_record(client, row):
         out_msgs.append({"role": "assistant", "content": final_ko})
 
     fail = qc_checks(src_msgs, out_msgs, mode)
+    qc_note = None
+
+    # 복구 경로 1: 코드펜스 불일치 → 해당 턴만 temp 0 재번역 후 재판정
+    if fail and fail["kind"] == "codefence":
+        i = fail["idx"]
+        out_msgs[i]["content"] = translate_message(
+            client, src_msgs[i]["role"], src_msgs[i]["content"],
+            prev_pair=None, constraint_ctx=first_user_ko, temperature=0.0)
+        fail = qc_checks(src_msgs, out_msgs, mode)
+        if fail is None:
+            qc_note = "codefence_retry_ok"
+
+    # 복구 경로 2: 한글비율 미달 → 요청상 정당성 LLM 재판정 (영문/코드 출력 요구)
+    if fail and fail["kind"] == "low_hangul":
+        if low_hangul_is_legit(client, out_msgs):
+            qc_note = "low_hangul_llm_ok"
+            fail = None
 
     meta = dict(row.get("metadata") or {})
     n_dropped = len(row["messages"]) - len(src_msgs)
@@ -243,6 +291,7 @@ def process_record(client, row):
                        else "full_translate"),
             "model": "google/gemma-4-31B-it",
             "date": "2026-08-23",
+            **({"qc_note": qc_note} if qc_note else {}),
         },
         "model": "google/gemma-4-31B-it",
     })
@@ -252,7 +301,7 @@ def process_record(client, row):
         "uuid": str(uuidlib.uuid5(uuidlib.NAMESPACE_URL, f"ko-chat-a/{row.get('uuid')}")),
         "metadata": meta,
     }
-    return out_row, fail
+    return out_row, (fail["reason"] if fail else None)
 
 
 def main():

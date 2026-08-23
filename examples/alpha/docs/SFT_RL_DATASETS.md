@@ -77,6 +77,35 @@ Math-v2(nano급 실증 — Math-v4와 중복도 확인 후 택1).
 드롭보다 **128k 소량 버킷**(LC 이후 가능) 권고. 캐비앳: 파일 앞 3k행 샘플이라 정렬
 편향 가능성 있음 — 블렌드 확정 시 전수 재측정.
 
+### 2.5 train_turns 실측 — "마지막 턴만 학습"은 chat split 한정 (2026-08-23)
+
+`metadata.train_turns`(메시지 인덱스 기준 bool 리스트)는 **턴별 loss 마스크의
+단일 진실 원천**이다. Chat-v3 두 split 전수 스캔(887,411행) 결과, 통념과 달리
+두 split 의 규약이 다르다:
+
+| split | 행수 | last-turn-only | **multi-True** |
+|---|---|---|---|
+| chat (`chat.with_prompts.jsonl`) | 637,663 | **100%** | 0 |
+| IF (`instruction_following.jsonl`) | 249,748 | 39.1% (97,760) | **60.9% (151,988)** |
+
+multi-True 예: 5메시지 대화의 `[F,F,T,F,T]` — **중간 assistant 턴도 학습 대상**
+(IF 는 턴마다 제약 준수를 학습시키는 설계). 함정: 파일 **앞 30k행은 두 split 모두
+100% last-only** 라 샘플 검사로는 오판한다 — 반드시 전수로 확인할 것.
+
+**하류 영향**:
+- `build_alpha_sft_idxmap.py` 는 이미 안전 — 리스트를 턴별로 일반 처리하고
+  (`train_mask` 조립, ~L295), 리스트 부재 시 전 assistant 턴 True 폴백.
+  multi-True 는 정상 마스킹된다. 코드 수정 불요.
+- **loss mask 를 다루는 모든 신규 작업**(디버깅·통계·합성 데이터 생산)은
+  train_turns 를 "마지막만 True" 로 가정하지 말고 리스트 그대로 소비할 것.
+- 학습 토큰 수 산정: last-only 가정 시 IF 의 학습 토큰이 과소평가된다.
+- 합성 데이터 생산 규약 (ko_chat 트랙이 이 실측으로 모드 분기):
+  chat 계열 = 마지막 턴 재생성(학습 턴이 네이티브), IF 계열 = 전량 번역
+  (중간 학습 턴의 제약 준수 보존), 네이티브 생성 = 전 assistant True.
+
+재현: `python3 - <<'E'` 로 각 jsonl 을 순회하며
+`tt=r["metadata"]["train_turns"]; sum(tt)==1 and tt[-1]` 집계 (전수 ~2분).
+
 ## 3. RL 자산
 
 ### 3.1 훈련 블렌드 3종 (즉시 실행 가능한 레시피 — NeMo Gym 소비 포맷)
