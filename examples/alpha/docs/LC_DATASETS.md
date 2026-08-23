@@ -209,7 +209,14 @@ Institutional-Books 소스로 document=null** — barcode id 매칭으로 재구
 `--reset-attention-mask`가 EOD 경계로 attention을 격리하므로, 내부 EOD가 있으면
 "문서 간 추론"을 가르치려는 샘플이 attention 수준에서 조각난다. 샘플 전체(문서들 +
 과제 + 답)를 하나의 논리적 문서로 만들어 **끝에만 EOD** — jsonl 생성 단계의 스펙으로
-명시할 것(문서 구분은 제목/헤더 등 텍스트 구분자로). 관련 문서 그룹핑이 품질의 절반:
+명시할 것(문서 구분은 제목/헤더 등 텍스트 구분자로).
+**⚠️ 위반 실사고 (2026-08-23)**: 32k LongBlocks 팩에서 ~0.05% bins에 내부 EOD가
+발견되어 LC-A 학습이 iter 170에서 정지했다(원문 속 리터럴 `<|endoftext|>`를
+토크나이저가 id 0으로 매칭). 텍스트 스펙만으로는 부족하다 — 생성 파이프라인에
+① 원문 special-token 리터럴 이스케이프, ② packed 산출 후
+`toolkits/pretrain_data_preprocessing/scan_internal_eod.py` 게이트를 필수로 넣을 것.
+전말·런타임 2차 방어(snap_cu_seqlens_to_grid)는 alpha CLAUDE.md Known Issues 참조.
+관련 문서 그룹핑이 품질의 절반:
 EDGAR `cik`(같은 기업 연도 시리즈), peS2o field-of-study, repo 단위 코드가 그대로
 그룹핑 키가 된다. 무작위 묶음은 retrieval만, 연결된 묶음은 aggregation/synthesis까지
 가르친다.

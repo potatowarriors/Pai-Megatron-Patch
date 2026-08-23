@@ -447,6 +447,35 @@ bash train.sh baseline_48L pretrain_auxfree stage1_v5_korean_web
 
 ## Known Issues & Fixes
 
+### 합성 원문의 리터럴 EOD → THD+CP 문서 분열 크래시 (2026-08-23 ✅)
+
+- **증상**: LC-A 본 학습 iter 170에서 THD+CP 가드가
+  `All per-sequence lengths in cu_seqlens must be divisible by 2*cp_size` ValueError로
+  정지. 세그먼트 목록에 %16 비정렬 값들이 섞임(예: 608토큰 문서가 [318, 35, 255]로
+  분열 — 부분합이 원래 문서 길이).
+- **원인 사슬**: 합성 데이터 **원문에 리터럴 `<|endoftext|>` 문자열**이 남아 있으면
+  HF tokenizers가 added special token을 본문에서도 매칭해 **id 0이 문서 중간에** 박힘
+  → `--reset-position-ids`가 EOD마다 position을 리셋하므로 문서가 격자(%16) 비정렬
+  위치에서 분열 → THD+CP a2a의 %2cp 요건 위반 → 가드 정지(설계대로 crash > silent).
+  pad16 재패킹의 per-doc 검증은 문서 단위라 내부 EOD를 못 보고, %16 표본검사(50
+  bins/set)는 ~0.05% 희소 오염을 확률적으로 놓침.
+- **오염 실측** (2000-bin 표본, 2026-08-23): longblocks 1/2008 · code_review 1/2058 ·
+  rewriting 1/2064. specialized 신규 15종 포함 나머지 29멤버 청정. longblocks 건은
+  "내부 EOD 금지 불변량"(`docs/LC_DATASETS.md` §5.1) 위반 사례.
+- **수리 (런타임, 2차 방어)**: `megatron_patch/data/utils.py::snap_cu_seqlens_to_grid`
+  — pad16 데이터의 **진짜 문서 경계는 전부 %16 위치**(bestfit 적재 구조 보장)이므로
+  격자 밖 경계 = 가짜 경계로 판정·제거해 분열된 문서를 복원. 내부 EOD 토큰은
+  `--eod-mask-loss`가 이미 loss에서 제외하므로 의미론 무해. **CP>1 경로 전용**(SFT류
+  임의-경계 packing에 적용하면 진짜 경계를 파괴함 — helper의 게이트 유지 필수).
+  회귀 테스트: `tests/test_gdn_varlen_thd.py::test_snap_cu_seqlens_*` (실사고 패턴).
+- **예방 (데이터 측, 1차 방어)**: 새 packed 산출물은 학습 투입 전
+  `toolkits/pretrain_data_preprocessing/scan_internal_eod.py`로 스캔(blend yaml 단위
+  가능, 오염 시 exit 1). 근본 예방은 토크나이즈 단계에서 원문 내 special-token
+  리터럴을 이스케이프/제거하는 것 — 128k 합성 파이프라인(러너북 §4)에 필수 반영.
+- **부수 함정**: 감시 스크립트의 `pgrep -f pretrain_alpha`가 **자기 자신의 명령줄을
+  매칭**해 사망 감지가 무음 실패 — 감시 패턴은 `[p]retrain_alpha.py`처럼 자기제외
+  형태로 쓸 것.
+
 ### THD+CP에서 MoE 크래시로 위장한 rope 잠복버그 (2026-08-22 ✅)
 
 - **증상**: THD+CP≥2 첫 스텝에서 MoE dispatcher가 `Split sizes doesn't match total

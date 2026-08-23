@@ -248,9 +248,18 @@ PACKED_DIR=.../cpt_lc_packed_128k_pad16 PAD_DOC_MULTIPLE=16 SEQ=131072 ...
 pad 16은 CP8까지 커버하므로 128k에서도 동일. 다문서 합성 샘플은 **내부 EOD 금지
 불변량**(`LC_DATASETS.md` §5.1)을 그대로 지킬 것 — THD 세그먼트 경계가 곧 EOD이므로
 내부 EOD가 있으면 합성 샘플이 attention/GDN 수준에서 조각난다.
+**⚠️ 이 불변량은 이미 한 번 깨졌다** (2026-08-23: 32k longblocks에서 ~0.05% bins,
+LC-A 크래시 유발 — 함정 0 참조). 128k 합성 파이프라인은 ① 원문 단계에서
+special-token 리터럴 이스케이프/제거, ② 산출 후 `scan_internal_eod.py --full`
+게이트를 모두 넣을 것.
 
 ## 5. 함정 요약
 
+0. **합성 원문의 리터럴 `<|endoftext|>` = 내부 잡탕 EOD** (2026-08-23 실사고,
+   LC-A iter 170 크래시). per-doc pad 검증·%16 표본검사로는 못 잡는다 — packed
+   산출물마다 `toolkits/pretrain_data_preprocessing/scan_internal_eod.py` 스캔을
+   §2.3 검증에 **추가 필수 단계**로 수행할 것(오염 시 exit 1). 실측: longblocks·
+   code_review·rewriting ~0.05% bins 오염. 상세: alpha CLAUDE.md Known Issues.
 1. **기본 `PACKED_DIR`로 실행하면 아무 일도 안 일어남** — pack 스테이지가 exists-skip.
    재패킹 = 신규 경로 지정이 유일한 트리거.
 2. `--strict-eod`와 병용하지 말 것 (LC 표준 레시피는 비-strict; strict는 mid-doc
