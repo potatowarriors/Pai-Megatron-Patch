@@ -287,3 +287,35 @@ def test_merge_round_trip_with_position_id_derivation():
     assert merged.tolist() == [0, 8, 16]
     seg = torch.diff(merged.to(torch.long))
     assert (seg % M == 0).all()
+
+
+# ---------------------------------------------------------------------------
+# CPU: snap_cu_seqlens_to_grid — 문서 내부 잡탕 EOD의 가짜 경계 제거 (THD+CP)
+# LC-A iter 170 실사고 재현: 608토큰 문서가 내부 EOD 2개로 [318, 35, 255] 분열.
+# ---------------------------------------------------------------------------
+
+
+def test_snap_cu_seqlens_restores_split_document():
+    import torch
+    from megatron_patch.data.utils import snap_cu_seqlens_to_grid
+
+    # 실사고 세그먼트 구성: 608×52, 318, 35, 255, 544 (총 32768)
+    lens = [608] * 52 + [318, 35, 255, 544]
+    cu = torch.tensor([0] + list(torch.cumsum(torch.tensor(lens), 0)), dtype=torch.int32)
+    assert int(cu[-1]) == 32768
+    snapped = snap_cu_seqlens_to_grid(cu, 16)
+    seg = snapped[1:] - snapped[:-1]
+    # 가짜 경계 2개(318·353 지점)만 제거되어 608 문서가 복원되고 전 세그먼트 %16
+    assert (seg % 16 == 0).all(), seg.tolist()
+    assert seg.tolist() == [608] * 53 + [544]
+    assert int(snapped[-1]) == 32768
+
+
+def test_snap_cu_seqlens_is_noop_on_clean_pad16():
+    import torch
+    from megatron_patch.data.utils import snap_cu_seqlens_to_grid
+
+    lens = [48, 80, 16, 112, 32512]  # 전부 %16 (합 32768)
+    cu = torch.tensor([0] + list(torch.cumsum(torch.tensor(lens), 0)), dtype=torch.int32)
+    snapped = snap_cu_seqlens_to_grid(cu, 16)
+    assert torch.equal(snapped, cu)

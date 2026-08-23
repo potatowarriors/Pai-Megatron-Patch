@@ -40,6 +40,7 @@ from megatron_patch.data.utils import (
     get_position_id_on_this_tp_rank_idxmap_sft_packing,
     cu_seqlens_from_position_ids,
     merge_eod_pad_segments,
+    snap_cu_seqlens_to_grid,
 )
 
 def get_batch(data_iterator):
@@ -114,6 +115,12 @@ def get_batch(data_iterator):
                 cu_seqlens = merge_eod_pad_segments(
                     cu_seqlens, batch['tokens'][0], get_core_tokenizer().eod
                 )
+                if args.context_parallel_size > 1:
+                    # pad16 데이터의 진짜 경계는 전부 %16 — 격자 밖 경계는 문서
+                    # 내부 잡탕 EOD의 오발 분할이므로 제거(문서 복원). SFT류
+                    # 임의-경계 packing은 CP=1 경로라 여기 안 옴. LC-A iter 170
+                    # 크래시(608→[318,35,255] 분열)의 근본 수리.
+                    cu_seqlens = snap_cu_seqlens_to_grid(cu_seqlens, 16)
                 seg_lens = cu_seqlens[1:] - cu_seqlens[:-1]
                 max_seqlen = seg_lens.max().to(torch.int32)
 

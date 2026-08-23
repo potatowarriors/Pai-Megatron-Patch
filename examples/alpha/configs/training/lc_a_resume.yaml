@@ -1,0 +1,124 @@
+# LC-A RESUME — run1 iter 100에서 재개 (원본 레시피는 lc_a.yaml 헤더 참조)
+#
+#   bash train.sh baseline_48L lc_a_resume lc_a_32k_blend
+#
+# 설계 근거 (2026-08-22 작성; 정본: LC_ENTRY_GATE.md 상단 요약 + LC_DATASETS.md §5
+# + LC_REPACK_RUNBOOK.md §3.1 + gdn_cp_port.md 분석노트 3):
+# - CP4·32K·THD: 32K@CP1은 OOM(게이트 실측), CP4는 52.2GB GO. 문서 격리는 dense
+#   mask가 O(seq²)라 THD/cu_seqlens 경로 필수 — 아래 THD 플래그셋과 MBS 1은 세트.
+# - 예산 14B tokens (러너북 §3.1의 12~16B 중간값) = 427,392 samples @ 32768.
+# - GBS 384 = 12.58M tok/iter — **Nemotron 3 Ultra LC 레시피의 '토큰 배치 유지'**
+#   (LC_DATASETS.md §5.1: iter당 토큰 상수 25,165,824 = pretraining GBS 6144×4096).
+#   alpha 등가 = P3의 3072×4096 토큰량을 32K에서 보존 → 384. 총 1,113 iters.
+# - LR: **7.5e-6 constant, decay 없음** — P3 종료 LR 7.5e-6(min 도달, 정본
+#   STAGE2_CURRICULUM_LOG 08-22 행) 그대로 + Nemotron 3 LC 선례(constant 2.5e-6 =
+#   자사 pretraining min-lr). warmup 50 iter만 유지(no-load-optim Muon 재예열).
+# - qk-clip 계열 전부 제거 (사용자 확정 08-22): return_max_logit×thd가 TE 2.9
+#   삼중 비호환 + P3 종료 max logit 19.375(임계의 1/5). log-max-attention-logit도
+#   같은 이유로 금지.
+#
+# ── 조정 가능 노브(변경 시 이 블록만 보면 됨) ────────────────────────────
+#   train-samples(예산) · global-batch-size(토큰 배치 유지 산식) · lr · save-interval
+
+# ── 예산 / LR (constant — Nemotron 3 LC 선례) ─────────────────────────────
+train-samples: 427392             # 14.005B tokens / 32768; 1,113 iters @ GBS 384
+lr-warmup-samples: 19200          # 50 iters — no-load-optim/finetune 후 Muon 재예열
+lr-decay-samples: 427392          # constant지만 scheduler assert(warmup<decay)용
+lr: 7.5e-6
+min-lr: 7.5e-6
+lr-decay-style: constant
+
+# ── 병렬화 (LC-A 확정: CP4; 게이트 32K@CP4 52.2GB GO) ─────────────────────
+tensor-model-parallel-size: 1
+pipeline-model-parallel-size: 1
+expert-model-parallel-size: 8
+expert-tensor-parallel-size: 1
+context-parallel-size: 4
+
+# ── 배치 / 시퀀스 (THD는 MBS 1 필수 — helper가 assert) ────────────────────
+seq-length: 32768
+micro-batch-size: 1               # THD 필수(helper assert) — 배치 확장은 GBS로만
+global-batch-size: 384
+
+# ── THD 문서 격리 플래그셋 (셋이 한 몸 — LC_ENTRY_GATE §1.5) ──────────────
+# reset-position-ids: EOD마다 position 리셋 → helper가 cu_seqlens 유도(+ pad
+#   세그먼트 merge). no-create-...: dense mask 미생성(THD는 mask 불사용).
+# reset-attention-mask는 dense mask 생성기 소관이라 THD에선 무의미 — 명시적 false.
+reset-position-ids: true
+no-create-attention-mask-in-dataloader: true
+reset-attention-mask: false
+eod-mask-loss: true
+
+# ── 리컴퓨트 (layernorm+moe — moe 해제는 본 런에서 OOM으로 되돌림) ────────
+# moe 해제 A/B는 +15.5%였으나(스모크 10-iter, max 63.8GB) **본 런 iter 2에서
+# rank5 OOM(alloc 68.9GB)**: 프로덕션 블렌드의 세그먼트·expert 불균형 편차가
+# 스모크 꼬리를 넘음 — 신뢰성 우선으로 원복 (2026-08-22). 재평가는 checkpoint
+# resume 시점에 MoE 토큰 통계와 함께 (throughput doc 프로토콜).
+# 참고: MBS>1은 THD 경로에서 구조적 불가(helper·mixer assert; 패킹이 MBS 대체) —
+# 마이크로배치당 토큰 2배는 토큰/rank 16384 = 게이트 실측 ~72.5GB로 OOM 경계.
+recompute-granularity: selective
+recompute-modules: "layernorm moe"
+
+# ── MoE 라우팅 (DSV3-strict, P3와 동일) ───────────────────────────────────
+moe-router-load-balancing-type: seq_aux_loss
+moe-router-score-function: sigmoid
+moe-router-enable-expert-bias: true
+moe-router-bias-update-rate: 0.001
+moe-token-dispatcher-type: alltoall
+
+# ── Optimizer (P3와 동일; chunked offload는 32K@CP4에 불필요라 미사용) ────
+optimizer: dist_muon
+weight-decay: 0.1
+adam-beta1: 0.9
+adam-beta2: 0.95
+muon-momentum: 0.95
+muon-use-nesterov: true
+muon-num-ns-steps: 5
+muon-scale-mode: spectral
+muon-fp32-matmul-prec: medium
+muon-tp-mode: blockwise
+muon-extra-scale-factor: 0.2
+init-method-std: 0.008
+
+# clip-grad ×cp 산식 (2026-08-22 실측 확정): helper loss_func의 loss×cp 보상
+# 관례로 보고 grad-norm이 정확히 ∝ CP (CP1/2/4/8 = 3.22/6.43/12.87/25.74 실측).
+# 실효 클리핑을 P3(clip 1.0 @ CP1)와 동일하게 하려면 clip-grad = 1.0 × cp_size.
+clip-grad: 4.0
+
+# ── LayerNorm WD (Qwen3-Next 레시피, P3와 동일) ───────────────────────────
+no-weight-decay-cond-type: apply_wd_to_qk_layernorm
+
+# ── Precision ─────────────────────────────────────────────────────────────
+bf16: true
+
+# ── 체크포인트 / 평가 (1,113 iters 규모에 맞춤) ───────────────────────────
+save-interval: 100                # ~100 iter ≈ 7h 간격 예상 (1,113 iters 규모)
+no-save-optim: true               # Muon은 warmup 복구 검증됨 (stage1 선례)
+ckpt-format: torch_dist
+eval-iters: 4                     # 32K eval은 고비용 — 소표본
+eval-interval: 100
+
+# ── 로깅 / 런타임 (P3와 동일) ─────────────────────────────────────────────
+log-interval: 1
+log-timers-to-tensorboard: true
+log-memory-to-tensorboard: true
+log-validation-ppl-to-tensorboard: true
+log-throughput: true
+tensorboard-queue-size: 1
+distributed-timeout-minutes: 60
+manual-gc: true
+manual-gc-interval: 5
+overlap-grad-reduce: true
+attention-backend: auto
+cross-entropy-loss-fusion: true
+cross-entropy-fusion-impl: te
+wandb-project: alpha-pretraining
+
+# ── Resume (run1 iter 100 체크포인트에서 이어서) ──────────────────────────
+# run1(lc_a_20260822_191424)이 iter 170에서 내부-EOD 오염 bin으로 크래시(가드
+# ValueError) — snap_cu_seqlens_to_grid 수리 후 마지막 save(iter 100)에서 재개.
+# no-save-optim 체크포인트라 no-load-optim 필수(Muon fresh) — warmup 50 iter가
+# 재예열을 담당(stage1_resume 선례: 스케줄러 num_steps 리셋됨). finetune 없음
+# → iteration/consumed(38,400)가 ckpt에서 복원되어 데이터 위치 연속.
+load: /home/work/vidsearch/repos/project_s/Pai-Megatron-Patch/examples/alpha/outputs/alpha_baseline_48L_lc_a_20260822_191424/checkpoints
+no-load-optim: true

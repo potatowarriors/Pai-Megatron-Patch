@@ -181,6 +181,32 @@ def merge_eod_pad_segments(cu_seqlens, tokens, eod_id):
     keep[1:-1] = ~all_eod[1:]
     return cu[keep].to(dtype=cu_seqlens.dtype)
 
+def snap_cu_seqlens_to_grid(cu_seqlens, grid):
+    """pad16 데이터에서 격자 밖 경계(문서 내부의 잡탕 EOD가 만든 가짜 경계)를 제거.
+
+    bestfit_pack --pad-doc-multiple G 산출물의 **진짜** 문서 경계는 전부 G의 배수
+    위치다(문서+pad가 G 단위로 적재). 합성 원문에 섞인 리터럴 EOD(id 0)는 position
+    리셋을 오발시켜 문서를 G 비정렬 위치에서 쪼개고, THD+CP a2a의 %2cp 요건을
+    깨뜨린다(LC-A iter 170 크래시: 608토큰 문서가 [318,35,255]로 분열). 격자 밖
+    경계를 걸러내면 그 문서가 한 세그먼트로 복원된다 — 내부 EOD 토큰 자체는
+    eod-mask-loss가 loss에서 제외하므로 학습 의미론상 안전하다.
+
+    주의: pad16 데이터 전용. SFT처럼 경계가 임의 위치인 packing에 적용하면 진짜
+    경계를 파괴한다 — 호출부(helper)가 CP>1(pad16 전제) 경로에서만 사용한다.
+
+    Args:
+        cu_seqlens: [N+1] 경계 (임의 int dtype).
+        grid: 문서 적재 격자 (= bestfit --pad-doc-multiple, 하우스 표준 16).
+
+    Returns:
+        격자 위 경계만 남긴 cu_seqlens (양끝은 항상 보존; 총길이는 격자 배수 전제).
+    """
+    keep = (cu_seqlens % grid) == 0
+    keep[0] = True
+    keep[-1] = True
+    return cu_seqlens[keep]
+
+
 def get_batch_on_this_tp_rank_original(data_iterator, per_seq_average=False):
     args = get_args()
     tokenizer = get_tokenizer()
