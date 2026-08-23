@@ -113,7 +113,10 @@ IM_START_ID = 2
 IM_END_ID = 3
 IGNORE_INDEX = -100
 # content 안에 있으면 naive 인코딩이 턴 구조를 오염시키는 리터럴들.
-STRUCTURAL_SPECIALS = ("<|im_start|>", "<|im_end|>")
+# <|endoftext|>(id 0): SFT 경로의 리셋은 음수 마커 기반이라 경계 오염은 없지만,
+# pretrain 계열 소비자(merge_eod_pad_segments 등)가 EOD 를 특별 취급하므로
+# 방어적으로 차단 (LC 잡탕 EOD 사고 계열의 원천 차단, 실측 발생율 ~0).
+STRUCTURAL_SPECIALS = ("<|im_start|>", "<|im_end|>", "<|endoftext|>")
 
 
 @dataclasses.dataclass

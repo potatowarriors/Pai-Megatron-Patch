@@ -117,9 +117,13 @@ def get_batch(data_iterator):
                 )
                 if args.context_parallel_size > 1:
                     # pad16 데이터의 진짜 경계는 전부 %16 — 격자 밖 경계는 문서
-                    # 내부 잡탕 EOD의 오발 분할이므로 제거(문서 복원). SFT류
-                    # 임의-경계 packing은 CP=1 경로라 여기 안 옴. LC-A iter 170
-                    # 크래시(608→[318,35,255] 분열)의 근본 수리.
+                    # 내부 잡탕 EOD의 오발 분할이므로 제거(문서 복원). LC-A iter
+                    # 170 크래시(608→[318,35,255] 분열)의 근본 수리.
+                    # SFT(train_mode=finetune, build_alpha_sft_idxmap 산출물)도
+                    # CP>=2 로 이 경로를 탄다: 리셋이 음수 마커 기반이라 잡탕
+                    # EOD 는 애초에 경계를 못 만들고, 샘플별 pad16 으로 전 경계가
+                    # 격자 위 — snap 은 no-op, 가드도 트립하지 않는다
+                    # (tests/test_alpha_sft_idxmap.py + verify_sft_bins.py 게이트).
                     cu_seqlens = snap_cu_seqlens_to_grid(cu_seqlens, 16)
                 seg_lens = cu_seqlens[1:] - cu_seqlens[:-1]
                 max_seqlen = seg_lens.max().to(torch.int32)
