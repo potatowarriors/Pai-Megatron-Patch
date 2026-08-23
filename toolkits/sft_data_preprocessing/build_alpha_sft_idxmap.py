@@ -432,6 +432,10 @@ def get_args():
     p.add_argument("--no-mask-role-header", dest="mask_role_header",
                    action="store_false", default=True,
                    help='"assistant\\n" 헤더 토큰에도 loss 부여')
+    p.add_argument("--min-tokens", type=int, default=None,
+                   help="렌더 길이가 이 값 이하인 샘플 제외 — 128k 장문 버킷 생성용 "
+                        "(64k 버킷과의 중복 방지: 64k 버킷은 >64k를 too_long 드롭, "
+                        "128k 버킷은 --min-tokens 65536 으로 그 여집합만 수용)")
     p.add_argument("--max-rows", type=int, default=None,
                    help="입력 상한 (스모크/드라이런)")
     p.add_argument("--measure-only", action="store_true",
@@ -492,6 +496,9 @@ def main():
         for r in dropped_rows:
             dropped_f.write(json.dumps(r, ensure_ascii=False) + "\n")
         for e in encs:
+            if args.min_tokens is not None and len(e.ids) <= args.min_tokens:
+                drops["below_min"] += 1
+                continue
             if args.measure_only:
                 # 토큰 배열은 버리고 길이·학습토큰 수만 축적 (988G 전수 스캔용)
                 measured_lens.append(len(e.ids))

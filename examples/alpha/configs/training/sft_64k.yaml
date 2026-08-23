@@ -34,10 +34,13 @@
 train-mode: finetune              # idxmap 2S 문서 분해 + 라벨/마스크 소비
 # dataset: MMAP 은 data preset 쪽에 (lc_a_32k_blend.yaml 관례)
 
-# ── 예산 / LR (ultra3 paper §3.1 시작점 — TODO 2 확정 전 임시) ────────────
-train-samples: 65536              # TODO: 블렌드 확정 후 (임시 = 1024 iters @ GBS 64)
-lr-warmup-samples: 3072           # ~4.7% (ultra3 150/3200 미러)
-lr-decay-samples: 65536
+# ── 예산 / LR (2026-08-23 확정: SWE 1-pass 앵커, 총 40B bin-tokens) ───────
+# 근거: Ultra3 함의 epoch 역산(60.4B ≈ SWE-v1 1.1ep 앵커와 일치) → alpha 는
+# SWE-v3(9.78B) 전량 1ep 고정 + 나머지 비율 배분 + chat E_max 4~5 정합.
+# 블렌드 가중치 표는 convert_sft_64k.sh 헤더 (yaml 은 bins 완성 후 작성).
+train-samples: 610368             # 40.0B / 65536 = 9,537 iters @ GBS 64 (~4일)
+lr-warmup-samples: 28672          # ~4.7% (ultra3 150/3200 미러) = 448 iters
+lr-decay-samples: 610368
 lr: 1.5e-5
 min-lr: 1.0e-6
 lr-decay-style: cosine
