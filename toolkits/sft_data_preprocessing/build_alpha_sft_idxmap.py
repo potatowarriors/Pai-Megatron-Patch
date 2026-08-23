@@ -149,7 +149,8 @@ def iter_rows(path: str) -> Iterator[dict]:
         for line in f:
             line = line.strip()
             if line:
-                yield json.loads(line)
+                # 파싱은 워커에서 (_worker_encode) — 메인 프로세스 병목 회피
+                yield line
 
 
 # ---------------------------------------------------------------------------
@@ -363,10 +364,17 @@ def _worker_init(tokenizer_path: str, mask_role_header: bool):
     _WORKER_ARGS = {"mask_role_header": mask_role_header, "hdr_cache": {}}
 
 
-def _worker_encode(rows: List[dict]) -> Tuple[List[EncodedSample], Counter, List[dict]]:
-    """행 청크 -> (인코딩 샘플, 드롭 카운터, 드롭 견본)."""
+def _worker_encode(rows: List[Any]) -> Tuple[List[EncodedSample], Counter, List[dict]]:
+    """행 청크 -> (인코딩 샘플, 드롭 카운터, 드롭 견본). str 행은 여기서 파싱."""
     out, drops, dropped_rows = [], Counter(), []
     for row in rows:
+        if isinstance(row, str):
+            try:
+                row = json.loads(row)
+            except json.JSONDecodeError:
+                drops["bad_row"] += 1
+                dropped_rows.append({"reason": "bad_row", "uuid": ""})
+                continue
         norm, why = normalize_row(row)
         if norm is None:
             drops[why] += 1
