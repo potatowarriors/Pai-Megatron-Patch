@@ -1,0 +1,19 @@
+# SFT 128k 장문 버킷 블렌드 — 앵커 2종 최소 구성 (2026-08-23)
+#
+# 목적: 64k 본 런이 too_long 드롭한 >64k 꼬리 중 근거가 명확한 두 슬롯만 소화.
+#   - swe_v3 꼬리 1-pass (24,342 bins, real 2.05B) — "SWE 전량 1회" 앵커 완성
+#   - math_proofs_v2 꼬리 1-pass (17,965 bins, real 1.60B) — 증명 중간 절단
+#     회피라는 128k 버킷의 원 동기 (docs/SFT_RL_DATASETS.md §2.4 결정 #5)
+# 예산: 42,307 bins ≈ 5.55B bin-tokens ≈ 1.7일 @128k·CP8 (real 3.65B, fill ~65%).
+#
+# 열린 다이얼: cp(147k bins)/science(45k)/math(13k)/arc(19k) 꼬리도 변환 완료
+#   상태 — 편입 원하면 각 0.05~0.10 epoch 추가(+0.5~1.0일). 본 런에서 이미
+#   cp 0.45/science 0.40/math 0.86/arc 0.19 epoch 을 보므로 기본은 제외.
+# fill ~65% 는 구조적(--min-tokens 65536 → bin 당 문서 1개 + 꼬리 pad).
+#   개선하려면 단문 filler 티어 혼합이 필요하나 64k 블렌드와의 중복 에폭
+#   회계가 복잡해져 v1 은 수용 (LC pes2o filler 티어 선례 참조).
+# 가중치 = bins 비율 (bin 크기 동일 -> 소비 비율 == bins 비율).
+data-path: "0.575366 /home/work/Datasets/LL_preprocessed/v5/sft_packed_128k_pad16/swe_v3/data_text_document 0.424634 /home/work/Datasets/LL_preprocessed/v5/sft_packed_128k_pad16/math_proofs_v2/data_text_document"
+split: "99,1,0"
+dataset: MMAP
+num-workers: 8

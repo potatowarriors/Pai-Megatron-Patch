@@ -1,0 +1,106 @@
+# SFT 128K 장문 버킷 — 64k 본 런 종료 후 이어 실행 (초안 2026-08-23)
+#
+#   bash train.sh baseline_48L sft_128k sft_128k_blend
+#
+# 설계: sft_64k.yaml 파생. 차이 = seq 131072·CP8(+offload 필수)·GBS 32
+# (토큰 배치 유지: 32×131072 = 64×65536 = 4.19M tok/iter), clip-grad ×cp 산식 8.0.
+# 구성 실증: 128K@CP8+offload = MUON_OFFLOAD_BACKPORT S5 GO (54.9~58.8GB).
+# 예산: 42,304 samples = 1,322 iters ≈ 5.54B bin-tokens ≈ 1.7일 (앵커 2종 1-pass,
+# sft_128k_blend.yaml 헤더 참조).
+#
+# TODO (64k 본 런 후):
+#  1. load: 64k SFT 최종 체크포인트로 교체 (finetune: true 가 카운터 리셋,
+#     Megatron --finetune 은 optimizer state 도 로드하지 않음 — LR 재웜업 62 iters)
+#  2. LR: 64k 종료 시점 LR 근처에서 재시작 검토 (현재 = 64k cosine 꼬리 근사 3e-6)
+
+train-mode: finetune
+
+# ── 예산 / LR ─────────────────────────────────────────────────────────────
+train-samples: 42304              # 1,322 iters @ GBS 32 (5.54B bin-tokens)
+lr-warmup-samples: 1984           # 62 iters (~4.7%)
+lr-decay-samples: 42304
+lr: 3.0e-6                        # TODO 2: 64k cosine 종점(1e-6)~중반 사이 재검토
+min-lr: 1.0e-6
+lr-decay-style: cosine
+
+# ── 병렬화 (128K = CP8 강제; offload 로 GO — 백포트 S5 실증) ──────────────
+tensor-model-parallel-size: 1
+pipeline-model-parallel-size: 1
+expert-model-parallel-size: 8
+expert-tensor-parallel-size: 1
+context-parallel-size: 8
+
+chunked-optimizer-state-offload: true
+optimizer-state-offload-chunk-size-mb: 256
+
+# ── 배치 / 시퀀스 (THD는 MBS 1 필수) ──────────────────────────────────────
+seq-length: 131072
+micro-batch-size: 1
+global-batch-size: 32             # 토큰 배치 유지 (64k GBS 64 와 동일 tok/iter)
+
+# ── THD 문서 격리 플래그셋 (sft_64k 와 동일) ──────────────────────────────
+reset-position-ids: true
+no-create-attention-mask-in-dataloader: true
+reset-attention-mask: false
+eod-mask-loss: false
+
+# ── 리컴퓨트 ──────────────────────────────────────────────────────────────
+recompute-granularity: selective
+recompute-modules: "layernorm moe"
+
+# ── MoE 라우팅 (DSV3-strict, 전 스테이지 동일) ────────────────────────────
+moe-router-load-balancing-type: seq_aux_loss
+moe-router-score-function: sigmoid
+moe-router-enable-expert-bias: true
+moe-router-bias-update-rate: 0.001
+moe-token-dispatcher-type: alltoall
+
+# ── Optimizer (sft_64k 와 동일) ───────────────────────────────────────────
+optimizer: dist_muon
+weight-decay: 0.1
+adam-beta1: 0.9
+adam-beta2: 0.95
+muon-momentum: 0.95
+muon-use-nesterov: true
+muon-num-ns-steps: 5
+muon-scale-mode: spectral
+muon-fp32-matmul-prec: medium
+muon-tp-mode: blockwise
+muon-extra-scale-factor: 0.2
+init-method-std: 0.008
+
+clip-grad: 8.0                    # ×cp 산식, CP8
+
+# ── LayerNorm WD ──────────────────────────────────────────────────────────
+no-weight-decay-cond-type: apply_wd_to_qk_layernorm
+
+# ── Precision ─────────────────────────────────────────────────────────────
+bf16: true
+
+# ── 체크포인트 / 평가 (1,322 iters 규모) ──────────────────────────────────
+save-interval: 100
+# optimizer state 저장 기본 (63c466f)
+ckpt-format: torch_dist
+eval-iters: 2                     # 128K eval 고비용 — 최소 표본
+eval-interval: 200
+
+# ── 로깅 / 런타임 (sft_64k 와 동일) ───────────────────────────────────────
+log-interval: 1
+log-timers-to-tensorboard: true
+log-memory-to-tensorboard: true
+log-validation-ppl-to-tensorboard: true
+log-throughput: true
+tensorboard-queue-size: 1
+distributed-timeout-minutes: 60
+manual-gc: true
+manual-gc-interval: 5
+overlap-grad-reduce: true
+attention-backend: auto
+cross-entropy-loss-fusion: true
+cross-entropy-fusion-impl: te
+wandb-project: alpha-posttraining
+
+# ── Stage 전환 (TODO 1: 64k SFT 최종 ckpt) ────────────────────────────────
+# load: <sft_64k 최종 ckpt>
+finetune: true
+no-load-optim: true
