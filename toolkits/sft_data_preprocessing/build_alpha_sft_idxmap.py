@@ -165,6 +165,10 @@ def normalize_row(row: dict) -> Tuple[Optional[dict], Optional[str]]:
     norm_msgs = []
     for m in messages:
         role = m.get("role")
+        if role == "developer":
+            # OpenAI 신관례의 system 대체 역할 (Science-v2 rqa 108k행 실측).
+            # 의미 동일 — system 으로 매핑해 템플릿 catch-all(비표준 턴 헤더) 회피.
+            role = "system"
         if role not in ("system", "user", "assistant", "tool"):
             return None, "bad_row"
         content = m.get("content")
