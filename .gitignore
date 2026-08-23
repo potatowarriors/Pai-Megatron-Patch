@@ -57,3 +57,6 @@ __pycache__/
 # Secrets must never live in docs — keys go in scripts/setup_wandb.sh (tracked
 # history already contains one; rotate before making the repo public).
 toolkits/distributed_checkpoints_convertor/scripts/alpha/docs/
+# 자격증명 파일 (wandb 키 유출 전례 후속 — scripts/.wandb_key와 동급 취급)
+.env
+**/.env
