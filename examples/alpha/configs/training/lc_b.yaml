@@ -1,0 +1,125 @@
+# LC-B — 128K 직행 CPT (LC-A 완주 직후 스테이지 전환; 초안 2026-08-23)
+#
+#   bash train.sh baseline_48L lc_b lc_b_128k_blend
+#
+# 설계 근거 (정본: LC_DATASETS.md §5/§5.1 + MUON_OFFLOAD_BACKPORT.md S5 +
+# gdn_cp_port.md 분석노트 2 + lc_a_resume.yaml 계보):
+# - 128K 직행: 게이트 시점 "64K 시작" 판정은 128K OOM 때문이었고 chunked offload
+#   백포트가 뒤집음(S5: 128K@CP8 max-alloc 54.9~58.8GB GO). 근사-NoPE(partial rotary
+#   0.25 + θ=10M + GDN implicit position) 가족의 직행 선례(Nemotron 3 8k→512k)가 근거.
+# - CP8·THD·MBS1: 128K는 CP8 필수(게이트 실측). THD 문서 격리 플래그셋은 LC-A와 동일.
+# - 예산 4B tokens (계획 3~5B의 중간값) = 30,720 samples @ 131072; 320 iters @ GBS 96.
+# - GBS 96 = 12.58M tok/iter — LC-A와 동일한 '토큰 배치 유지' 산식 (P3 3072×4096
+#   토큰량 보존; 32K에서 384였으니 128K에서는 96).
+# - LR: 7.5e-6 constant — LC-A와 연속 (Nemotron 3 LC constant 선례).
+#   finetune 전환이라 Muon fresh → warmup 50 iters 재예열 (stage 전환 규칙).
+# - qk-clip 계열 전부 제거 (LC-A와 동일 — thd×return_max_logit TE 2.9 비호환).
+#
+# ★ 개시 전 필수 절차:
+#   1. load: 경로가 LC-A 최종 ckpt(iter 1113)인지 확인 — LC-A 완주 후 재확인.
+#   2. 스모크 먼저: THD(실데이터)×128K×CP8×offload 조합은 미실행 상태(S5는
+#      dense+mock; mock은 THD 검증 불가). 실행:
+#        bash train.sh baseline_48L lc_b lc_b_128k_blend --train-samples 960
+#      (10 iters, ~1h). sub1 창구가 열리면 LC-A 중에 미리, 아니면 LC-A 완주 직후
+#      main1에서 본 런 직전에 (08-23 현재 sub1은 합성 서빙이 8장 전부 점유).
+#      확인 항목: max-alloc ≤ 60GB(S5 포락선), 오프로더 8랭크 활성 로그, snap 가드
+#      경고 빈도, loss 유한.
+#   3. 데이터 게이트는 완료 (2026-08-23): EN 4종 전수 scan_internal_eod —
+#      pg19/edgar/pes2o CLEAN, longblocks 2/40,876(0.005%)은 snap 가드 수리 범위
+#      (LC-A 선례). 상세는 lc_b_128k_blend.yaml 헤더.
+#
+# ── 조정 가능 노브 ────────────────────────────────────────────────────────
+#   train-samples(예산 3~5B ↔ 23040~38400) · lr · save-interval
+
+# ── 예산 / LR (constant — LC-A 연속) ──────────────────────────────────────
+train-samples: 30720              # 4.027B tokens / 131072; 320 iters @ GBS 96
+lr-warmup-samples: 4800           # 50 iters — finetune 전환 후 Muon 재예열
+lr-decay-samples: 30720           # constant지만 scheduler assert(warmup<decay)용
+lr: 7.5e-6
+min-lr: 7.5e-6
+lr-decay-style: constant
+
+# ── 병렬화 (128K = CP8 필수; 게이트 §1.4 + offload S5 GO) ─────────────────
+tensor-model-parallel-size: 1
+pipeline-model-parallel-size: 1
+expert-model-parallel-size: 8
+expert-tensor-parallel-size: 1
+context-parallel-size: 8
+
+# ── Muon chunked optimizer-state offload (128K 국면 필수 — S5 실증 −21GB) ─
+chunked-optimizer-state-offload: true
+optimizer-state-offload-chunk-size-mb: 256
+
+# ── 배치 / 시퀀스 (THD는 MBS 1 필수 — helper assert) ──────────────────────
+seq-length: 131072
+micro-batch-size: 1
+global-batch-size: 96             # 토큰 배치 유지: 96×131072 = 384×32768 = 12.58M
+
+# ── THD 문서 격리 플래그셋 (LC-A와 동일 — 셋이 한 몸) ─────────────────────
+reset-position-ids: true
+no-create-attention-mask-in-dataloader: true
+reset-attention-mask: false
+eod-mask-loss: true
+
+# ── 리컴퓨트 (S5 GO 구성과 동일; moe 해제 금지 — LC-A OOM 선례) ───────────
+recompute-granularity: selective
+recompute-modules: "layernorm moe"
+
+# ── MoE 라우팅 (DSV3-strict, 전 스테이지 동일) ────────────────────────────
+moe-router-load-balancing-type: seq_aux_loss
+moe-router-score-function: sigmoid
+moe-router-enable-expert-bias: true
+moe-router-bias-update-rate: 0.001
+moe-token-dispatcher-type: alltoall
+
+# ── Optimizer (LC-A와 동일) ───────────────────────────────────────────────
+optimizer: dist_muon
+weight-decay: 0.1
+adam-beta1: 0.9
+adam-beta2: 0.95
+muon-momentum: 0.95
+muon-use-nesterov: true
+muon-num-ns-steps: 5
+muon-scale-mode: spectral
+muon-fp32-matmul-prec: medium
+muon-tp-mode: blockwise
+muon-extra-scale-factor: 0.2
+init-method-std: 0.008
+
+# clip-grad ×cp 산식 (2026-08-22 실측: grad-norm ∝ CP) — CP8이므로 8.0
+clip-grad: 8.0
+
+# ── LayerNorm WD (P3/LC-A와 동일) ─────────────────────────────────────────
+no-weight-decay-cond-type: apply_wd_to_qk_layernorm
+
+# ── Precision ─────────────────────────────────────────────────────────────
+bf16: true
+
+# ── 체크포인트 / 평가 (320 iters 규모; iter당 ~4.6~6분 예상) ──────────────
+save-interval: 50                 # ~4h 간격; optimizer state 저장 기본 (08-23 확정)
+ckpt-format: torch_dist           # offload는 torch_dist 필수 (async-save 불가)
+eval-iters: 2                     # 128K eval 고비용 — 최소 표본
+eval-interval: 50
+
+# ── 로깅 / 런타임 (LC-A와 동일 + 128k 콜드캐시 타임아웃 확대) ─────────────
+log-interval: 1
+log-timers-to-tensorboard: true
+log-memory-to-tensorboard: true
+log-validation-ppl-to-tensorboard: true
+log-throughput: true
+tensorboard-queue-size: 1
+distributed-timeout-minutes: 180  # 첫 기동 blend 캐시 빌드 대비 (sft_64k 실측 교훈)
+manual-gc: true
+manual-gc-interval: 5
+overlap-grad-reduce: true
+attention-backend: auto
+cross-entropy-loss-fusion: true
+cross-entropy-fusion-impl: te
+wandb-project: alpha-pretraining
+
+# ── Stage 전환 (LC-A → LC-B: dataset 변경 → finetune) ─────────────────────
+# LC-A 완주(iter 1113) 후 이 경로에 최종 ckpt가 있는지 확인하고 개시할 것.
+# finetune: iteration/consumed 리셋 + optimizer state 미로드 (Muon 재예열은 warmup 담당).
+load: /home/work/vidsearch/repos/project_s/Pai-Megatron-Patch/examples/alpha/outputs/alpha_baseline_48L_lc_a_resume_20260823_070651/checkpoints
+finetune: true
+no-load-optim: true

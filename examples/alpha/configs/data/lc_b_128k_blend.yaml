@@ -1,0 +1,41 @@
+# LC-B 128K 본 블렌드 — LC(long) 46% + filler(P3 미러 replay) 54% (2026-08-23)
+#
+# 구성 근거: LC_DATASETS.md §5.1 알파 이식안의 "128k 스테이지" 열.
+#   LC 슬롯 = ge64k 보존 네이티브 4종(8.65B real → 90,112 bins) + KO 128k 2종
+#   (syn_data 인계 08-23; ko_news 3,251 + ko_grounded 349 bins). 다문서 합성(EN)은
+#   v1 미포함 — 예산 3~5B의 LC 슬롯은 네이티브 풀로 충당(epoch ~0.15), 합성은 후속 보강.
+#   filler 슬롯 = lc_a_32k_blend.yaml의 P3 미러 26멤버 **32k 팩 그대로 재사용**.
+#
+# ★ 32k 팩 재사용 근거: packed bin은 전부 정확히 32768 토큰(pad-to-L emit)이고
+#   32768 %16 = 0 이므로, seq 131072 학습에서 GPTDataset의 concat-and-chunk가
+#   항상 bin 경계(4개 bin = 1 샘플)에서 잘린다 — 문서 절단 0, %16 정렬 보존,
+#   THD cu_seqlens 유도 그대로 유효. 재패킹 불필요.
+#
+# 가중치 산식 (lc_a와 달라진 점 주의):
+#   LC 내부 = **bin 수 비례** (등-epoch → 소비 real 토큰이 풀 자연 비례와 일치).
+#   32k에선 fill ~99%라 real 비례 == bins 비례였지만, 128k 팩은 fill 66~89%로
+#   갈라져 real-가중은 소비 분포를 왜곡한다(소비 ∝ w×fill). bins 가중이
+#   lc_a "real-token 자연 비례" 의도의 올바른 일반화.
+#   LC 합 = 0.459995, filler 합 = 0.540005 (lc_a에서 그대로) → 총합 1.000000.
+#
+# 128k LC bins 실측 (본 패킹 2026-08-23 main1): longblocks 40,876 / pg19 20,569 /
+#   edgar 28,581 / pes2o 86 / ko_news 3,251 / ko_grounded 349 = 93,712 bins.
+#   fill: longblocks 70.1% / pg19 89.2% / edgar 66.4% / pes2o 60.3% — 구조적
+#   (문서 길이가 bin에 근접; sft_128k_blend fill ~65% 수용 선례). pad는 EOD로
+#   eod-mask-loss가 제외.
+# epoch @4.03B 예산: LC 0.46×4.03B / (93,712×131072) = 0.151 — 전 멤버 동일, 반복 없음.
+#
+# 검증 (2026-08-23, EN 4종 전수):
+#   - bestfit_pack post-verify + round-trip 20/20 전 종 통과.
+#   - scan_internal_eod --full: pg19/edgar/pes2o CLEAN, **longblocks 2/40,876 오염**
+#     (bins 9851·26731; 32k 자매본과 동일한 원문 리터럴 EOD 유래, 0.005%) —
+#     런타임 snap_cu_seqlens_to_grid가 수리 (LC-A 본 런 선례 그대로).
+#   - 32k 재사용 로더 실증 (scratchpad check_32k_reuse_at_128k.py, math 멤버 32샘플):
+#     4×whole-bin 분해 + 세그먼트 전역 %16 = 32/32 PASS. 알려진 잔여 의미론:
+#     >32k 장문의 full-bin 조각이 content로 끝나는 bin(~2% 경계) 뒤 첫 문서가
+#     position 연속으로 같은 세그먼트에 병합 — 두 조각 다 %16이라 THD 요건은
+#     유지되며, 기수용한 "1-token eod-unmasked leak"의 bin 규모 연장으로 수용.
+data-path: "0.200645 /home/work/Datasets/LL_preprocessed/v5/cpt_lc_packed_128k_pad16/longblocks/data_text_document 0.100965 /home/work/Datasets/LL_preprocessed/v5/cpt_lc_packed_128k_pad16/pg19/data_text_document 0.140293 /home/work/Datasets/LL_preprocessed/v5/cpt_lc_packed_128k_pad16/edgar/data_text_document 0.000422 /home/work/Datasets/LL_preprocessed/v5/cpt_lc_packed_128k_pad16/pes2o/data_text_document 0.015958 /home/work/Datasets/LL_preprocessed/v5/cpt_lc_packed_128k_pad16/ko_news/data_text_document 0.001712 /home/work/Datasets/LL_preprocessed/v5/cpt_lc_packed_128k_pad16/ko_grounded/data_text_document 0.032400 /home/work/Datasets/LL_preprocessed/v5/lc_filler_packed_32k_pad16/korean_web/data_text_document 0.016200 /home/work/Datasets/LL_preprocessed/v5/lc_filler_packed_32k_pad16/fineweb2hq/data_text_document 0.097200 /home/work/Datasets/LL_preprocessed/v5/lc_filler_packed_32k_pad16/math/data_text_document 0.007345 /home/work/Datasets/LL_preprocessed/v5/lc_filler_packed_32k_pad16/code_review/data_text_document 0.023188 /home/work/Datasets/LL_preprocessed/v5/lc_filler_packed_32k_pad16/question_answering/data_text_document 0.007369 /home/work/Datasets/LL_preprocessed/v5/lc_filler_packed_32k_pad16/rewriting/data_text_document 0.002482 /home/work/Datasets/LL_preprocessed/v5/lc_filler_packed_32k_pad16/student_teacher/data_text_document 0.002817 /home/work/Datasets/LL_preprocessed/v5/lc_filler_packed_32k_pad16/transpilation/data_text_document 0.021600 /home/work/Datasets/LL_preprocessed/v5/lc_filler_packed_32k_pad16/cchq_actual/data_text_document 0.086400 /home/work/Datasets/LL_preprocessed/v5/lc_filler_packed_32k_pad16/cchq_qa/data_text_document 0.054000 /home/work/Datasets/LL_preprocessed/v5/lc_filler_packed_32k_pad16/cc_code/data_text_document 0.004244 /home/work/Datasets/LL_preprocessed/v5/lc_filler_packed_32k_pad16/specialized/v1.1/code_concepts/data_text_document 0.000042 /home/work/Datasets/LL_preprocessed/v5/lc_filler_packed_32k_pad16/specialized/v1.1/economics/data_text_document 0.000075 /home/work/Datasets/LL_preprocessed/v5/lc_filler_packed_32k_pad16/specialized/v1.1/formal_logic/data_text_document 0.000915 /home/work/Datasets/LL_preprocessed/v5/lc_filler_packed_32k_pad16/specialized/v1.1/multiple_choice/data_text_document 0.000116 /home/work/Datasets/LL_preprocessed/v5/lc_filler_packed_32k_pad16/specialized/v1.1/unconditional_algorithmic/data_text_document 0.011300 /home/work/Datasets/LL_preprocessed/v5/lc_filler_packed_32k_pad16/specialized/v1/infinibyte_reasoning/data_text_document 0.015661 /home/work/Datasets/LL_preprocessed/v5/lc_filler_packed_32k_pad16/specialized/v1/math_textbooks/data_text_document 0.080089 /home/work/Datasets/LL_preprocessed/v5/lc_filler_packed_32k_pad16/specialized/v1/rqa/data_text_document 0.048027 /home/work/Datasets/LL_preprocessed/v5/lc_filler_packed_32k_pad16/specialized/v1/stem_sft/data_text_document 0.000715 /home/work/Datasets/LL_preprocessed/v5/lc_filler_packed_32k_pad16/specialized/v1/scientific_coding/data_text_document 0.004234 /home/work/Datasets/LL_preprocessed/v5/lc_filler_packed_32k_pad16/specialized/v1/wiki_rewrite/data_text_document 0.019148 /home/work/Datasets/LL_preprocessed/v5/lc_filler_packed_32k_pad16/specialized/v1.2/fact_seeking/data_text_document 0.000392 /home/work/Datasets/LL_preprocessed/v5/lc_filler_packed_32k_pad16/specialized/v1.2/generative/data_text_document 0.000009 /home/work/Datasets/LL_preprocessed/v5/lc_filler_packed_32k_pad16/specialized/v1.2/moral_scenarios/data_text_document 0.004037 /home/work/Datasets/LL_preprocessed/v5/lc_filler_packed_32k_pad16/specialized/v1.2/multiple_choice/data_text_document"
+split: "99,1,0"
+dataset: MMAP
+num-workers: 8

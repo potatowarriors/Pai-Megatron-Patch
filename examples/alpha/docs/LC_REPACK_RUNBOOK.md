@@ -7,9 +7,15 @@
 > filler preset은 `configs/data/lc_filler_32k_pad16.yaml`로 커밋됨(specialized 미빌드
 > 경로 포함 — 전 경로 존재 확인 후 학습 투입). 산출물 중
 > ko_news·edgar는 THD+CP 스티치 풀스택 검증(CP{1,2,4} 등가, gdn_cp_port.md
-> 분석노트 3)에 실사용되어 %16 정렬이 실전 확인됨. **작업 3(128k)은 수요 확정** —
-> Muon chunked offload로 128K@CP8이 GO 전환(max-alloc 54.9~58.8GB,
-> MUON_OFFLOAD_BACKPORT.md S5)되어 자원 제약이 풀렸고, 남은 병목은 이 데이터 팩이다.
+> 분석노트 3)에 실사용되어 %16 정렬이 실전 확인됨. **작업 3(128k)은 네이티브 패킹
+> 완료 (2026-08-23 갱신)** — Muon chunked offload로 128K@CP8이 GO 전환(max-alloc
+> 54.9~58.8GB, MUON_OFFLOAD_BACKPORT.md S5)된 뒤 EN ge64k 4종을 §4 절차대로 패킹
+> (90,112 bins / real 8.65B → `cpt_lc_packed_128k_pad16/`; KO 2종은 syn_data 인계분).
+> 전수 scan_internal_eod: longblocks 2/40,876만 오염(런타임 snap 가드 수리 범위),
+> 나머지 CLEAN. filler는 재패킹 대신 **32k 팩 재사용**(32768 %16=0이라 seq 131072
+> 에서 bin 4개 = 1 샘플로 정확 분해 — 로더 실증 포함, `lc_b_128k_blend.yaml` 헤더).
+> 다문서 합성(EN)만 미착수 — LC-B v1은 네이티브로 개시(예산 3~5B의 LC 슬롯은
+> epoch 0.15로 충당), 합성은 후속 보강.
 > 배경 서술의 varlen-thd 브랜치 참조는 낡음 — 전부 main에 머지됨(c9f65ad).
 
 **목적**: LC 학습 데이터를 THD+CP 문서 격리 요건에 맞게 재패킹한다.
