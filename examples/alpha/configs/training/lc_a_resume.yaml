@@ -93,7 +93,7 @@ bf16: true
 
 # ── 체크포인트 / 평가 (1,113 iters 규모에 맞춤) ───────────────────────────
 save-interval: 100                # ~100 iter ≈ 7h 간격 예상 (1,113 iters 규모)
-no-save-optim: true               # Muon은 warmup 복구 검증됨 (stage1 선례)
+# optimizer state 저장이 기본 (사용자 확정 2026-08-23) — 이후 세이브부터 optim 동봉.
 ckpt-format: torch_dist
 eval-iters: 4                     # 32K eval은 고비용 — 소표본
 eval-interval: 100
@@ -121,4 +121,6 @@ wandb-project: alpha-pretraining
 # 재예열을 담당(stage1_resume 선례: 스케줄러 num_steps 리셋됨). finetune 없음
 # → iteration/consumed(38,400)가 ckpt에서 복원되어 데이터 위치 연속.
 load: /home/work/vidsearch/repos/project_s/Pai-Megatron-Patch/examples/alpha/outputs/alpha_baseline_48L_lc_a_20260822_191424/checkpoints
+# 이번 재개의 로드 대상(run1 iter 100)은 구정책의 weights-only ckpt라 필수.
+# optim 동봉 ckpt에서 재개할 때는 이 줄을 제거해 무봉합 복원할 것.
 no-load-optim: true

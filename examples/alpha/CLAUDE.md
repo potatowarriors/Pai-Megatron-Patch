@@ -440,7 +440,7 @@ bash train.sh baseline_48L pretrain_auxfree stage1_v5_korean_web
 | Stage 2-N → 2-N+1 | No | `load: <path>` + `no-load-optim: true` | 이어서 |
 
 #### 핵심 설계 원칙
-1. **`no-save-optim: true`**: Muon optimizer는 warmup으로 충분히 복구 (Stage 1 cooldown에서 검증)
+1. ~~**`no-save-optim: true`**: Muon optimizer는 warmup으로 충분히 복구 (Stage 1 cooldown에서 검증)~~ **→ 2026-08-23 사용자 확정으로 기본값 반전: optimizer state를 저장한다** (no-save-optim 미설정). 저장공간 여유가 충분하고, 재개 시 momentum·스케줄러 무봉합 복원이 re-warmup 50 iter 비용과 혼동(LC-A 재개 사례)을 없앤다. 세이브당 ~90GB — 공간 회수는 구 iter 디렉토리 수동 정리로. weights-only ckpt에서 재개할 때만 `no-load-optim: true`가 여전히 필요
 2. **`finetune: true`는 dataset 변경 시에만**: iteration/consumed_samples 리셋 필요할 때
 3. **`no-load-optim: true`는 같은 dataset 연장 시**: 데이터 위치는 유지, scheduler만 리셋
 4. resume 관련 키는 모두 training preset YAML 안에 평면적으로 (`load:`, `finetune:`, `no-load-optim:`) — 셸이 조건부로 끼워넣지 않음

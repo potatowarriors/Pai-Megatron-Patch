@@ -93,7 +93,9 @@ bf16: true
 
 # ── 체크포인트 / 평가 (1,113 iters 규모에 맞춤) ───────────────────────────
 save-interval: 100                # ~100 iter ≈ 7h 간격 예상 (1,113 iters 규모)
-no-save-optim: true               # Muon은 warmup 복구 검증됨 (stage1 선례)
+# optimizer state 저장이 기본 (사용자 확정 2026-08-23): 저장공간 여유 충분,
+# 재개 시 Muon momentum·스케줄러 무봉합 복원(re-warmup 불필요). 구 하우스 룰
+# no-save-optim(1세이브 ~30GB 절약 + warmup 복구 검증)은 폐기 — 세이브당 ~90GB.
 ckpt-format: torch_dist
 eval-iters: 4                     # 32K eval은 고비용 — 소표본
 eval-interval: 100
