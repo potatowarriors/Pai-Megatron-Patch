@@ -59,6 +59,8 @@ REGEN_SYSTEM_SUFFIX = (
 HANGUL_RE = re.compile(r"[가-힣]")
 LEAK_RE = re.compile(r"gemma|gemini|구글이 (?:저를|나를) |google(?:이|에서) (?:저를|나를)", re.IGNORECASE)
 META_RE = re.compile(r"번역할 .{0,10}(?:제공|입력)해 주|번역해 드리겠습니다|Please provide")
+# special-token 리터럴 방어 (LC-A iter170 사고 반영 — 상세 extract_sources.py 주석)
+SPECIAL_TOKEN_RE = re.compile(r"<\|[A-Za-z_]+\|>|</?(?:tool_call|tool_response|think)>")
 HANGUL_MIN_RATIO = 0.40
 
 
@@ -162,6 +164,9 @@ def qc_checks(src_msgs, out_msgs, mode):
     final = out_msgs[-1]["content"]
     if not final.strip():
         return "empty_final"
+    for m in out_msgs:
+        if m["content"] and SPECIAL_TOKEN_RE.search(m["content"]):
+            return "special_token_literal"
     if hangul_ratio(final) < HANGUL_MIN_RATIO:
         return f"low_hangul_ratio:{hangul_ratio(final):.2f}"
     user_text = " ".join(m["content"] for m in out_msgs if m["role"] == "user")

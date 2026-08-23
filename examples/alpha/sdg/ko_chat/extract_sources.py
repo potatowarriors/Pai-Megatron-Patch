@@ -12,7 +12,13 @@ chat_v3의 IF/chat split에서 한국어화 대상 행을 결정론적으로 샘
 import argparse
 import json
 import random
+import re
 from pathlib import Path
+
+# special-token 리터럴 방어 (LC-A iter170 정지 사고, 2026-08-23 공유 — alpha v5
+# 특수 토큰뿐 아니라 타 모델 제어토큰 형태도 학습 데이터에서 배제한다.
+# 하류 build_alpha_sft_idxmap 의 injection 드롭이 최종 방어선, 여기는 조기 차단.)
+SPECIAL_TOKEN_RE = re.compile(r"<\|[A-Za-z_]+\|>|</?(?:tool_call|tool_response|think)>")
 
 SFT_ROOT = Path("/home/work/Datasets/LL_datasets/posttraining/SFT")
 SOURCES = {
@@ -48,6 +54,8 @@ def row_ok(row: dict) -> tuple[bool, str]:
             return False, "tool_calls"
         if len(c) > MAX_SINGLE_MSG_CHARS:
             return False, "single_msg_too_long"
+        if SPECIAL_TOKEN_RE.search(c):
+            return False, "special_token_literal"
         total += len(c)
     if total > MAX_TOTAL_CHARS:
         return False, "total_too_long"

@@ -61,6 +61,13 @@ python3 $K/export_ko_chat.py --dataset "$K/artifacts/ko_chat_b_r1/**/*.parquet" 
 - 트랙 B: `ko_check` 규칙(한글비율·누출·상투 서두) + `judge` 4점수 + export 중복제거
   (접두 **및 후미** 40자 버킷 — identity 실측: 후미 수렴이 더 심각).
 - 다운스트림: `build_alpha_sft_idxmap.py` 가 injection 드롭·스팬 마스킹 재검증.
+- **special-token 리터럴 방어 (LC-A iter170 정지 사고 반영, 2026-08-23)**: 원문에
+  `<|...|>`·`<tool_call>`·`<think>` 류 리터럴이 남으면 토크나이저가 실토큰으로
+  매칭될 수 있다(LC-A는 문서 내부 EOD → THD+CP 가드 정지). 4중 가드:
+  extract(시드 드롭) → 트랙 A qc(리젝) → 트랙 B `ko_check`(리젝) →
+  export(소급 게이트, 가드 이전 런 커버). 실측: seeds_r1 3/30,000(전부 타 모델
+  토큰 형태), r1_a 부분 산출 0/4,018. **r1_a results.jsonl 은 가드 이전 시작이라
+  이관 시 export 게이트 통과 필수.**
 
 ## 함정 (재발 방지)
 

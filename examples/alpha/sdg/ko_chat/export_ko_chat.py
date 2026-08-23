@@ -23,6 +23,10 @@ from pathlib import Path
 
 import pandas as pd
 
+# special-token 리터럴 방어 (LC-A iter170 사고 반영 — 상세 extract_sources.py 주석).
+# 이미 생성된 parquet(가드 이전 런)에도 소급 적용되는 최종 게이트.
+SPECIAL_TOKEN_RE = re.compile(r"<\|[A-Za-z_]+\|>|</?(?:tool_call|tool_response|think)>")
+
 GENERIC_SYSTEMS = [
     "당신은 유능하고 친절한 AI 어시스턴트입니다.",
     "당신은 도움이 되는 AI 어시스턴트입니다. 정확하고 친절하게 답변합니다.",
@@ -136,6 +140,9 @@ def main():
         rec = build_record(row)
         if rec is None:
             drops["missing_turn"] += 1
+            continue
+        if any(SPECIAL_TOKEN_RE.search(m["content"]) for m in rec["messages"]):
+            drops["special_token_literal"] += 1
             continue
         a_texts = [m["content"] for m in rec["messages"] if m["role"] == "assistant"]
         norm_all = _norm(" ".join(a_texts))

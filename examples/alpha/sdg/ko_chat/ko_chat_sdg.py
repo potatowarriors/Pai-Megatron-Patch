@@ -50,6 +50,8 @@ VLLM_PROVIDER = "vllm-local"
 
 HANGUL_RE = re.compile(r"[가-힣]")
 LEAK_RE = re.compile(r"gemma|gemini|(?:구글|google)(?:이|에서)?\s*(?:만든|개발한|훈련시킨)", re.IGNORECASE)
+# special-token 리터럴 방어 (LC-A iter170 사고 반영 — 상세 extract_sources.py 주석)
+SPECIAL_TOKEN_RE = re.compile(r"<\|[A-Za-z_]+\|>|</?(?:tool_call|tool_response|think)>")
 
 
 # =============================================================================
@@ -208,6 +210,10 @@ def validate_ko_chat(df: pd.DataFrame) -> pd.DataFrame:
         for t in turns:
             if LEAK_RE.search(t) and not LEAK_RE.search(user_text):
                 reasons.append("teacher_leak")
+                break
+        for t in turns + users:
+            if SPECIAL_TOKEN_RE.search(t):
+                reasons.append("special_token_literal")
                 break
         if users and _hangul_ratio(users[0]) < 0.30 and row.get("task_type") != "coding_help":
             reasons.append("low_hangul_user")

@@ -1,0 +1,16 @@
+# SFT 40B 본 블렌드 — SWE 1-pass 앵커 (2026-08-23 확정, 사용자 승인)
+#
+# 설계: 총 40B bin-tokens. SWE-v3 64k분(7.55B) 1-pass 고정 근사(24.5%) + 나머지
+#   카테고리 비율 배분. 근거: Ultra3 60.4B = SWE-v1 1.1ep 역산(로컬 v1 실측) +
+#   chat E_max 4~5 (Muennighoff 4ep / NVIDIA chat ~10~16ep 용인 실측).
+# 카테고리 내부: 실측 real-token 비례 (동일 epoch 압력). 카테고리 표는
+#   convert_sft_64k.sh 헤더 참조.
+# longblocks_sft 1.5% 슬롯은 변환기 미완성으로 예약 — 합류 시 재정규화
+#   (현재 가중치는 98.5 -> 100 재정규화 반영, 전 카테고리 x1.0152).
+# >64k 꼬리(토큰 기준 ~24B: cp 12.7/science 3.9/proofs 2.8/swe 2.2/arc 1.4)는
+#   별도 128k 버킷 런에서 소화 (--min-tokens 65536 변환).
+# 생성: 이 파일은 스크립트 산출물 — 수정 시 real_tokens 재비례 필수.
+data-path: "0.248731 /home/work/Datasets/LL_preprocessed/v5/sft_packed_64k_pad16/swe_v3/data_text_document 0.046280 /home/work/Datasets/LL_preprocessed/v5/sft_packed_64k_pad16/chat_v3_if/data_text_document 0.166918 /home/work/Datasets/LL_preprocessed/v5/sft_packed_64k_pad16/chat_v3_chat/data_text_document 0.147208 /home/work/Datasets/LL_preprocessed/v5/sft_packed_64k_pad16/cp_v2/data_text_document 0.111675 /home/work/Datasets/LL_preprocessed/v5/sft_packed_64k_pad16/math_v4/data_text_document 0.101523 /home/work/Datasets/LL_preprocessed/v5/sft_packed_64k_pad16/science_v2/data_text_document 0.009809 /home/work/Datasets/LL_preprocessed/v5/sft_packed_64k_pad16/ml_ultra-v3_code_ja_translated_final/data_text_document 0.009821 /home/work/Datasets/LL_preprocessed/v5/sft_packed_64k_pad16/ml_ultra-v3_code_ko_translated_final/data_text_document 0.010167 /home/work/Datasets/LL_preprocessed/v5/sft_packed_64k_pad16/ml_ultra-v3_code_pt_translated_final/data_text_document 0.011712 /home/work/Datasets/LL_preprocessed/v5/sft_packed_64k_pad16/ml_ultra-v3_math_ja_translated_final/data_text_document 0.008973 /home/work/Datasets/LL_preprocessed/v5/sft_packed_64k_pad16/ml_ultra-v3_math_ko_translated_final/data_text_document 0.007726 /home/work/Datasets/LL_preprocessed/v5/sft_packed_64k_pad16/ml_ultra-v3_math_pt_translated_final/data_text_document 0.000355 /home/work/Datasets/LL_preprocessed/v5/sft_packed_64k_pad16/ml_ultra-v3_stem_ja_translated_postedit_final/data_text_document 0.000936 /home/work/Datasets/LL_preprocessed/v5/sft_packed_64k_pad16/ml_ultra-v3_stem_ko_translated_postedit_final/data_text_document 0.006492 /home/work/Datasets/LL_preprocessed/v5/sft_packed_64k_pad16/ml_ultra-v3_stem_pt_translated_postedit_final/data_text_document 0.050607 /home/work/Datasets/LL_preprocessed/v5/sft_packed_64k_pad16/opencode_v1/data_text_document 0.000154 /home/work/Datasets/LL_preprocessed/v5/sft_packed_64k_pad16/cuda_v1/data_text_document 0.030457 /home/work/Datasets/LL_preprocessed/v5/sft_packed_64k_pad16/arc_agi_v1/data_text_document 0.015228 /home/work/Datasets/LL_preprocessed/v5/sft_packed_64k_pad16/math_proofs_v2/data_text_document 0.010152 /home/work/Datasets/LL_preprocessed/v5/sft_packed_64k_pad16/safety_v2/data_text_document 0.005076 /home/work/Datasets/LL_preprocessed/v5/sft_packed_64k_pad16/identity_v1/data_text_document"
+split: "99,1,0"
+dataset: MMAP
+num-workers: 8
