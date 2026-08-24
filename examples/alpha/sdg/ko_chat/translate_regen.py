@@ -58,13 +58,27 @@ REGEN_SYSTEM_SUFFIX = (
 
 # chat_v3 는 전 행이 reasoning_content 보유(전수 실측) — 한국어 산출물도 think 를
 # 채워야 언어↔nothink 상관이 생기지 않는다 (2026-08-24 사용자 결정: 폐기 후 재생성).
+# 형식은 guided JSON 으로 강제 — <사고> 마커 방식은 규모에서 ~36% 이탈 실측.
 REGEN_REASONING_INSTR = (
-    "\n\n응답 형식: 먼저 <사고> 태그 안에 답변을 준비하는 사고 과정을 한국어로 "
-    "쓰세요 — 요청의 핵심 파악, 접근 방법, 주의점을 간결하되 실질적으로. "
-    "태그를 닫은 뒤에는 사용자에게 보일 최종 답변만 쓰세요. 사고 과정을 최종 "
-    "답변에서 반복하지 마세요. 형식:\n<사고>\n(사고 과정)\n</사고>\n(최종 답변)"
+    "\n\nJSON 으로 응답하세요. reasoning 필드에는 답변을 준비하는 사고 과정을 "
+    "한국어로(요청 핵심 파악, 접근, 주의점 — 간결하되 실질적으로), content 필드에는 "
+    "사용자에게 보일 최종 답변만 쓰세요. 사고 과정을 content 에서 반복하지 마세요."
 )
-REASONING_PARSE_RE = re.compile(r"<사고>\s*(.*?)\s*</사고>\s*(.+)", re.DOTALL)
+REGEN_JSON_SCHEMA = {
+    "type": "json_schema",
+    "json_schema": {
+        "name": "assistant_turn",
+        "schema": {
+            "type": "object",
+            "properties": {
+                "reasoning": {"type": "string"},
+                "content": {"type": "string"},
+            },
+            "required": ["reasoning", "content"],
+            "additionalProperties": False,
+        },
+    },
+}
 REGEN_MAX_TOKENS_THINK = 6144
 
 HANGUL_RE = re.compile(r"[가-힣]")
@@ -80,17 +94,20 @@ class Client:
         self.base_url, self.model, self.timeout = base_url, model, timeout
         self.session_local = threading.local()
 
-    def chat(self, messages, max_tokens, temperature):
+    def chat(self, messages, max_tokens, temperature, response_format=None):
         sess = getattr(self.session_local, "s", None)
         if sess is None:
             sess = self.session_local.s = requests.Session()
+        payload = {"model": self.model, "messages": messages,
+                   "max_tokens": max_tokens, "temperature": temperature}
+        if response_format is not None:
+            payload["response_format"] = response_format
         last_err = None
         for attempt in range(RETRIES):
             try:
                 r = sess.post(
                     f"{self.base_url}/chat/completions",
-                    json={"model": self.model, "messages": messages,
-                          "max_tokens": max_tokens, "temperature": temperature},
+                    json=payload,
                     timeout=self.timeout)
                 if r.status_code >= 500:
                     raise RuntimeError(f"server {r.status_code}: {r.text[:200]}")
@@ -289,11 +306,16 @@ def process_record(client, row):
         reasoning, final_ko = None, None
         for attempt in range(2):
             raw = client.chat(gen_messages, max_tokens=REGEN_MAX_TOKENS_THINK,
-                              temperature=0.9 if attempt == 0 else 0.7).strip()
-            m2 = REASONING_PARSE_RE.match(raw)
-            if m2:
-                reasoning, final_ko = m2.group(1).strip(), m2.group(2).strip()
-                break
+                              temperature=0.9 if attempt == 0 else 0.7,
+                              response_format=REGEN_JSON_SCHEMA).strip()
+            try:
+                obj = json.loads(raw)
+                if obj.get("reasoning", "").strip() and obj.get("content", "").strip():
+                    reasoning = obj["reasoning"].strip()
+                    final_ko = obj["content"].strip()
+                    break
+            except (json.JSONDecodeError, AttributeError):
+                pass  # max_tokens 절단 등 — 재시도
         if reasoning is None:
             raise ReasoningParseFail("reasoning_parse_fail")
         out_msgs.append({"role": "assistant", "content": final_ko,
