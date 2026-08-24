@@ -26,6 +26,7 @@ mkdir -p "$OUT"
 
 run() {
   local name=$1 input=$2
+  shift 2   # 나머지 인자는 변환기 추가 플래그 (예: --fanout-train-turns)
   if [ -f "$OUT/$name/data_text_document.idx" ]; then
     echo "== $name: SKIP (idx 존재)"; return
   fi
@@ -34,7 +35,7 @@ run() {
   nice -n 10 python "$REPO/toolkits/sft_data_preprocessing/build_alpha_sft_idxmap.py" \
     --input "$input" --tokenizer "$TOK" \
     --output-prefix "$OUT/$name/data" \
-    --seq-length 65536 --pad-doc-multiple 16 --workers "$NCORES" \
+    --seq-length 65536 --pad-doc-multiple 16 --workers "$NCORES" "$@" \
     || echo "!! $name FAILED (exit $?)"
 }
 
@@ -58,8 +59,14 @@ for f in "$SFT"/Nemotron-SFT-Multilingual-v2/*_ko_* \
   run "ml_$(basename "$f" .jsonl)" "$f"
 done
 
-# chat_v3: if 는 스모크 때 완료(스킵됨), chat 은 복원 완료 후 별도 실행:
+# chat_v3_if: 2026-08-24 부터 fan-out 재변환본(chat_v3_if_fanout)이 정본 —
+#   IF split 은 60.9%가 multi-True 라 중간 학습 턴의 reasoning 이 단일 렌더에서
+#   소실됨 (build_alpha_sft_idxmap.py 의도적 차이 #2). 구 chat_v3_if 디렉토리는
+#   대조·롤백용 보존, 블렌드(sft_40b_blend.yaml)는 fanout 을 가리킨다.
+# chat_v3_chat 은 fan-out 불요 (train_turns 전수 last-only, docs §2.5) —
+#   복원 완료 후 별도 실행:
 #   run chat_v3_chat "$SFT/Nemotron-SFT-Instruction-Following-Chat-v3/data/chat.with_prompts.jsonl"
-run chat_v3_if "$SFT/Nemotron-SFT-Instruction-Following-Chat-v3/data/instruction_following.jsonl"
+run chat_v3_if_fanout "$SFT/Nemotron-SFT-Instruction-Following-Chat-v3/data/instruction_following.jsonl" \
+  --fanout-train-turns
 
 echo "== ALL DONE ($(date +%H:%M:%S)) -> $OUT"

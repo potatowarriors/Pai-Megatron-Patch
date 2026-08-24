@@ -96,6 +96,14 @@ multi-True 예: 5메시지 대화의 `[F,F,T,F,T]` — **중간 assistant 턴도
 - `build_alpha_sft_idxmap.py` 는 이미 안전 — 리스트를 턴별로 일반 처리하고
   (`train_mask` 조립, ~L295), 리스트 부재 시 전 assistant 턴 True 폴백.
   multi-True 는 정상 마스킹된다. 코드 수정 불요.
+- **(2026-08-24 갱신)** 마스킹은 안전했지만 **reasoning 소실은 별개 문제로 실재**:
+  multi-True 의 중간 학습 턴은 템플릿이 history think 를 제거한 채 loss 를 받아
+  IF 전수 기준 reasoning 26.7% chars 소실 + 빈 `<think></think>` 를 정답으로
+  학습(no-think 오신호). → NVIDIA식 턴별 fan-out 채택:
+  `build_alpha_sft_idxmap.py --fanout-train-turns` 로 IF 재변환
+  (`chat_v3_if_fanout`, 변환기 docstring 의도적 차이 #2·유닛 6종).
+  chat split 은 전수 last-only 라 대상 아님. tool 루프 셋은 기존 렌더가
+  think 를 보존하므로 불요.
 - **loss mask 를 다루는 모든 신규 작업**(디버깅·통계·합성 데이터 생산)은
   train_turns 를 "마지막만 True" 로 가정하지 말고 리스트 그대로 소비할 것.
 - 학습 토큰 수 산정: last-only 가정 시 IF 의 학습 토큰이 과소평가된다.

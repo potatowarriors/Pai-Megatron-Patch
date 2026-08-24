@@ -59,10 +59,14 @@
   기본 True). 마지막 user 턴 이후의 assistant think만 원문 보존.
 - tool call은 XML 규약: `<tool_call><function=get_artwork_details><parameter=artwork_id>...`.
 - tool 응답은 assistant도 tool role도 아닌 **user 턴 속 `<tool_response>`**로 들어감.
-- 열린 설계 질문: 멀티턴 행에서 history think가 렌더 시 제거되므로, 과거 턴의
-  reasoning_content를 학습 대상으로 쓰려면 턴별로 별도 샘플로 펼쳐야 한다.
-  truncation 유지(추론 분포와 일치) vs 턴별 전개(reasoning 데이터 활용) 중 블렌드
-  설계 시 결정 필요.
+- ~~열린 설계 질문~~ **결정됨 (2026-08-24)**: 멀티턴 행에서 history think가 렌더 시
+  제거되므로, 과거 턴의 reasoning_content를 학습 대상으로 쓰려면 턴별로 별도
+  샘플로 펼쳐야 한다. → IF split 전수 실측(60.9% multi-True, 지워지는 reasoning
+  26.7% chars)으로 "등가" 논거가 붕괴해 **NVIDIA식 턴별 fan-out 채택**
+  (`build_alpha_sft_idxmap.py --fanout-train-turns`, 의도적 차이 #2).
+  각 True 턴 k를 `messages[:k+1]`로 잘라 그 턴이 라이브였던 순간의 컨텍스트를
+  재현 — truncation의 추론 분포 일치와 reasoning 학습을 동시에 얻는다.
+  tool 루프(swe/agentic)는 기존 렌더가 이미 think를 보존하므로 대상 아님.
 
 ## 재현
 

@@ -43,6 +43,10 @@ megatron_patch/template/helper.py::get_batch
   - metadata.train_turns (bool 리스트, 메시지 인덱스 기준) 가 있으면 true 인
     assistant 턴만 학습 (Nemotron Chat-v3 규약: 마지막 턴만). 없으면 모든
     assistant 턴 학습.
+  - --fanout-train-turns: multi-True 행을 True 턴별 messages[:k+1] 서브샘플로
+    전개 (expand_train_turns_fanout). 각 서브샘플에서 해당 턴이 마지막 user
+    이후가 되어 템플릿이 think 를 보존 — 추론에서 그 턴이 라이브였던 순간의
+    컨텍스트와 토큰열이 일치한다. loss 는 그 턴에만. (의도적 차이 #2 참조)
 
 ## 드롭 정책 (전부 stats 카운트 + 사이드카 jsonl 기록)
 
@@ -67,11 +71,16 @@ megatron_patch/template/helper.py::get_batch
   1. think-opener 토큰(<think>·개행)도 학습에 포함 — NVIDIA 는 청크별 인코딩이라
      gen-prompt 경계에서 제외 가능하지만, 우리는 전체 렌더 인코딩(추론과 동일한
      토큰화)이라 경계가 토큰 정렬을 깨뜨릴 수 있어 포함. 결정적 토큰 소량이라 무해.
-  2. thinking 멀티(user)턴 fan-out 미채택 — NVIDIA 는 user 턴마다 서브시퀀스로
-     복제해 각 턴의 reasoning 을 보존; 우리는 단일 시퀀스로 렌더된 그대로 학습
-     (히스토리 think 는 템플릿이 제거). train_turns 있는 셋(Chat-v3)은 어차피
-     마지막 턴만 학습이라 등가. 단일 user 턴 + tool 루프 대화도 등가
-     (last_user_idx 이후 assistant 턴은 reasoning 유지).
+  2. thinking 멀티(user)턴 fan-out — **--fanout-train-turns 로 채택** (2026-08-24,
+     IF 계열 적용). NVIDIA 는 user 턴마다 서브시퀀스로 복제해 각 턴의 reasoning
+     을 보존한다. 초기(08-23)엔 "train_turns 셋은 마지막 턴만 학습이라 등가"로
+     미채택했으나, §2.5 실측(docs/SFT_RL_DATASETS.md)이 IF split 의 60.9%가
+     multi-True 임을 밝혀 등가 논거가 붕괴 — 단일 시퀀스 렌더는 학습 대상 중간
+     턴을 think-제거 상태로 학습시켜 reasoning 소실(전수 26.7% chars) + no-think
+     오신호(빈 <think></think> 를 정답으로 학습)를 만든다. 플래그 on 시 multi-True
+     행을 True 턴별로 전개 (expand_train_turns_fanout docstring 참조).
+     train_turns 없는 셋(전 턴 학습)은 대상 아님 — 단일 user 턴 + tool 루프는
+     기존대로 등가 (last_user_idx 이후 assistant 턴은 reasoning 유지).
   3. 초과 길이 truncate 대신 드롭 — NVIDIA 는 pack_size 로 무언 head-truncate.
      증명/트레이스 절단 유해 판단 (docs/SFT_RL_DATASETS.md §2.4).
   4. injection 방어 추가 — NVIDIA 는 없음 (content 의 <|im_start|> 가 실토큰화됨).
@@ -232,6 +241,34 @@ def normalize_row(row: dict) -> Tuple[Optional[dict], Optional[str]]:
     }, None
 
 
+def expand_train_turns_fanout(norm: dict) -> List[dict]:
+    """multi-True train_turns 행 -> True 턴별 서브샘플 (의도적 차이 #2).
+
+    각 True assistant 턴 k 에 대해 messages[:k+1] + "k 만 학습" 서브샘플을
+    만든다. 잘린 시점의 렌더에서 턴 k 는 마지막 user 이후가 되어 템플릿이
+    그 턴의 think 를 보존한다 — 추론에서 그 턴이 생성되던 순간의 컨텍스트와
+    토큰열 일치 (마지막 True 턴의 서브샘플은 원본 전체 렌더와 동일).
+    True 가 1개 이하면 원본 그대로 1건 (last-only 행은 전개와 등가 —
+    IF 실측상 single-True 는 전부 마지막 턴, docs §2.5).
+    """
+    tt = norm["train_turns"]
+    if tt is None:
+        return [norm]
+    true_idxs = [i for i, m in enumerate(norm["messages"])
+                 if m["role"] == "assistant" and tt[i]]
+    if len(true_idxs) <= 1:
+        return [norm]
+    subs = []
+    for k in true_idxs:
+        subs.append({
+            "messages": norm["messages"][:k + 1],
+            "tools": norm["tools"],
+            "train_turns": [False] * k + [True],
+            "uuid": f"{norm['uuid']}#f{k}" if norm["uuid"] else "",
+        })
+    return subs
+
+
 def _iter_untrusted_strings(norm: dict) -> Iterator[str]:
     """injection 스캔 대상 — 사용자/모델 유래 자유 텍스트 전부."""
     for m in norm["messages"]:
@@ -382,17 +419,25 @@ _WORKER_TOK = None
 _WORKER_ARGS = None
 
 
-def _worker_init(tokenizer_path: str, mask_role_header: bool):
+def _worker_init(tokenizer_path: str, mask_role_header: bool,
+                 fanout_train_turns: bool = False):
     global _WORKER_TOK, _WORKER_ARGS
     from transformers import AutoTokenizer
     _WORKER_TOK = AutoTokenizer.from_pretrained(tokenizer_path)
-    _WORKER_ARGS = {"mask_role_header": mask_role_header, "hdr_cache": {}}
+    _WORKER_ARGS = {"mask_role_header": mask_role_header, "hdr_cache": {},
+                    "fanout": fanout_train_turns}
 
 
-def _worker_encode(rows: List[Any]) -> Tuple[List[EncodedSample], Counter, List[dict]]:
-    """행 청크 -> (인코딩 샘플, 드롭 카운터, 드롭 견본). str 행은 여기서 파싱."""
-    out, drops, dropped_rows = [], Counter(), []
+def _worker_encode(rows: List[Any]
+                   ) -> Tuple[List[EncodedSample], Counter, List[dict], Counter]:
+    """행 청크 -> (인코딩 샘플, 드롭 카운터, 드롭 견본, info 카운터).
+
+    str 행은 여기서 파싱. fan-out on 이면 drops 는 서브샘플 단위로 센다.
+    info: rows(입력 행 수) / fanout_rows(전개된 행) / fanout_subsamples(그 산출).
+    """
+    out, drops, dropped_rows, info = [], Counter(), [], Counter()
     for row in rows:
+        info["rows"] += 1
         if isinstance(row, str):
             try:
                 row = json.loads(row)
@@ -405,17 +450,22 @@ def _worker_encode(rows: List[Any]) -> Tuple[List[EncodedSample], Counter, List[
             drops[why] += 1
             dropped_rows.append({"reason": why, "uuid": str(row.get("uuid", ""))})
             continue
-        enc, why = render_and_mask(
-            _WORKER_TOK, norm,
-            mask_role_header=_WORKER_ARGS["mask_role_header"],
-            hdr_cache=_WORKER_ARGS["hdr_cache"],
-        )
-        if enc is None:
-            drops[why] += 1
-            dropped_rows.append({"reason": why, "uuid": norm["uuid"]})
-            continue
-        out.append(enc)
-    return out, drops, dropped_rows
+        subs = expand_train_turns_fanout(norm) if _WORKER_ARGS["fanout"] else [norm]
+        if len(subs) > 1:
+            info["fanout_rows"] += 1
+            info["fanout_subsamples"] += len(subs)
+        for sub in subs:
+            enc, why = render_and_mask(
+                _WORKER_TOK, sub,
+                mask_role_header=_WORKER_ARGS["mask_role_header"],
+                hdr_cache=_WORKER_ARGS["hdr_cache"],
+            )
+            if enc is None:
+                drops[why] += 1
+                dropped_rows.append({"reason": why, "uuid": sub["uuid"]})
+                continue
+            out.append(enc)
+    return out, drops, dropped_rows, info
 
 
 # ---------------------------------------------------------------------------
@@ -440,6 +490,10 @@ def get_args():
     p.add_argument("--no-mask-role-header", dest="mask_role_header",
                    action="store_false", default=True,
                    help='"assistant\\n" 헤더 토큰에도 loss 부여')
+    p.add_argument("--fanout-train-turns", action="store_true",
+                   help="multi-True train_turns 행을 True 턴별 서브샘플로 전개 "
+                        "— 중간 학습 턴의 reasoning 보존 (IF 계열용, "
+                        "docstring 의도적 차이 #2)")
     p.add_argument("--min-tokens", type=int, default=None,
                    help="렌더 길이가 이 값 이하인 샘플 제외 — 128k 장문 버킷 생성용 "
                         "(64k 버킷과의 중복 방지: 64k 버킷은 >64k를 too_long 드롭, "
@@ -477,6 +531,7 @@ def main():
     t0 = time.time()
     samples: List[EncodedSample] = []
     drops = Counter()
+    fanout_agg = Counter()
     n_rows = 0
     too_long_hist = Counter()
 
@@ -498,8 +553,9 @@ def main():
 
     def _consume(result):
         nonlocal n_rows, measured_train
-        encs, d, dropped_rows = result
-        n_rows += sum(d.values()) + len(encs)
+        encs, d, dropped_rows, info = result
+        n_rows += info["rows"]
+        fanout_agg.update({k: v for k, v in info.items() if k != "rows"})
         drops.update(d)
         for r in dropped_rows:
             dropped_f.write(json.dumps(r, ensure_ascii=False) + "\n")
@@ -524,12 +580,14 @@ def main():
                 samples.append(e)
 
     if args.workers <= 1:
-        _worker_init(args.tokenizer, args.mask_role_header)
+        _worker_init(args.tokenizer, args.mask_role_header,
+                     args.fanout_train_turns)
         for chunk in _chunks():
             _consume(_worker_encode(chunk))
     else:
         with mp.Pool(args.workers, initializer=_worker_init,
-                     initargs=(args.tokenizer, args.mask_role_header)) as pool:
+                     initargs=(args.tokenizer, args.mask_role_header,
+                               args.fanout_train_turns)) as pool:
             for result in pool.imap(_worker_encode, _chunks(), chunksize=1):
                 _consume(result)
     dropped_f.close()
@@ -545,7 +603,10 @@ def main():
         stats = {
             "input": args.input,
             "mode": "measure_only",
+            "fanout_train_turns": args.fanout_train_turns,
             "rows_read": n_rows,
+            "fanout_rows": int(fanout_agg["fanout_rows"]),
+            "fanout_subsamples": int(fanout_agg["fanout_subsamples"]),
             "rows_rendered": int(lens.size),
             "drops": dict(drops),
             "total_tokens": int(lens.sum()),
@@ -609,7 +670,10 @@ def main():
         "seq_length": args.seq_length,
         "pad_doc_multiple": args.pad_doc_multiple,
         "mask_role_header": args.mask_role_header,
+        "fanout_train_turns": args.fanout_train_turns,
         "rows_read": n_rows,
+        "fanout_rows": int(fanout_agg["fanout_rows"]),
+        "fanout_subsamples": int(fanout_agg["fanout_subsamples"]),
         "samples_kept": len(samples),
         "drops": dict(drops),
         "too_long_hist_tok_buckets": {str(k): v for k, v in sorted(too_long_hist.items())},

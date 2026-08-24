@@ -25,7 +25,10 @@ from build_alpha_sft_idxmap import (  # noqa: E402
     IM_END_ID,
     IM_START_ID,
     EncodedSample,
+    _worker_encode,
+    _worker_init,
     emit_document,
+    expand_train_turns_fanout,
     find_turn_spans,
     has_structural_injection,
     normalize_row,
@@ -177,6 +180,77 @@ def test_train_turns_length_mismatch_is_bad_row():
     row = {"messages": MULTITURN, "metadata": {"train_turns": [True]}}
     norm, why = normalize_row(row)
     assert norm is None and why == "bad_row"
+
+
+# ---------------------------------------------------------------------------
+# 3. train_turns fan-out (--fanout-train-turns, 의도적 차이 #2)
+# ---------------------------------------------------------------------------
+IF_MULTI = [
+    {"role": "user", "content": "q1"},
+    {"role": "assistant", "reasoning_content": "R1", "content": "a1"},
+    {"role": "user", "content": "q2"},
+    {"role": "assistant", "reasoning_content": "R2", "content": "a2"},
+]
+IF_TT = [False, True, False, True]  # IF multi-True (중간 턴도 학습)
+
+
+def test_fanout_multi_true_expands():
+    subs = expand_train_turns_fanout(_norm(IF_MULTI, train_turns=IF_TT))
+    assert len(subs) == 2
+    assert len(subs[0]["messages"]) == 2
+    assert subs[0]["train_turns"] == [False, True]
+    assert len(subs[1]["messages"]) == 4
+    assert subs[1]["train_turns"] == [False, False, False, True]
+    assert subs[0]["uuid"] != subs[1]["uuid"]
+
+
+def test_fanout_single_true_and_no_tt_passthrough():
+    norm = _norm(IF_MULTI, train_turns=[False, False, False, True])
+    assert expand_train_turns_fanout(norm) == [norm]   # last-only 는 전개 불요
+    norm = _norm(IF_MULTI)
+    assert expand_train_turns_fanout(norm) == [norm]   # tt 없음(전 턴 학습)도 대상 아님
+
+
+def test_fanout_subsample_trains_live_turn_reasoning(tok):
+    # 핵심 성질: 서브샘플0 에서 턴1이 "마지막 user 이후"가 되어 R1 이 보존·학습됨.
+    # (비-fanout 전체 렌더에서는 R1 이 텍스트에서 아예 소거 — 아래 대조)
+    subs = expand_train_turns_fanout(_norm(IF_MULTI, train_turns=IF_TT))
+    enc, why = render_and_mask(tok, subs[0], mask_role_header=False)
+    assert enc is not None, why
+    trained = tok.decode(enc.ids[enc.trainable].tolist())
+    assert "R1" in trained and "a1" in trained
+    full, _ = render_and_mask(tok, _norm(IF_MULTI, train_turns=IF_TT),
+                              mask_role_header=False)
+    assert "R1" not in tok.decode(full.ids.tolist())
+
+
+def test_fanout_last_subsample_matches_full_render(tok):
+    # 인수분해 성질: 마지막 True 턴의 서브샘플 == 전체 렌더 (토큰열 동일),
+    # 학습은 마지막 턴만, 히스토리 턴은 think-제거 상태로 컨텍스트에만 존재.
+    subs = expand_train_turns_fanout(_norm(IF_MULTI, train_turns=IF_TT))
+    enc, why = render_and_mask(tok, subs[1], mask_role_header=False)
+    assert enc is not None, why
+    full, _ = render_and_mask(tok, _norm(IF_MULTI), mask_role_header=False)
+    assert np.array_equal(enc.ids, full.ids)
+    trained = tok.decode(enc.ids[enc.trainable].tolist())
+    assert "R2" in trained and "a2" in trained
+    assert "a1" not in trained          # 히스토리 턴은 비학습
+    assert "<think></think>a1" in tok.decode(enc.ids.tolist())  # 컨텍스트엔 존재
+
+
+def test_fanout_worker_end_to_end():
+    import json as _json
+    _worker_init(TOKENIZER_DIR, True, fanout_train_turns=True)
+    row = _json.dumps({"messages": IF_MULTI, "uuid": "r0",
+                       "metadata": {"train_turns": IF_TT}})
+    out, drops, dropped, info = _worker_encode([row])
+    assert len(out) == 2 and not drops
+    assert info["rows"] == 1
+    assert info["fanout_rows"] == 1 and info["fanout_subsamples"] == 2
+    # off 면 1건 (기존 경로 불변)
+    _worker_init(TOKENIZER_DIR, True, fanout_train_turns=False)
+    out, drops, dropped, info = _worker_encode([row])
+    assert len(out) == 1 and info["fanout_rows"] == 0
 
 
 # ---------------------------------------------------------------------------
