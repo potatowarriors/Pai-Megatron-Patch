@@ -74,6 +74,22 @@ python3 $K/export_ko_chat.py --dataset "$K/artifacts/ko_chat_b_r1/**/*.parquet" 
   토큰 형태), r1_a 부분 산출 0/4,018. **r1_a results.jsonl 은 가드 이전 시작이라
   이관 시 export 게이트 통과 필수.**
 
+## reasoning 규약 (2026-08-24 결함 수정 — 사용자 결정: 폐기 후 재생성)
+
+chat_v3 는 **전 행이 `reasoning_content` 보유**(chat·IF 전수 실측)이고 변환기가
+이를 렌더하므로, 한국어 산출물만 think 를 비우면 "한국어→사고 생략" 언어-모드
+상관을 학습시킨다. 수정:
+- regen(chat): `<사고>…</사고>` 마커로 reasoning+답변 동시 생성 → 파싱 부착
+  (2회 파싱 실패 시 리젝 `reasoning_parse_fail`).
+- full_translate(IF): **학습 턴만** 소스 reasoning 을 번역 부착 (비학습 턴 think
+  는 템플릿이 history 에서 제거하므로 생략 — 비용 절약).
+- 트랙 B: `AssistantTurn.reasoning` 구조화 필드 (identity 전례).
+- 신규 행은 `ko_synthesis.think: true`. 구판 think-less 행: regen분 폐기
+  (`results_nothink_discarded.jsonl`) 후 재생성, IF분은
+  `supplement_if_reasoning.py` 로 소급 번역(r1 은 redo 체인이 자동 수행,
+  **r2_a 는 파일이 조용해진 뒤** — 완주 후 packaging 때 실행. 동시 append 와
+  finalize 교체가 경합하므로 quiescent 필수).
+
 ## 함정 (재발 방지)
 
 1. **빈 system content 를 LLM에 넣으면 메타응답**("번역할 지시문을 주세요")이

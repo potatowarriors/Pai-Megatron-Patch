@@ -61,6 +61,15 @@ def _norm(t):
     return re.sub(r"\s+", " ", (t or "").strip().lower())
 
 
+def _assistant_msg(turn):
+    """identity/export_sft 전례: reasoning 있으면 reasoning_content 로 부착."""
+    msg = {"role": "assistant", "content": turn["content"].strip()}
+    reasoning = (turn.get("reasoning") or "").strip()
+    if reasoning:
+        msg["reasoning_content"] = reasoning
+    return msg
+
+
 def build_record(row):
     uc = _as_dict(row.get("user_turn"))
     ac = _as_dict(row.get("assistant_turn"))
@@ -71,15 +80,15 @@ def build_record(row):
         h = int(hashlib.sha256(str(row.get("record_uuid")).encode()).hexdigest(), 16)
         messages.append({"role": "system", "content": GENERIC_SYSTEMS[h % len(GENERIC_SYSTEMS)]})
     messages.append({"role": "user", "content": uc["message"].strip()})
-    messages.append({"role": "assistant", "content": ac["content"].strip()})
+    messages.append(_assistant_msg(ac))
     fu, a2 = _as_dict(row.get("followup_user")), _as_dict(row.get("assistant_turn_2"))
     if fu.get("message") and a2.get("content"):
         messages.append({"role": "user", "content": fu["message"].strip()})
-        messages.append({"role": "assistant", "content": a2["content"].strip()})
+        messages.append(_assistant_msg(a2))
         fu2, a3 = _as_dict(row.get("followup_user_2")), _as_dict(row.get("assistant_turn_3"))
         if fu2.get("message") and a3.get("content"):
             messages.append({"role": "user", "content": fu2["message"].strip()})
-            messages.append({"role": "assistant", "content": a3["content"].strip()})
+            messages.append(_assistant_msg(a3))
     return {
         "messages": messages,
         "used_in": ["sft"],
@@ -141,7 +150,8 @@ def main():
         if rec is None:
             drops["missing_turn"] += 1
             continue
-        if any(SPECIAL_TOKEN_RE.search(m["content"]) for m in rec["messages"]):
+        if any(SPECIAL_TOKEN_RE.search(m.get(f) or "")
+               for m in rec["messages"] for f in ("content", "reasoning_content")):
             drops["special_token_literal"] += 1
             continue
         a_texts = [m["content"] for m in rec["messages"] if m["role"] == "assistant"]

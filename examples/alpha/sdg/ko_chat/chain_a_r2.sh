@@ -25,13 +25,13 @@ if ! python3 "$K/extract_sources.py" --num-if 250000 --num-chat 650000 \
   exit 1
 fi
 N_SEEDS=$(wc -l < "$K/seeds_r2.jsonl")
-say "r2 시드 $N_SEEDS 행 — 트랙 A r2 가동 (workers 128)"
+say "r2 시드 $N_SEEDS 행 — 트랙 A r2 가동 (workers 96)"
 
 for i in $(seq 1 8); do
   wait_server || { say "CHAIN HALT: 서버 복구 실패"; exit 1; }
   say "A r2 실행 round $i"
   python3 "$K/translate_regen.py" --seeds "$K/seeds_r2.jsonl" --out "$K/out/r2_a" \
-    --base-url "$BASE" --workers 128 >> "$K/out/r2_a.log" 2>&1
+    --base-url "$BASE" --workers 96 >> "$K/out/r2_a.log" 2>&1
   DONE=$(( $(cat "$K/out/r2_a/results.jsonl" 2>/dev/null | wc -l) \
         + $(cat "$K/out/r2_a/rejects.jsonl" 2>/dev/null | wc -l) ))
   say "round $i 종료: done=$DONE / $N_SEEDS"

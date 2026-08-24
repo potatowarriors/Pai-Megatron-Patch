@@ -63,6 +63,10 @@ class UserTurn(BaseModel):
 
 
 class AssistantTurn(BaseModel):
+    # chat_v3 전 행이 reasoning 보유(전수 실측) — 한국어 데이터만 think 를 비우면
+    # 언어↔nothink 상관을 학습시킨다 (2026-08-24). identity 파이프라인과 동일 구조.
+    reasoning: str = Field(
+        description="답변 전 사고 과정 (한국어 — 요청 파악, 접근, 주의점을 간결하되 실질적으로)")
     content: str = Field(description="AI 어시스턴트 응답 전문 (한국어 존댓말)")
 
 
@@ -117,7 +121,9 @@ PROMPT_ASSISTANT = """\
 4. 목록·표·코드블록은 내용상 도움이 될 때만 사용한다. 모든 답변을 목록으로 만들지 말라.
 5. 사실을 지어내지 않는다. 불확실하면 불확실하다고 말하고 확인 방법을 안내한다.
 6. 자신이 어느 회사의 어떤 모델인지 언급하지 않는다.
-7. 번역투를 피하고 자연스러운 한국어로 쓴다."""
+7. 번역투를 피하고 자연스러운 한국어로 쓴다.
+8. reasoning 필드에는 답변 전 사고 과정을 한국어로 쓴다 — 요청의 핵심, 접근,
+   주의점. content 에서 사고 과정을 반복하지 않는다."""
 
 PROMPT_FOLLOWUP = """\
 아래 대화의 사용자가 이어서 할 법한 **후속 발화 하나**를 만드세요.

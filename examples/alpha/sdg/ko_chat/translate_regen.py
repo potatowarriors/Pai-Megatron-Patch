@@ -56,6 +56,17 @@ REGEN_SYSTEM_SUFFIX = (
     "사용자가 요구한 출력 형식(JSON 키, 시작 단어 등)이 있으면 그 형식을 지키세요."
 )
 
+# chat_v3 는 전 행이 reasoning_content 보유(전수 실측) — 한국어 산출물도 think 를
+# 채워야 언어↔nothink 상관이 생기지 않는다 (2026-08-24 사용자 결정: 폐기 후 재생성).
+REGEN_REASONING_INSTR = (
+    "\n\n응답 형식: 먼저 <사고> 태그 안에 답변을 준비하는 사고 과정을 한국어로 "
+    "쓰세요 — 요청의 핵심 파악, 접근 방법, 주의점을 간결하되 실질적으로. "
+    "태그를 닫은 뒤에는 사용자에게 보일 최종 답변만 쓰세요. 사고 과정을 최종 "
+    "답변에서 반복하지 마세요. 형식:\n<사고>\n(사고 과정)\n</사고>\n(최종 답변)"
+)
+REASONING_PARSE_RE = re.compile(r"<사고>\s*(.*?)\s*</사고>\s*(.+)", re.DOTALL)
+REGEN_MAX_TOKENS_THINK = 6144
+
 HANGUL_RE = re.compile(r"[가-힣]")
 LEAK_RE = re.compile(r"gemma|gemini|구글이 (?:저를|나를) |google(?:이|에서) (?:저를|나를)", re.IGNORECASE)
 META_RE = re.compile(r"번역할 .{0,10}(?:제공|입력)해 주|번역해 드리겠습니다|Please provide")
@@ -109,6 +120,10 @@ def split_paragraph_chunks(text: str, limit: int):
 
 
 class MetaTranslation(Exception):
+    pass
+
+
+class ReasoningParseFail(Exception):
     pass
 
 
@@ -173,8 +188,9 @@ def qc_checks(src_msgs, out_msgs, mode):
     if not final.strip():
         return {"kind": "hard", "reason": "empty_final", "idx": None}
     for m in out_msgs:
-        if m["content"] and SPECIAL_TOKEN_RE.search(m["content"]):
-            return {"kind": "hard", "reason": "special_token_literal", "idx": None}
+        for field in ("content", "reasoning_content"):
+            if m.get(field) and SPECIAL_TOKEN_RE.search(m[field]):
+                return {"kind": "hard", "reason": "special_token_literal", "idx": None}
     user_text = " ".join(m["content"] for m in out_msgs if m["role"] == "user")
     if LEAK_RE.search(final) and not LEAK_RE.search(user_text):
         return {"kind": "hard", "reason": "teacher_leak", "idx": None}
@@ -232,15 +248,31 @@ def process_record(client, row):
                 if not (m["role"] == "system" and not (m["content"] or "").strip())]
     out_msgs, prev_pair, first_user_ko = [], None, None
 
+    # 원본 train_turns 를 null-system 드롭 후 인덱스에 정렬 (IF reasoning 번역 대상 판별)
+    n_dropped = len(row["messages"]) - len(src_msgs)
+    src_tt = (row.get("metadata") or {}).get("train_turns")
+    if isinstance(src_tt, list) and len(src_tt) == len(row["messages"]):
+        src_tt = src_tt[n_dropped:]
+    else:
+        src_tt = [m["role"] == "assistant" for m in src_msgs]
+
     if mode == "full_translate":
         translate_upto = len(src_msgs)
     else:
         translate_upto = len(src_msgs) - 1
 
-    for m in src_msgs[:translate_upto]:
+    for i, m in enumerate(src_msgs[:translate_upto]):
         ko = translate_message(client, m["role"], m["content"], prev_pair,
                                constraint_ctx=first_user_ko)
-        out_msgs.append({"role": m["role"], "content": ko})
+        out_m = {"role": m["role"], "content": ko}
+        # 학습 턴의 사고 과정은 소스에 원문이 있으므로 번역으로 충실 복원.
+        # 비학습 턴의 think 는 chat template 이 history 에서 제거하므로 생략(비용).
+        if (mode == "full_translate" and src_tt[i] and m["role"] == "assistant"
+                and m.get("reasoning_content")):
+            out_m["reasoning_content"] = translate_message(
+                client, "assistant", m["reasoning_content"], None,
+                constraint_ctx=None)
+        out_msgs.append(out_m)
         prev_pair = (m["content"], ko)
         if m["role"] == "user" and first_user_ko is None:
             first_user_ko = ko
@@ -250,12 +282,22 @@ def process_record(client, row):
         gen_messages = []
         sys_texts = [m["content"] for m in out_msgs if m["role"] == "system"]
         sys_content = (sys_texts[0] + "\n\n" if sys_texts else "") + REGEN_SYSTEM_SUFFIX \
-            + " " + length_hint(len(final_src["content"]))
+            + " " + length_hint(len(final_src["content"])) + REGEN_REASONING_INSTR
         gen_messages.append({"role": "system", "content": sys_content})
-        gen_messages.extend(m for m in out_msgs if m["role"] != "system")
-        final_ko = client.chat(gen_messages, max_tokens=REGEN_MAX_TOKENS,
-                               temperature=0.9).strip()
-        out_msgs.append({"role": "assistant", "content": final_ko})
+        gen_messages.extend({"role": m["role"], "content": m["content"]}
+                            for m in out_msgs if m["role"] != "system")
+        reasoning, final_ko = None, None
+        for attempt in range(2):
+            raw = client.chat(gen_messages, max_tokens=REGEN_MAX_TOKENS_THINK,
+                              temperature=0.9 if attempt == 0 else 0.7).strip()
+            m2 = REASONING_PARSE_RE.match(raw)
+            if m2:
+                reasoning, final_ko = m2.group(1).strip(), m2.group(2).strip()
+                break
+        if reasoning is None:
+            raise ReasoningParseFail("reasoning_parse_fail")
+        out_msgs.append({"role": "assistant", "content": final_ko,
+                         "reasoning_content": reasoning})
 
     fail = qc_checks(src_msgs, out_msgs, mode)
     qc_note = None
@@ -277,12 +319,7 @@ def process_record(client, row):
             fail = None
 
     meta = dict(row.get("metadata") or {})
-    n_dropped = len(row["messages"]) - len(src_msgs)
-    tt = meta.get("train_turns")
-    if isinstance(tt, list) and len(tt) == len(row["messages"]):
-        meta["train_turns"] = tt[n_dropped:]
-    else:
-        meta["train_turns"] = [False] * (len(out_msgs) - 1) + [True]
+    meta["train_turns"] = src_tt
     meta.update({
         "source_uuid": row.get("uuid"),
         "source_split": row.get("_source_split"),
@@ -290,7 +327,8 @@ def process_record(client, row):
             "method": ("translate_context_regen_final" if mode == "regen"
                        else "full_translate"),
             "model": "google/gemma-4-31B-it",
-            "date": "2026-08-23",
+            "date": "2026-08-24",
+            "think": True,
             **({"qc_note": qc_note} if qc_note else {}),
         },
         "model": "google/gemma-4-31B-it",
@@ -347,7 +385,7 @@ def main():
         try:
             try:
                 out_row, fail = process_record(client, row)
-            except MetaTranslation as e:
+            except (MetaTranslation, ReasoningParseFail) as e:
                 out_row, fail = None, str(e)
             with lock:
                 if fail:
