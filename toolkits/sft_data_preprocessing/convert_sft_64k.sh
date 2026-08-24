@@ -44,8 +44,13 @@ run identity_v1      "$SFT/alpha-SFT-Identity-v1/data/train.jsonl"
 run cuda_v1          "$SFT/Nemotron-SFT-CUDA-v1"
 run safety_v2        "$SFT/Nemotron-SFT-Safety-v2"
 run math_proofs_v2   "$SFT/Nemotron-Math-Proofs-v2"
-run swe_v3           "$SFT/Nemotron-SFT-SWE-v3/data"
-run arc_agi_v1       "$SFT/Nemotron-SFT-ARC-AGI-v1"
+# swe_v3: 2026-08-24 부터 keepthink 재변환본(swe_v3_keepthink)이 정본 — 템플릿
+#   DSV4 tool-시나리오 분기로 멀티 user 턴 궤적(행 2.3%)의 히스토리 reasoning 이
+#   보존됨 (verify_chat_template.py §6). 구 swe_v3 디렉토리는 대조·롤백용 보존.
+run swe_v3_keepthink "$SFT/Nemotron-SFT-SWE-v3/data"
+# arc_agi_v1: 2026-08-24 keepthink 재변환 (tool 멀티턴 22,957행 = 9.1% —
+#   swe 주석 참조; 구 디렉토리 보존)
+run arc_agi_v1_keepthink "$SFT/Nemotron-SFT-ARC-AGI-v1"
 run math_v4          "$SFT/Nemotron-SFT-Math-v4"
 run opencode_v1      "$SFT/Nemotron-SFT-OpenCode-v1"
 run science_v2       "$SFT/Nemotron-SFT-Science-v2"

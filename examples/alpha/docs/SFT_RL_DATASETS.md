@@ -169,7 +169,7 @@ multi-True 예: 5메시지 대화의 `[F,F,T,F,T]` — **중간 assistant 턴도
 2. ultra_v3 세트 + §2.2 4종의 **전수 길이 재측정**(tokenizer_v5) → 64k 버킷 구성 확정
 3. Multilingual-v2에서 hi 제외 (alpha 미지원 언어 — `LC_DATASETS.md`의 20+2 언어 기준)
 4. ~~chat template 정의~~ **완료 (2026-08-04)**: `tokenizer_v5/chat_template.jinja` =
-   Nemotron 3 Ultra 템플릿의 바이트 동일 사본(4사 비교 후 채택 — Kimi-K3/Qwen3.5/
+   Nemotron 3 Ultra 템플릿 기반, 2026-08-24 DSV4 tool-시나리오 분기 추가로 바이트 동일 아님(4사 비교 후 채택 — Kimi-K3/Qwen3.5/
    GLM-5.2와 think·tool 규약 수렴 확인). `tokenizer_config.json`에 등록,
    `tools/verify_chat_template.py` 24개 테스트 통과. 변환기 구현 시 **필수 규약 2건**:
    ① 멀티턴 loss mask는 **assistant 스팬 스캔 방식**(prefix-diff는 히스토리 think 제거

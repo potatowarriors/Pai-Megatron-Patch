@@ -11,7 +11,21 @@
 {% endmacro %}
 {%- set enable_thinking = enable_thinking if enable_thinking is defined else True %}
 {%- set medium_effort = medium_effort if medium_effort is defined else False %}
-{%- set truncate_history_thinking = truncate_history_thinking if truncate_history_thinking is defined else True %}
+{#- DSV4-style scenario split (2026-08-24, alpha divergence from Nemotron 3 Ultra):
+    tool-calling scenarios (tools declared, or tool_calls / tool turns present)
+    keep the full reasoning history across user-turn boundaries; general
+    conversation keeps the original strip-on-new-user behavior. An explicit
+    truncate_history_thinking kwarg overrides the scenario default. -#}
+{%- set tsns = namespace(tool_scenario = false) %}
+{%- if tools is defined and tools is not none and tools is not string and tools is iterable and tools | length > 0 %}
+  {%- set tsns.tool_scenario = true %}
+{%- endif %}
+{%- for m in messages %}
+  {%- if m["role"] == "tool" or (m.tool_calls is defined and m.tool_calls) %}
+    {%- set tsns.tool_scenario = true %}
+  {%- endif %}
+{%- endfor %}
+{%- set truncate_history_thinking = truncate_history_thinking if truncate_history_thinking is defined else (not tsns.tool_scenario) %}
 {%- set ns = namespace(last_user_idx = -1) %}
 {%- set loop_messages = messages %}
 {%- for m in loop_messages %}

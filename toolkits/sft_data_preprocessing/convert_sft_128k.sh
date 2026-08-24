@@ -35,8 +35,10 @@ run() {
 
 # >64k 꼬리 보유 세트만 (측정 too_long > 0), 작은 것부터
 run math_proofs_v2   "$SFT/Nemotron-Math-Proofs-v2"
-run swe_v3           "$SFT/Nemotron-SFT-SWE-v3/data"
-run arc_agi_v1       "$SFT/Nemotron-SFT-ARC-AGI-v1"
+# swe_v3: 2026-08-24 keepthink 재변환 (64k 드라이버 주석 참조; >64k 경계 이월
+#   행이 이 버킷으로 넘어오므로 두 버킷을 같은 템플릿으로 동시 재변환해야 여집합 정확)
+run swe_v3_keepthink "$SFT/Nemotron-SFT-SWE-v3/data"
+run arc_agi_v1_keepthink "$SFT/Nemotron-SFT-ARC-AGI-v1"
 run math_v4          "$SFT/Nemotron-SFT-Math-v4"
 run science_v2       "$SFT/Nemotron-SFT-Science-v2"
 run cp_v2            "$SFT/Nemotron-SFT-Competitive-Programming-v2"

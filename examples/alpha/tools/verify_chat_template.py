@@ -12,6 +12,14 @@ Template provenance & 결정 근거 (2026-08-04, docs/SFT_RL_DATASETS.md 연계)
   Kimi-K3 에서 추가 채택한 것: content 세그먼트 인코딩 시 special-token 파싱 금지
   (아래 injection 테스트가 규칙을 강제).
 
+  분기 (2026-08-24, DSV4 미러 — 이후 바이트 동일 아님, 의도적 이탈 1건):
+  tool-calling 시나리오(tools 선언 또는 tool_calls/tool 턴 존재)는
+  truncate_history_thinking 기본값이 False 가 되어 reasoning 이 user 턴 경계
+  너머로 보존된다 (DeepSeek-V4 Interleaved Thinking Fig.7(a); 일반 대화는
+  7(b) = 기존 제거 유지). 명시 kwarg 는 항상 시나리오 기본값에 우선.
+  §6 이 이 분기를 검증. SFT 데이터는 같은 템플릿으로 렌더되므로 학습·추론
+  분포가 자동 일치 (tool 셋 재변환: swe_v3_keepthink).
+
 검증 항목:
   1. jinja 파일 ↔ tokenizer_config.json["chat_template"] 동기화
   2. 렌더 시나리오 매트릭스 (think 유지/제거, enable_thinking, medium_effort,
@@ -21,6 +29,8 @@ Template provenance & 결정 근거 (2026-08-04, docs/SFT_RL_DATASETS.md 연계)
      불성립함을 실증** (SFT 전처리기는 스팬 방식을 써야 함)
   5. injection 방어: content 안의 <|im_end|> 문자열이 특수 토큰으로 파싱되는
      공격 경로 확인 + split_special_tokens=True 방어 확인
+  6. DSV4 시나리오 분기: tool 시나리오 보존(user 경계 포함)/일반 대화 제거/
+     양방향 명시 오버라이드/tools-선언만/Terminus식 비발동/비-tool 렌더 불변
 
 Usage: python3 examples/alpha/tools/verify_chat_template.py
 """
@@ -185,6 +195,47 @@ def main():
     check("defense: split_special_tokens=True neutralizes content specials",
           2 not in safe_ids and 3 not in safe_ids)
     check("defense roundtrip preserves text", tok.decode(safe_ids) == evil)
+
+    print("== 6. DSV4 tool-scenario branch (truncate default)")
+    tool_conv = [
+        {"role": "user", "content": "q1"},
+        {"role": "assistant", "reasoning_content": "R1", "content": "",
+         "tool_calls": [{"function": {"name": "f", "arguments": {"x": "1"}}}]},
+        {"role": "tool", "content": "out1"},
+        {"role": "assistant", "reasoning_content": "R2", "content": "a1"},
+        {"role": "user", "content": "q2"},
+        {"role": "assistant", "reasoning_content": "R3", "content": "a2"},
+    ]
+    chat_conv = [
+        {"role": "user", "content": "q1"},
+        {"role": "assistant", "reasoning_content": "R1", "content": "a1"},
+        {"role": "user", "content": "q2"},
+        {"role": "assistant", "reasoning_content": "R2", "content": "a2"},
+    ]
+    out = r(tool_conv)
+    check("tool scenario keeps reasoning across user boundary",
+          "R1" in out and "R2" in out and "R3" in out)
+    out = r(chat_conv)
+    check("general chat still strips history think",
+          "R1" not in out and "R2" in out)
+    out = r(tool_conv, truncate_history_thinking=True)
+    check("explicit True overrides tool scenario (strips)",
+          "R1" not in out and "R2" not in out and "R3" in out)
+    out = r(chat_conv, truncate_history_thinking=False)
+    check("explicit False overrides general chat (keeps)", "R1" in out)
+    out = r(chat_conv, tools=tools)
+    check("tools declaration alone triggers tool scenario", "R1" in out)
+    terminus = [
+        {"role": "user", "content": "q1"},
+        {"role": "assistant", "reasoning_content": "R1",
+         "content": "<tool_call>fake text</tool_call>"},
+        {"role": "user", "content": "<tool_output>x</tool_output>"},
+        {"role": "assistant", "reasoning_content": "R2", "content": "a"},
+    ]
+    check("Terminus-style (no tool structures) stays general chat",
+          "R1" not in r(terminus))
+    check("non-tool last-turn think unchanged by branch",
+          "<think>\nR2</think>a2" in r(chat_conv))
 
     print(f"\n{'='*50}\nRESULT: {PASS} passed, {FAIL} failed")
     sys.exit(1 if FAIL else 0)
