@@ -1163,6 +1163,7 @@ emit 병목은 소스 `.bin`에서 bin 멤버 문서를 **무작위로 읽는 NF
 - **LC Entry Gate**: `docs/LC_ENTRY_GATE.md` — **P3 종료 직후, LC-A 시작 전에 통과해야 하는 검증 게이트의 단일 진입점** (2026-08-18): GDN CP 클러스터 검증(`feature/gdn-context-parallel` 러너북 4단계) + FlashQLA 커널 벤치(`study/flashqla_poc.md`), GO/NO-GO 판정표, 통과 후 커밋 단위(머지·가드 스왑·LC preset). §1.5(varlen-thd 브랜치): THD 문서 격리 검증 트랙
 - **Muon Offload Backport**: `docs/MUON_OFFLOAD_BACKPORT.md` — PR #6244 표적 백포트 S0~S5 단계별 검증 로그: 코어 이식→플러밍→layer_wise 통합→체크포인트 round-trip→**128K@CP8 GO 실측**. A/B 판정 기준 교정(비결정 포락선) 포함
 - **Nondeterminism Probe**: `study/nondeterminism_probe.md` — 실행 간 비결정의 원천 실증(= TE fused attention bwd 단독; fla·conv·embedding 무혐의), 판정 포락선 산정 근거, NaN 오판 함정 2건. 재현 스크립트 `study/nondeterminism_probe.py`
+- **Interleaved Thinking**: `docs/INTERLEAVED_THINKING.md` — **think-히스토리 규약 정비의 단일 진입점** (2026-08-24): DSV4식 tool-시나리오 템플릿 분기(user 턴 경계 너머 reasoning 보존) + IF fan-out + swe/arc keepthink 재변환, 판정 원칙(학습 조건부=배포 조건부)·전수 스캔 실측·agentic_v2 미편입 결정, 새 SFT 셋 추가 시 규칙 7건
 - **LC Repack Runbook**: `docs/LC_REPACK_RUNBOOK.md` — **LC 데이터 재패킹 절차의 단일 진입점** (2026-08-21, GPU 불필요·별도 세션 실행용): THD+CP가 요구하는 `--pad-doc-multiple 16` 재패킹(4종) + filler 소스 결정(3안 — stage2 unpacked 소실 발견) + 128k 패킹 예고, %16 정렬 검증 스크립트 포함
 
 ## Muon Optimizer Quick Reference

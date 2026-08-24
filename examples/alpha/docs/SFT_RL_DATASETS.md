@@ -69,6 +69,10 @@ SpecializedDomains-Finance-v1(30G, super 10회 표기).
 nano: Agentic-v1·IF-Chat-v1·Math-Proofs-v1·**Math-v2(192G)**·SWE-v1(11G)·Science-v1.
 → 기본적으로 상위 버전이 있으면 제외. 예외 검토: Finance-v1(대체재 없음),
 Math-v2(nano급 실증 — Math-v4와 중복도 확인 후 택1).
+**Agentic-v2 미편입 확정 (2026-08-24 사용자 결정)**: used_in=super·Agentic-v3
+부재 — ultra_v3 재현 원칙 우선. user-경계 tool reasoning 최대 질량(interactive_agent
+74.9% 행·reasoning 63%)이 이 셋에 있다는 실측은 기록으로 남김 — 에이전트 능력
+보강 필요 시 재검토 1순위. 상세: `INTERLEAVED_THINKING.md` §5.
 
 ### 2.4 길이 실측 요약 (파일당 3k행 샘플, chars/4 근사)
 
