@@ -60,6 +60,13 @@
 | [../study/lc_a_early_eval.md](../study/lc_a_early_eval.md) | LC-A iter100 위치별 NLL + NIAH 조기 검증 GO (2026-08-23) |
 | [../study/netbench/](../study/netbench/) | 노드 간 TCP/NCCL 실측 스크립트 (IB 부재 확인) |
 
+## sdg/ (합성 데이터 파이프라인 — docs 밖, 코드와 동거)
+
+| 문서 | 한 줄 |
+|---|---|
+| [../sdg/ko_chat/README.md](../sdg/ko_chat/README.md) | 한국어 SFT chat 합성 — 트랙A 번역+재생성 / 트랙B 네이티브, 교사 Gemma-4-31B + OxAlpha(무료), 무인 체인·게이트·GPU 창구·함정 (2026-08-23~) |
+| [../sdg/identity/README.md](../sdg/identity/README.md) | 정체성 SFT/RL 데이터 생성 (DataDesigner, identity_card 단일 진실 원천) (2026-08-07~10) |
+
 ## 리포 루트 docs/
 
 | 문서 | 한 줄 |
