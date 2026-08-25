@@ -52,6 +52,11 @@ OPENROUTER_PROVIDER = "openrouter"
 # 독립 심판 (2026-08-25): Gemma 셀프심판은 관대함이 실증(ko_grounded 전례) —
 # 무료 stealth 모델 OxAlpha 를 심판으로 쓰면 생성 교사와 독립이고 비용 0.
 OPENROUTER_JUDGE_MODEL = "stealth/ox-alpha"
+# reasoning effort 최대 (사용자 지시 2026-08-25). 숨은 사고가 max_tokens 를 소비하므로
+# OR 호출은 예산을 크게 잡는다 (translate_regen.py 와 동일 정책).
+OR_REASONING_EFFORT = "high"
+OR_GEN_MAX_TOKENS = 24576
+OR_JUDGE_MAX_TOKENS = 12288
 
 HANGUL_RE = re.compile(r"[가-힣]")
 LEAK_RE = re.compile(r"gemma|gemini|(?:구글|google)(?:이|에서)?\s*(?:만든|개발한|훈련시킨)", re.IGNORECASE)
@@ -244,9 +249,30 @@ def validate_ko_chat(df: pd.DataFrame) -> pd.DataFrame:
 # =============================================================================
 
 def build_config(seed_path: Path, model_id: str, max_parallel: int, timeout: int,
-                 judge_backend: str = "local"):
-    model_configs = [
-        dd.ModelConfig(
+                 judge_backend: str = "local", gen_backend: str = "local"):
+    if gen_backend == "openrouter":
+        # 재배분(2026-08-25): OxAlpha 의 강점(한국 제도 지식)이 가장 필요한 곳이 이 트랙.
+        # 숨은 사고는 영어라 effort low 로 억제하고 한국어 사고는 구조화 필드로 받는다.
+        gen_cfg = dd.ModelConfig(
+            alias=MODEL_ALIAS,
+            model=OPENROUTER_JUDGE_MODEL,
+            provider=OPENROUTER_PROVIDER,
+            # OxAlpha 의 간헐 429 가 헬스체크에서 나면 재시도 없이 런이 즉사(실측) —
+            # 런 중 429 는 DD 가 재시도·유예하므로 헬스체크만 건너뛴다
+            skip_health_check=True,
+            inference_parameters=dd.ChatCompletionInferenceParams(
+                temperature=dd.UniformDistribution(
+                    params=dd.UniformDistributionParams(low=0.80, high=1.05)
+                ),
+                top_p=0.95,
+                max_tokens=OR_GEN_MAX_TOKENS,
+                max_parallel_requests=max_parallel,
+                timeout=timeout,
+                extra_body={"reasoning": {"effort": OR_REASONING_EFFORT}},
+            ),
+        )
+    else:
+        gen_cfg = dd.ModelConfig(
             alias=MODEL_ALIAS,
             model=model_id,
             provider=VLLM_PROVIDER,
@@ -260,19 +286,22 @@ def build_config(seed_path: Path, model_id: str, max_parallel: int, timeout: int
                 timeout=timeout,
             ),
         )
-    ]
+    model_configs = [gen_cfg]
     if judge_backend == "openrouter":
         model_configs.append(
             dd.ModelConfig(
                 alias=JUDGE_ALIAS,
                 model=OPENROUTER_JUDGE_MODEL,
                 provider=OPENROUTER_PROVIDER,
+                skip_health_check=True,
                 inference_parameters=dd.ChatCompletionInferenceParams(
                     temperature=0.2,
                     top_p=0.9,
-                    max_tokens=2048,
-                    max_parallel_requests=24,   # 제공자 429 경계(~40) 아래
+                    max_tokens=OR_JUDGE_MAX_TOKENS,
+                    # OR 계정 총 동시 예산 ~40: A 재생성 ~11 + B-OR 생성 16 + 심판(두 슬라이스) 12
+                    max_parallel_requests=12,
                     timeout=timeout,
+                    extra_body={"reasoning": {"effort": OR_REASONING_EFFORT}},
                 ),
             )
         )
@@ -454,28 +483,33 @@ def main() -> None:
     parser.add_argument("--resume", action="store_true")
     parser.add_argument("--judge-backend", choices=["local", "openrouter"], default="local",
                         help="openrouter = OxAlpha 독립 심판 (환경변수 OPENROUTER 필요)")
+    parser.add_argument("--gen-backend", choices=["local", "openrouter"], default="local",
+                        help="openrouter = 생성 컬럼 전부 OxAlpha (슬라이스 단위로만 — 레코드별 폴백 없음)")
     args = parser.parse_args()
 
     if not args.seed_path.exists():
         raise SystemExit(f"시드 없음: {args.seed_path} — 먼저 prepare_ko_seed.py 실행")
 
     providers = [dd.ModelProvider(name=VLLM_PROVIDER, endpoint=args.vllm_endpoint, api_key=None)]
-    if args.judge_backend == "openrouter":
+    if "openrouter" in (args.judge_backend, args.gen_backend):
         import os
         key = os.environ.get("OPENROUTER")
         if not key:
-            raise SystemExit("--judge-backend openrouter 인데 환경변수 OPENROUTER 없음")
+            raise SystemExit("openrouter 백엔드인데 환경변수 OPENROUTER 없음")
         providers.append(dd.ModelProvider(
             name=OPENROUTER_PROVIDER, endpoint="https://openrouter.ai/api/v1", api_key=key))
 
     builder = build_config(args.seed_path, args.model, args.max_parallel, args.timeout,
-                           judge_backend=args.judge_backend)
+                           judge_backend=args.judge_backend, gen_backend=args.gen_backend)
     designer = DataDesigner(artifact_path=args.artifact_path, model_providers=providers)
     designer.set_run_config(
         dd.RunConfig(
             progress_bar=not args.no_tui,
             disable_early_shutdown=True,
             buffer_size=500,
+            # OxAlpha 는 response_format 을 강제하지 않는다(실측) — 구조화 파싱 실패 시
+            # DD 의 대화식 보정 재시도를 켠다 (기본 0)
+            max_conversation_correction_steps=2 if args.gen_backend == "openrouter" else 0,
         )
     )
 

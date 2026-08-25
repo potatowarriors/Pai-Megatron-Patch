@@ -87,6 +87,10 @@ REGEN_JSON_SCHEMA = {
     },
 }
 REGEN_MAX_TOKENS_THINK = 6144
+# OxAlpha reasoning effort 최대 (사용자 지시 2026-08-25: 깊은 사고 → 답변 품질).
+# 숨은 사고가 max_tokens 를 소비하므로 OR 호출은 예산을 크게 잡는다.
+OR_REASONING_EFFORT = "high"
+OR_REGEN_MAX_TOKENS = 24576
 
 HANGUL_RE = re.compile(r"[가-힣]")
 LEAK_RE = re.compile(r"gemma|gemini|구글이 (?:저를|나를) |google(?:이|에서) (?:저를|나를)", re.IGNORECASE)
@@ -127,6 +131,10 @@ class Client:
                     json=payload, headers=headers,
                     timeout=self.timeout)
                 if r.status_code == 429:
+                    # 일일 상한(free-models-per-day-stealth, 1,000/일 실측)은 재시도 무의미 —
+                    # 즉시 상위로 올려 OR 을 한 시간 끈다 (서킷브레이커)
+                    if "per-day" in r.text:
+                        raise DailyCapExceeded(r.text[:120])
                     raise RuntimeError("429 rate limited")
                 if r.status_code >= 500:
                     raise RuntimeError(f"server {r.status_code}: {r.text[:200]}")
@@ -205,6 +213,15 @@ class MetaTranslation(Exception):
 
 class ReasoningParseFail(Exception):
     pass
+
+
+class DailyCapExceeded(Exception):
+    pass
+
+
+# OR 서킷브레이커 상태 (일일 상한 감지 시 1시간 비활성, 이후 자동 재탐침)
+OR_STATE = {"disabled_until": 0.0, "lock": threading.Lock()}
+OR_COOLDOWN_S = 3600
 
 
 def translate_message(client, role, content, prev_pair, constraint_ctx=None,
@@ -373,11 +390,19 @@ def process_record(client, row, regen_client=None):
         backends = [regen_client, client] if regen_client is not None else [client]
         for be in backends:
             be_msgs = gen_messages if be.name == "local" else with_format_reminder(gen_messages)
+            be_max_tokens = REGEN_MAX_TOKENS_THINK if be.name == "local" else OR_REGEN_MAX_TOKENS
             for attempt in range(2):
                 try:
-                    raw = be.chat(be_msgs, max_tokens=REGEN_MAX_TOKENS_THINK,
+                    raw = be.chat(be_msgs, max_tokens=be_max_tokens,
                                   temperature=0.9 if attempt == 0 else 0.7,
                                   response_format=REGEN_JSON_SCHEMA)
+                except DailyCapExceeded as e:
+                    with OR_STATE["lock"]:
+                        if time.time() >= OR_STATE["disabled_until"]:
+                            print(f"OR DAILY CAP hit — openrouter 비활성 {OR_COOLDOWN_S}s: {e}",
+                                  flush=True)
+                        OR_STATE["disabled_until"] = time.time() + OR_COOLDOWN_S
+                    break
                 except RuntimeError as e:
                     if be.name != "local":
                         print(f"FALLBACK [{be.name}] uuid={row.get('uuid')}: {str(e)[:160]}",
@@ -475,12 +500,12 @@ def main():
         or_client = Client(
             "https://openrouter.ai/api/v1", args.openrouter_model, timeout=600,
             api_key=key, retries=5, name="openrouter",
-            # 숨은 사고는 쓰지 않는다(영어) — 한국어 사고는 JSON 필드로 받음. effort low 로 지연 절감.
-            extra_payload={"reasoning": {"effort": "low"}})
+            # 숨은 사고(영어)는 저장하지 않지만 답변 품질에 직결 — effort 최대 (OR_REASONING_EFFORT)
+            extra_payload={"reasoning": {"effort": OR_REASONING_EFFORT}})
         print(f"openrouter regen backend: {args.openrouter_model} frac={args.openrouter_frac}", flush=True)
 
     def pick_regen_client(row):
-        if or_client is None:
+        if or_client is None or time.time() < OR_STATE["disabled_until"]:
             return None
         h = int(hashlib.sha256(str(row.get("uuid")).encode()).hexdigest()[:8], 16) / 0xFFFFFFFF
         return or_client if h < args.openrouter_frac else None

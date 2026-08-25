@@ -29,14 +29,15 @@ else
   fi
 fi
 N_SEEDS=$(wc -l < "$K/seeds_r2.jsonl")
-# 로컬 Gemma 96 + OpenRouter OxAlpha(재생성 40%, 동시 ~15 실효) = workers 128
-say "r2 시드 $N_SEEDS 행 — 트랙 A r2 가동 (workers 128, openrouter regen 40%)"
+# 로컬 Gemma 96 + OpenRouter OxAlpha 재생성 25% (재배분 2026-08-25: OR 파이의 몫을
+# 한국 맥락 트랙 B 생성으로 이전 — 0.4 였을 때 A 단독으로 429 경계 3% 폴백)
+say "r2 시드 $N_SEEDS 행 — 트랙 A r2 가동 (workers 128, openrouter regen 25%)"
 
 for i in $(seq 1 8); do
   wait_server || { say "CHAIN HALT: 서버 복구 실패"; exit 1; }
   say "A r2 실행 round $i"
   python3 "$K/translate_regen.py" --seeds "$K/seeds_r2.jsonl" --out "$K/out/r2_a" \
-    --base-url "$BASE" --workers 128 --openrouter-frac 0.4 >> "$K/out/r2_a.log" 2>&1
+    --base-url "$BASE" --workers 128 --openrouter-frac 0.25 >> "$K/out/r2_a.log" 2>&1
   DONE=$(( $(cat "$K/out/r2_a/results.jsonl" 2>/dev/null | wc -l) \
         + $(cat "$K/out/r2_a/rejects.jsonl" 2>/dev/null | wc -l) ))
   say "round $i 종료: done=$DONE / $N_SEEDS"
