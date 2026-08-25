@@ -3,7 +3,7 @@
 **규칙**: 세션 종료 시 자기 트랙의 행을 갱신하고 **커밋·push**한다. 상태는 여기에만 쓴다 — Claude auto-memory에 쓰지 않는다
 (메모리는 컨테이너·노드별이라 다른 세션이 못 본다). 날짜는 절대 표기. 끝난 트랙은 "완료" 절로 내리고 정본 링크만 남긴다.
 
-_마지막 갱신: 2026-08-25 (SFT 1노드 확정, NeMo-RL 트랙 추가)_
+_마지막 갱신: 2026-08-25 (SFT 1노드 확정, RL 트랙은 범위 밖으로 보류)_
 
 ## 진행 중
 
@@ -11,8 +11,7 @@ _마지막 갱신: 2026-08-25 (SFT 1노드 확정, NeMo-RL 트랙 추가)_
 |---|---|---|---|
 | **LC-A** 32K@CP4 THD | 학습 중. run `outputs/alpha_baseline_48L_lc_a_resume_20260823_070651`(iter 100 재개본), 예산 1,113 iters·GBS 384·LR 7.5e-6 constant, ~4분/iter, **완주 08-26 새벽 예상**. iter100 조기 검증 GO (NLL 격차 위치-단조, NIAH 160/160). 사고 1건(iter170 리터럴 EOD) 수리 후 재개 | 완주 → 최종 ckpt 롤링 검증(`outputs/lc_a_early_eval/run_evals.sh`, ~1h) → LC-B 개시 | `configs/training/lc_a.yaml`, `study/lc_a_early_eval.md`, KNOWN_ISSUES 08-23 |
 | **LC-B** 128K@CP8+offload | 준비 완료 (1dfc01b): 128k pad16 4종 8.65B, `lc_b_128k_blend.yaml`(LC 46% + 32k filler 재사용 54%), `lc_b.yaml`(GBS 96·320 iters·load=LC-A ckpt) | ① 잔여 게이트: THD×128K×CP8×offload **10-iter 스모크**(`--train-samples 960`, ~1h, main1, LC-A 완주 직후) — max-alloc ≤60GB·오프로더 로그·loss 유한 ② 본 런 ③ 병행: RULER@128K 하니스 구축. 미착수(의도): EN 다문서 합성 | `LC_DATASETS.md`, `MUON_OFFLOAD_BACKPORT.md` |
-| **SFT 준비** | 64k 21종 + 128k 6종 변환·`verify_sft_bins` 전 PASS. `sft_40b_blend.yaml`(SWE 1-pass 앵커 40B) + `sft_128k_blend.yaml`(5.54B). preset `sft_64k.yaml`(CP4+offload, DP2) / `sft_128k.yaml`(CP8). interleaved-thinking 규약 정비 완결(a2f8894), agentic_v2 미편입 확정 | ① LongBlocks 변환기(1.5% 슬롯) ② RULER ③ 본 런 — LC 완료 후 ckpt 경로만 채움. 실측 ETA **64k 9,537 iters ≈ 9.7일 + 128k 1,322 iters ≈ 1.7일**. **1노드 학습 확정(사용자, 2026-08-25)** — 2-node 단축안 기각. 유휴 노드는 NeMo-RL 준비에 배정 | `INTERLEAVED_THINKING.md`, `SFT_RL_DATASETS.md`, `DATA_PREP_LOG.md` |
-| **NeMo-RL 환경 준비** (SFT 중 유휴 노드) | 계획 확정 (2026-08-25): SFT 본 런이 1노드에서 도는 동안 유휴 노드에서 NeMo-RL 학습 환경 세팅·검증. RL 프레임워크 = NeMo-RL, 생성 백엔드 = vLLM (SGLang 스택은 08-18 제거). alpha 아키텍처의 vLLM 모델 정의가 필요 — 제거된 SGLang `srt/models/alpha.py` 매핑 지식은 `git log --diff-filter=D -- backends/submodule_patches/sglang-v0.5.2.patch` 부모 커밋에서 복원 가능 | SFT 개시 후: ① NeMo-RL 설치·alpha HF 모델 로드 검증 ② vLLM alpha 모델 정의 ③ 소형 RLVR 스모크. 파이프라인 설계 근거는 `SFT_RL_DATASETS.md`(RLVR→교사RL→MOPD) | `SFT_RL_DATASETS.md` |
+| **SFT 준비** | 64k 21종 + 128k 6종 변환·`verify_sft_bins` 전 PASS. `sft_40b_blend.yaml`(SWE 1-pass 앵커 40B) + `sft_128k_blend.yaml`(5.54B). preset `sft_64k.yaml`(CP4+offload, DP2) / `sft_128k.yaml`(CP8). interleaved-thinking 규약 정비 완결(a2f8894), agentic_v2 미편입 확정 | ① LongBlocks 변환기(1.5% 슬롯) ② RULER ③ 본 런 — LC 완료 후 ckpt 경로만 채움. 실측 ETA **64k 9,537 iters ≈ 9.7일 + 128k 1,322 iters ≈ 1.7일**. **1노드 학습 확정(사용자, 2026-08-25)** — 2-node 단축안 기각. 유휴 노드는 SFT 후 RL 환경 검증용(별도 워크스페이스, 아래 보류 표) | `INTERLEAVED_THINKING.md`, `SFT_RL_DATASETS.md`, `DATA_PREP_LOG.md` |
 | **ko_chat 합성** (sub1) | r2 무인 체인 가동 중 — 트랙A 번역+재생성 잔여 풀 ~745k + 트랙B 100k. reasoning 소실 결함 수정(5fd67cb) 후 재가동(08-24). 리터럴 special-token 4중 가드 적용 | r2 완료 → KoChat-v1 이관(export 게이트 필수) → idxmap 64k 변환 → 블렌드 한국어 비중(chat 21% 내). LC-B 2노드화 시 sub1 GPU 창구 종료 | `examples/alpha/sdg/ko_chat/README.md` |
 
 ## 보류·재평가 대기
@@ -21,6 +20,7 @@ _마지막 갱신: 2026-08-25 (SFT 1노드 확정, NeMo-RL 트랙 추가)_
 |---|---|---|---|
 | FlashQLA (TileLang GDN 커널) | 정확도 ✅, 성능 **채택 보류** — LC-A 형상(CP4 head-split)에서 fla 1.6~1.9× 우세, 128K 형상만 qla 2.2× 우세 | LC-B(128K) 국면 | `study/flashqla_poc.md` |
 | Muon offload chunk/fraction 튜닝 | 256MB 기본으로 GO. 미튜닝 | LC-B | `MUON_OFFLOAD_BACKPORT.md` |
+| **NeMo-RL post-training (RLVR→teacher RL→MOPD)** | **이 리포 범위 밖 — 보류** (사용자, 2026-08-25). 별도 워크스페이스 `project_s/NeMo-RL/`(브랜치 `alpha/post-train`, 최신 83976fe 08-24)에서 게이트 8종 통과: mcore+vLLM GRPO 퀵스타트, AlphaBridge 라운드트립 14,181/14,181, forward 패리티 cos≥0.99988, alpha vLLM 플러그인(stock 0.25.1), refit_verifier(mult_prob_err≈1.02), RL 블렌드, FlashQLA 커널. 남은 것 = GRPO 레시피 yaml + 8-GPU KL 게이트 | SFT 완료 후, 유휴 노드에서 재개 | `project_s/NEMO_RL_SETUP.md`(운영), `project_s/ALPHA_POSTTRAIN_PROGRESS.md`(경과), `NeMo-RL/examples/configs/alpha/README.md` |
 | moe-recompute 해제 레버 | LC-A 본 런에서 OOM(68.9GB)으로 원복(9b1e7b1). 스모크 A/B(+15.5%)가 프로덕션 블렌드 꼬리를 못 봄 | resume 시 MoE 토큰 통계와 함께 | KNOWN_ISSUES 없음 — `gdn_cp_port.md` |
 
 ## 완료 (2026-08)

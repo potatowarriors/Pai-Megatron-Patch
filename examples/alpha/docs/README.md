@@ -67,3 +67,11 @@
 | [../../../docs/CUSTOM_TRAINING_FEATURES.md](../../../docs/CUSTOM_TRAINING_FEATURES.md) | Megatron-LM-251125 비-upstream 기능 5건 전문 + 테스트 명령 |
 | [../../../docs/MUON_CLIP_ANALYSIS.md](../../../docs/MUON_CLIP_ANALYSIS.md) | MuonClip 분석 |
 | [../../../docs/NGC_ENV_REBUILD.md](../../../docs/NGC_ENV_REBUILD.md) | NGC 환경 재구축 |
+
+## 이 리포 밖 (project_s 워크스페이스)
+
+| 문서 | 한 줄 |
+|---|---|
+| `../../../../NEMO_RL_SETUP.md` | NeMo-RL post-training 환경 운영 가이드 (alpha 브리지·vLLM 플러그인·refit 검증) — RL은 이 리포 범위 밖, 보류 |
+| `../../../../ALPHA_POSTTRAIN_PROGRESS.md` | post-training 인프라 준비 경과·게이트 8종 (2026-08-12~21) |
+| `../../../../RESTORE_AFTER_REBOOT.md` | 컨테이너 재시작 후 전체 복원 runbook |
