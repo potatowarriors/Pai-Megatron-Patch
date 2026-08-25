@@ -15,16 +15,17 @@
 #   finetune 전환이라 Muon fresh → warmup 50 iters 재예열 (stage 전환 규칙).
 # - qk-clip 계열 전부 제거 (LC-A와 동일 — thd×return_max_logit TE 2.9 비호환).
 #
-# ★ 개시 전 필수 절차:
-#   1. load: 경로가 LC-A 최종 ckpt(iter 1113)인지 확인 — LC-A 완주 후 재확인.
-#   2. 스모크 먼저: THD(실데이터)×128K×CP8×offload 조합은 미실행 상태(S5는
-#      dense+mock; mock은 THD 검증 불가). 실행:
-#        bash train.sh baseline_48L lc_b lc_b_128k_blend --train-samples 960
-#      (10 iters, ~1h). sub1 창구가 열리면 LC-A 중에 미리, 아니면 LC-A 완주 직후
-#      main1에서 본 런 직전에 (08-23 현재 sub1은 합성 서빙이 8장 전부 점유).
-#      확인 항목: max-alloc ≤ 60GB(S5 포락선), 오프로더 8랭크 활성 로그, snap 가드
-#      경고 빈도, loss 유한.
-#   3. 데이터 게이트는 완료 (2026-08-23): EN 4종 전수 scan_internal_eod —
+# ★ 개시 절차 — 자동화 (2026-08-25, scripts/launch_lc_b_after_lc_a.sh 가동 중):
+#   ① LC-A 완주 감지(ckpt==1113; 중도 사망이면 연계 중단+경보) → ② GPU 유휴 →
+#   ③ scripts/lc_b_preflight.py --deep (전 멤버 로드·bin 길이·%16 표본·ckpt·디스크)
+#   → ④ 10-iter 스모크 = THD(실데이터)×128K×CP8×offload 첫 조합 (S5는 dense+mock;
+#      WANDB off, --train-samples 960 --no-save-optim — 별도 smoke yaml 금지, 드리프트)
+#   → ⑤ 판정: 10/10 완주 · loss 유한 · 첫 loss<3(ckpt 로드 확인) · max-alloc ≤65GB
+#      (S5 포락선 54.9~58.8GB + 여유; 초과 = HOLD, LC-A run1 iter2 OOM 교훈) ·
+#      오프로더 배너("chunked optimizer state offload: enabled") ≥1 → ⑥ 본 런.
+#   실패는 outputs/LC_B_CHAIN_ALERT.txt에 사유 기록 후 정지 (재시도 없음).
+#   snap 이벤트는 무로그 설계 — 판정 항목 아님(크래시 부재로 갈음).
+#   · 데이터 게이트는 완료 (2026-08-23): EN 4종 전수 scan_internal_eod —
 #      pg19/edgar/pes2o CLEAN, longblocks 2/40,876(0.005%)은 snap 가드 수리 범위
 #      (LC-A 선례). 상세는 lc_b_128k_blend.yaml 헤더.
 #
