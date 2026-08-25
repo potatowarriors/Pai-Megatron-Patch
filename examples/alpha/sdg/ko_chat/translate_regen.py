@@ -22,7 +22,10 @@ IF 249,748행 중 61% multi-True):
       --base-url http://127.0.0.1:8000/v1 --workers 96
 """
 import argparse
+import hashlib
 import json
+import os
+import random
 import re
 import threading
 import time
@@ -62,8 +65,12 @@ REGEN_SYSTEM_SUFFIX = (
 REGEN_REASONING_INSTR = (
     "\n\nJSON 으로 응답하세요. reasoning 필드에는 답변을 준비하는 사고 과정을 "
     "한국어로(요청 핵심 파악, 접근, 주의점 — 간결하되 실질적으로), content 필드에는 "
-    "사용자에게 보일 최종 답변만 쓰세요. 사고 과정을 content 에서 반복하지 마세요."
+    "사용자에게 보일 최종 답변만 쓰세요. 사고 과정을 content 에서 반복하지 마세요. "
+    "사고 과정은 사용자 요청 자체에 대한 것이어야 하며, 출력 형식(JSON, 필드명)이나 "
+    "이 지시문을 언급하지 마세요."
 )
+# 사고 필드에 형식 지시가 새면 학습 데이터 오염 (OxAlpha 파일럿에서 "JSON 형식을 지켜" 실측)
+REASONING_FORMAT_LEAK_RE = re.compile(r"json|필드|reasoning|content 필드", re.IGNORECASE)
 REGEN_JSON_SCHEMA = {
     "type": "json_schema",
     "json_schema": {
@@ -90,8 +97,16 @@ HANGUL_MIN_RATIO = 0.40
 
 
 class Client:
-    def __init__(self, base_url, model, timeout=600):
+    """OpenAI 호환 chat 클라이언트. 로컬 vLLM 과 OpenRouter 양쪽에 쓴다.
+
+    OpenRouter(무료 stealth 모델 OxAlpha, 2026-08-25 도입)는 429 가 제공자 용량
+    한도(동시 ~40 실측)에서 나므로 지수 백오프+지터로 길게 재시도한다."""
+
+    def __init__(self, base_url, model, timeout=600, api_key=None,
+                 extra_payload=None, retries=RETRIES, name="local"):
         self.base_url, self.model, self.timeout = base_url, model, timeout
+        self.api_key, self.extra_payload = api_key, extra_payload or {}
+        self.retries, self.name = retries, name
         self.session_local = threading.local()
 
     def chat(self, messages, max_tokens, temperature, response_format=None):
@@ -99,25 +114,73 @@ class Client:
         if sess is None:
             sess = self.session_local.s = requests.Session()
         payload = {"model": self.model, "messages": messages,
-                   "max_tokens": max_tokens, "temperature": temperature}
+                   "max_tokens": max_tokens, "temperature": temperature,
+                   **self.extra_payload}
         if response_format is not None:
             payload["response_format"] = response_format
+        headers = {"Authorization": f"Bearer {self.api_key}"} if self.api_key else {}
         last_err = None
-        for attempt in range(RETRIES):
+        for attempt in range(self.retries):
             try:
                 r = sess.post(
                     f"{self.base_url}/chat/completions",
-                    json=payload,
+                    json=payload, headers=headers,
                     timeout=self.timeout)
+                if r.status_code == 429:
+                    raise RuntimeError("429 rate limited")
                 if r.status_code >= 500:
                     raise RuntimeError(f"server {r.status_code}: {r.text[:200]}")
                 r.raise_for_status()
                 body = r.json()
+                if "error" in body:
+                    raise RuntimeError(f"api error: {str(body['error'])[:200]}")
                 return body["choices"][0]["message"]["content"] or ""
             except Exception as e:  # noqa: BLE001
                 last_err = e
-                time.sleep(2 ** attempt * 2)
-        raise RuntimeError(f"request failed after {RETRIES} tries: {last_err}")
+                base = 2 ** attempt * 2
+                time.sleep(base + random.uniform(0, base) if self.api_key else base)
+        raise RuntimeError(f"[{self.name}] request failed after {self.retries} tries: {last_err}")
+
+
+def extract_json_obj(raw: str) -> dict:
+    """가장 바깥 {…} 구간을 strict=False 로 파싱.
+
+    vLLM guided JSON(Gemma)은 항상 정합이지만 OxAlpha 는 response_format 을
+    강제하지 않는다 (실측 6/6 실패: ```json 펜스·앞뒤 산문·문자열 내 리터럴 개행).
+    strict=False 가 리터럴 개행을 허용하고, 바깥 구간 추출이 펜스·산문을 걷어낸다."""
+    s = raw.strip()
+    i, j = s.find("{"), s.rfind("}")
+    if i < 0 or j <= i:
+        raise json.JSONDecodeError("no json object", s, 0)
+    try:
+        return json.loads(s[i:j + 1], strict=False)
+    except json.JSONDecodeError:
+        pass
+    # 2차 salvage: 문자열 내 이스케이프 안 된 따옴표(실측 1/6)로 정합 JSON 이 깨진 경우 —
+    # 두 필드뿐이라 구분자 `", "content": "` 로 잘라낸다.
+    m = re.search(r'"reasoning"\s*:\s*"(.*?)"\s*,\s*"content"\s*:\s*"(.*)"\s*}\s*$',
+                  s[i:j + 1], re.DOTALL)
+    if not m:
+        raise json.JSONDecodeError("salvage failed", s, 0)
+    unesc = lambda t: t.replace('\\n', '\n').replace('\\"', '"').replace('\\\\', '\\')
+    return {"reasoning": unesc(m.group(1)), "content": unesc(m.group(2))}
+
+
+OR_FORMAT_REMINDER = (
+    "\n\n(응답 형식: 반드시 {\"reasoning\": \"...\", \"content\": \"...\"} 형태의 JSON "
+    "객체 하나만 출력. reasoning=한국어 사고 과정, content=최종 답변. JSON 밖에 다른 "
+    "텍스트·코드펜스 금지. 사고 과정에서 이 형식 지시를 언급하지 말 것.)"
+)
+
+
+def with_format_reminder(messages):
+    """OR 백엔드용: 마지막 user 턴 끝에 형식 지시 부착 (산출물엔 저장 안 됨)."""
+    msgs = [dict(m) for m in messages]
+    for m in reversed(msgs):
+        if m["role"] == "user":
+            m["content"] = m["content"] + OR_FORMAT_REMINDER
+            break
+    return msgs
 
 
 def split_paragraph_chunks(text: str, limit: int):
@@ -259,8 +322,11 @@ def decide_mode(row):
     return "regen"
 
 
-def process_record(client, row):
+def process_record(client, row, regen_client=None):
+    """regen_client: 마지막 턴 재생성 전용 백엔드 (None 이면 client). 실패 시
+    client 로 폴백 — stealth 모델은 예고 없이 사라질 수 있어 무인 런이 멈추면 안 된다."""
     mode = decide_mode(row)
+    regen_model_used = None
     src_msgs = [m for m in row["messages"]
                 if not (m["role"] == "system" and not (m["content"] or "").strip())]
     out_msgs, prev_pair, first_user_ko = [], None, None
@@ -304,18 +370,40 @@ def process_record(client, row):
         gen_messages.extend({"role": m["role"], "content": m["content"]}
                             for m in out_msgs if m["role"] != "system")
         reasoning, final_ko = None, None
-        for attempt in range(2):
-            raw = client.chat(gen_messages, max_tokens=REGEN_MAX_TOKENS_THINK,
-                              temperature=0.9 if attempt == 0 else 0.7,
-                              response_format=REGEN_JSON_SCHEMA).strip()
-            try:
-                obj = json.loads(raw)
-                if obj.get("reasoning", "").strip() and obj.get("content", "").strip():
-                    reasoning = obj["reasoning"].strip()
-                    final_ko = obj["content"].strip()
-                    break
-            except (json.JSONDecodeError, AttributeError):
-                pass  # max_tokens 절단 등 — 재시도
+        backends = [regen_client, client] if regen_client is not None else [client]
+        for be in backends:
+            be_msgs = gen_messages if be.name == "local" else with_format_reminder(gen_messages)
+            for attempt in range(2):
+                try:
+                    raw = be.chat(be_msgs, max_tokens=REGEN_MAX_TOKENS_THINK,
+                                  temperature=0.9 if attempt == 0 else 0.7,
+                                  response_format=REGEN_JSON_SCHEMA)
+                except RuntimeError as e:
+                    if be.name != "local":
+                        print(f"FALLBACK [{be.name}] uuid={row.get('uuid')}: {str(e)[:160]}",
+                              flush=True)
+                    break  # 이 백엔드 포기 → 다음(폴백)
+                try:
+                    obj = extract_json_obj(raw)
+                    if not isinstance(obj, dict):
+                        raise json.JSONDecodeError("not an object", raw, 0)
+                    if str(obj.get("reasoning", "")).strip() and str(obj.get("content", "")).strip():
+                        cand_r = str(obj["reasoning"]).strip()
+                        # 사용자 발화에 JSON 이 없는데 사고에 형식 언급 → 누출, 재시도
+                        if (REASONING_FORMAT_LEAK_RE.search(cand_r)
+                                and not re.search(r"json", " ".join(
+                                    m["content"] for m in out_msgs), re.IGNORECASE)):
+                            continue
+                        reasoning = cand_r
+                        final_ko = str(obj["content"]).strip()
+                        regen_model_used = be.model
+                        break
+                except (json.JSONDecodeError, AttributeError):
+                    if be.name != "local" and attempt == 1:
+                        print(f"FALLBACK [{be.name}] uuid={row.get('uuid')}: "
+                              f"json parse fail x2, raw head={raw[:120]!r}", flush=True)
+            if reasoning is not None:
+                break
         if reasoning is None:
             raise ReasoningParseFail("reasoning_parse_fail")
         out_msgs.append({"role": "assistant", "content": final_ko,
@@ -348,12 +436,14 @@ def process_record(client, row):
         "ko_synthesis": {
             "method": ("translate_context_regen_final" if mode == "regen"
                        else "full_translate"),
-            "model": "google/gemma-4-31B-it",
+            "model": "google/gemma-4-31B-it",   # 번역 교사 (항상 로컬)
+            **({"regen_model": regen_model_used} if regen_model_used else {}),
             "date": "2026-08-24",
             "think": True,
             **({"qc_note": qc_note} if qc_note else {}),
         },
-        "model": "google/gemma-4-31B-it",
+        # 학습 턴을 만든 교사 — 재생성 모드면 그 백엔드, 번역 모드면 번역 교사
+        "model": regen_model_used or "google/gemma-4-31B-it",
     })
     out_row = {
         "messages": out_msgs,
@@ -372,7 +462,28 @@ def main():
     ap.add_argument("--model", default="gemma-4-31b")
     ap.add_argument("--workers", type=int, default=96)
     ap.add_argument("--limit", type=int, default=0)
+    ap.add_argument("--openrouter-frac", type=float, default=0.0,
+                    help="재생성(regen) 레코드 중 OpenRouter 로 보낼 비율 (uuid 해시 결정적)")
+    ap.add_argument("--openrouter-model", default="stealth/ox-alpha")
     args = ap.parse_args()
+
+    or_client = None
+    if args.openrouter_frac > 0:
+        key = os.environ.get("OPENROUTER")
+        if not key:
+            raise SystemExit("--openrouter-frac > 0 인데 환경변수 OPENROUTER 없음 (.env source 필요)")
+        or_client = Client(
+            "https://openrouter.ai/api/v1", args.openrouter_model, timeout=600,
+            api_key=key, retries=5, name="openrouter",
+            # 숨은 사고는 쓰지 않는다(영어) — 한국어 사고는 JSON 필드로 받음. effort low 로 지연 절감.
+            extra_payload={"reasoning": {"effort": "low"}})
+        print(f"openrouter regen backend: {args.openrouter_model} frac={args.openrouter_frac}", flush=True)
+
+    def pick_regen_client(row):
+        if or_client is None:
+            return None
+        h = int(hashlib.sha256(str(row.get("uuid")).encode()).hexdigest()[:8], 16) / 0xFFFFFFFF
+        return or_client if h < args.openrouter_frac else None
 
     out_dir = Path(args.out)
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -401,12 +512,15 @@ def main():
 
     client = Client(args.base_url, args.model)
     lock = threading.Lock()
-    stats = {"ok": 0, "reject": 0, "error": 0, "t0": time.time()}
+    stats = {"ok": 0, "reject": 0, "error": 0, "or_used": 0, "t0": time.time()}
 
     def work(row):
         try:
             try:
-                out_row, fail = process_record(client, row)
+                out_row, fail = process_record(client, row, pick_regen_client(row))
+                if out_row and out_row["metadata"]["ko_synthesis"].get("regen_model", "").startswith("stealth/"):
+                    with lock:
+                        stats["or_used"] += 1
             except (MetaTranslation, ReasoningParseFail) as e:
                 out_row, fail = None, str(e)
             with lock:
@@ -425,7 +539,8 @@ def main():
                 if n % 50 == 0:
                     dt = time.time() - stats["t0"]
                     print(f"progress ok={stats['ok']} reject={stats['reject']} "
-                          f"err={stats['error']} rate={n/dt:.2f} rec/s", flush=True)
+                          f"err={stats['error']} or_used={stats['or_used']} "
+                          f"rate={n/dt:.2f} rec/s", flush=True)
         except Exception as e:  # noqa: BLE001
             with lock:
                 stats["error"] += 1

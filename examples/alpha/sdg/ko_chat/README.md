@@ -90,6 +90,34 @@ chat_v3 는 **전 행이 `reasoning_content` 보유**(chat·IF 전수 실측)이
   **r2_a 는 파일이 조용해진 뒤** — 완주 후 packaging 때 실행. 동시 append 와
   finalize 교체가 경합하므로 quiescent 필수).
 
+## 두 번째 교사: OxAlpha (OpenRouter `stealth/ox-alpha`, 무료, 2026-08-25)
+
+사용자 제안으로 도입. GLM 계열로 추정되는 stealth 모델 — 1M ctx, 입출력 $0,
+reasoning 모델. 키는 `syn_data/.env` 의 `OPENROUTER`(chain_common.sh 가 source).
+
+**어디에 쓰나** — 처리량 기여는 +13% 수준(제공자 429 경계 동시 ~40 → ~440 tok/s,
+Gemma 로컬 3,400 대비). 진짜 가치는 ① 강한 교사 혼입(다양성·한국 제도 지식이
+Gemma 보다 구체적: 임차권등기명령·분쟁조정위 등 실측) ② **독립 심판**(Gemma
+셀프심판은 관대함 실증).
+- 트랙 A: 재생성 레코드의 **40%** 를 OxAlpha 로 (`--openrouter-frac 0.4`, uuid 해시
+  결정적). 번역 턴은 항상 Gemma. 레코드별 `ko_synthesis.regen_model` 과 최상위
+  `model` 에 교사 기록 — 블렌드에서 교사별 분리 가능.
+- 트랙 B r2: 심판 컬럼만 OxAlpha (`--judge-backend openrouter`, 동시 24).
+
+**실측 특성·대응** (전부 translate_regen.py 에 구현):
+| 특성 | 대응 |
+|---|---|
+| `response_format` 스키마 **미강제** (실전 6/6 파싱 실패) | 바깥 `{…}` 추출 + `strict=False`(문자열 내 리터럴 개행) + 2차 구분자 salvage(이스케이프 안 된 따옴표) |
+| 시스템 지시보다 마지막 턴 지시를 따름 | OR 전용으로 마지막 user 턴 끝에 형식 지시 부착(산출물 미저장) |
+| 숨은 사고가 **영어** | 쓰지 않음 — 한국어 사고는 JSON 필드로 생성. `reasoning.effort=low` 로 지연 절감 |
+| 사고에 "JSON 형식을 지켜" 누출 | 프롬프트 금지 + `REASONING_FORMAT_LEAK_RE` 가드(재시도) |
+| 429 (동시 48 에서 10%) | 지수 백오프+지터 5회 → 실패 시 **Gemma 자동 폴백**(`FALLBACK` 로그). stealth 모델은 예고 없이 사라질 수 있어 무인 런이 멈추지 않게 |
+| `:free` 문서 한도(20/분·50/일) | 이 모델엔 미적용 실측(66건 연속 통과). 단 정책 변경 가능 — 폴백이 보험 |
+
+파일럿(16시드): 재생성 8/8 OxAlpha 처리, 파싱 실패 0, 누출 0, 폴백 0.
+**주의**: 무료 stealth 모델은 프롬프트가 제공자 학습에 쓰일 수 있음 — 보내는 것은
+공개 데이터(Nemotron CC-BY-4.0·WildChat) 파생물과 우리 합성 출력뿐.
+
 ## 함정 (재발 방지)
 
 1. **빈 system content 를 LLM에 넣으면 메타응답**("번역할 지시문을 주세요")이

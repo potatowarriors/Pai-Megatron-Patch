@@ -4,6 +4,8 @@
 K=/home/work/vidsearch/repos/project_s/Pai-Megatron-Patch/examples/alpha/sdg/ko_chat
 VENV=/home/work/vidsearch/repos/project_s/syn_data/.venv/bin/python
 BASE=http://127.0.0.1:8000/v1
+# OpenRouter 키 (OxAlpha 무료 백엔드, 2026-08-25) — 값은 절대 로그에 찍지 않는다
+set -a; . /home/work/vidsearch/repos/project_s/syn_data/.env 2>/dev/null; set +a
 
 say() { echo "[$(date '+%m-%d %H:%M:%S')] [$CHAIN_NAME] $*"; }
 

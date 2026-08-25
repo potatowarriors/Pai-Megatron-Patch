@@ -17,21 +17,26 @@ if ! python3 "$K/auto_gate_a.py" "$K/out/r1_a"; then
 fi
 say "r1_a GATE PASS — r2 시드 추출 (잔여 풀 전체)"
 
-cat "$K/seeds_pilot.jsonl" "$K/seeds_r1.jsonl" > "$K/out/seeds_used.jsonl"
-if ! python3 "$K/extract_sources.py" --num-if 250000 --num-chat 650000 \
-    --out "$K/seeds_r2.jsonl" --exclude "$K/out/seeds_used.jsonl" --seed 20260824 \
-    >> "$K/out/extract_r2.log" 2>&1; then
-  say "CHAIN HALT: r2 시드 추출 실패 (extract_r2.log 확인)"
-  exit 1
+if [ -s "$K/seeds_r2.jsonl" ]; then
+  say "r2 시드 기존 파일 재사용 (재추출 생략 — 결정적 시드라 동일)"
+else
+  cat "$K/seeds_pilot.jsonl" "$K/seeds_r1.jsonl" > "$K/out/seeds_used.jsonl"
+  if ! python3 "$K/extract_sources.py" --num-if 250000 --num-chat 650000 \
+      --out "$K/seeds_r2.jsonl" --exclude "$K/out/seeds_used.jsonl" --seed 20260824 \
+      >> "$K/out/extract_r2.log" 2>&1; then
+    say "CHAIN HALT: r2 시드 추출 실패 (extract_r2.log 확인)"
+    exit 1
+  fi
 fi
 N_SEEDS=$(wc -l < "$K/seeds_r2.jsonl")
-say "r2 시드 $N_SEEDS 행 — 트랙 A r2 가동 (workers 96)"
+# 로컬 Gemma 96 + OpenRouter OxAlpha(재생성 40%, 동시 ~15 실효) = workers 128
+say "r2 시드 $N_SEEDS 행 — 트랙 A r2 가동 (workers 128, openrouter regen 40%)"
 
 for i in $(seq 1 8); do
   wait_server || { say "CHAIN HALT: 서버 복구 실패"; exit 1; }
   say "A r2 실행 round $i"
   python3 "$K/translate_regen.py" --seeds "$K/seeds_r2.jsonl" --out "$K/out/r2_a" \
-    --base-url "$BASE" --workers 96 >> "$K/out/r2_a.log" 2>&1
+    --base-url "$BASE" --workers 128 --openrouter-frac 0.4 >> "$K/out/r2_a.log" 2>&1
   DONE=$(( $(cat "$K/out/r2_a/results.jsonl" 2>/dev/null | wc -l) \
         + $(cat "$K/out/r2_a/rejects.jsonl" 2>/dev/null | wc -l) ))
   say "round $i 종료: done=$DONE / $N_SEEDS"

@@ -46,7 +46,12 @@ from pydantic import BaseModel, Field
 
 HERE = Path(__file__).resolve().parent
 MODEL_ALIAS = "gen"
+JUDGE_ALIAS = "judge"
 VLLM_PROVIDER = "vllm-local"
+OPENROUTER_PROVIDER = "openrouter"
+# 독립 심판 (2026-08-25): Gemma 셀프심판은 관대함이 실증(ko_grounded 전례) —
+# 무료 stealth 모델 OxAlpha 를 심판으로 쓰면 생성 교사와 독립이고 비용 0.
+OPENROUTER_JUDGE_MODEL = "stealth/ox-alpha"
 
 HANGUL_RE = re.compile(r"[가-힣]")
 LEAK_RE = re.compile(r"gemma|gemini|(?:구글|google)(?:이|에서)?\s*(?:만든|개발한|훈련시킨)", re.IGNORECASE)
@@ -238,25 +243,41 @@ def validate_ko_chat(df: pd.DataFrame) -> pd.DataFrame:
 # Config Builder
 # =============================================================================
 
-def build_config(seed_path: Path, model_id: str, max_parallel: int, timeout: int):
-    builder = dd.DataDesignerConfigBuilder(
-        model_configs=[
+def build_config(seed_path: Path, model_id: str, max_parallel: int, timeout: int,
+                 judge_backend: str = "local"):
+    model_configs = [
+        dd.ModelConfig(
+            alias=MODEL_ALIAS,
+            model=model_id,
+            provider=VLLM_PROVIDER,
+            inference_parameters=dd.ChatCompletionInferenceParams(
+                temperature=dd.UniformDistribution(
+                    params=dd.UniformDistributionParams(low=0.80, high=1.05)
+                ),
+                top_p=0.95,
+                max_tokens=3072,
+                max_parallel_requests=max_parallel,
+                timeout=timeout,
+            ),
+        )
+    ]
+    if judge_backend == "openrouter":
+        model_configs.append(
             dd.ModelConfig(
-                alias=MODEL_ALIAS,
-                model=model_id,
-                provider=VLLM_PROVIDER,
+                alias=JUDGE_ALIAS,
+                model=OPENROUTER_JUDGE_MODEL,
+                provider=OPENROUTER_PROVIDER,
                 inference_parameters=dd.ChatCompletionInferenceParams(
-                    temperature=dd.UniformDistribution(
-                        params=dd.UniformDistributionParams(low=0.80, high=1.05)
-                    ),
-                    top_p=0.95,
-                    max_tokens=3072,
-                    max_parallel_requests=max_parallel,
+                    temperature=0.2,
+                    top_p=0.9,
+                    max_tokens=2048,
+                    max_parallel_requests=24,   # 제공자 429 경계(~40) 아래
                     timeout=timeout,
                 ),
             )
-        ]
-    )
+        )
+    judge_alias = JUDGE_ALIAS if judge_backend == "openrouter" else MODEL_ALIAS
+    builder = dd.DataDesignerConfigBuilder(model_configs=model_configs)
 
     builder.with_seed_dataset(
         dd.LocalFileSeedSource(path=str(seed_path)),
@@ -347,7 +368,7 @@ def build_config(seed_path: Path, model_id: str, max_parallel: int, timeout: int
 
     builder.add_column(
         dd.LLMJudgeColumnConfig(
-            name="judge", model_alias=MODEL_ALIAS, propagate_skip=False,
+            name="judge", model_alias=judge_alias, propagate_skip=False,
             prompt="""\
 아래 한국어 대화에서 마지막 어시스턴트 응답을 평가하세요.
 
@@ -431,18 +452,25 @@ def main() -> None:
     parser.add_argument("--timeout", type=int, default=600)
     parser.add_argument("--no-tui", action="store_true")
     parser.add_argument("--resume", action="store_true")
+    parser.add_argument("--judge-backend", choices=["local", "openrouter"], default="local",
+                        help="openrouter = OxAlpha 독립 심판 (환경변수 OPENROUTER 필요)")
     args = parser.parse_args()
 
     if not args.seed_path.exists():
         raise SystemExit(f"시드 없음: {args.seed_path} — 먼저 prepare_ko_seed.py 실행")
 
-    builder = build_config(args.seed_path, args.model, args.max_parallel, args.timeout)
-    designer = DataDesigner(
-        artifact_path=args.artifact_path,
-        model_providers=[
-            dd.ModelProvider(name=VLLM_PROVIDER, endpoint=args.vllm_endpoint, api_key=None)
-        ],
-    )
+    providers = [dd.ModelProvider(name=VLLM_PROVIDER, endpoint=args.vllm_endpoint, api_key=None)]
+    if args.judge_backend == "openrouter":
+        import os
+        key = os.environ.get("OPENROUTER")
+        if not key:
+            raise SystemExit("--judge-backend openrouter 인데 환경변수 OPENROUTER 없음")
+        providers.append(dd.ModelProvider(
+            name=OPENROUTER_PROVIDER, endpoint="https://openrouter.ai/api/v1", api_key=key))
+
+    builder = build_config(args.seed_path, args.model, args.max_parallel, args.timeout,
+                           judge_backend=args.judge_backend)
+    designer = DataDesigner(artifact_path=args.artifact_path, model_providers=providers)
     designer.set_run_config(
         dd.RunConfig(
             progress_bar=not args.no_tui,

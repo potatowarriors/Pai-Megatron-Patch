@@ -38,6 +38,7 @@ for i in $(seq 1 6); do
   "$VENV" "$K/ko_chat_sdg.py" --vllm-endpoint "$BASE" --model gemma-4-31b \
     --seed-path "$K/ko_seed_r2.parquet" --num-records 100000 \
     --dataset-name ko_chat_b_r2 --max-parallel 96 --no-tui $RESUME \
+    --judge-backend openrouter \
     >> "$K/out/r2_b.log" 2>&1
   if grep -q "생성 완료 → .*ko_chat_b_r2" "$K/out/r2_b.log"; then
     say "트랙 B r2 완료"
