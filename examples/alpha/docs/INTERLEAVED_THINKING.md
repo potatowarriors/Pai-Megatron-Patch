@@ -19,8 +19,8 @@ alpha의 think-히스토리 규약을 3계층(템플릿 / SFT 데이터 / 서빙
    `chat_v3_if` → `chat_v3_if_fanout` / `swe_v3` → `swe_v3_keepthink` (64k+128k) /
    `arc_agi_v1` → `arc_agi_v1_keepthink` (64k+128k). 블렌드 yaml 2종 재산출 반영.
 4. **agentic_v2는 편입하지 않는다** (2026-08-24 사용자 확정, §5).
-5. 검증 정본: `tools/verify_chat_template.py` **31 tests** (§6 = 시나리오 분기),
-   `tests/test_alpha_sft_idxmap.py` **25 tests** (§3 = fan-out), `verify_sft_bins.py`
+5. 검증 정본: `tools/verify_chat_template.py` **34 tests** (§6 = 시나리오 분기, §2e = medium_effort),
+   `tests/test_alpha_sft_idxmap.py` **34 tests** (§3 = fan-out, §6 = effort/budget), `verify_sft_bins.py`
    게이트 keepthink 4트리 PASS.
 
 ## 1. 배경 — 규약 분류와 판정 원칙
@@ -121,19 +121,19 @@ keepthink 렌더 + agentic 카테고리 5% 내부 재비례가 경로).
 | 계층 | 정본 | 비고 |
 |---|---|---|
 | 템플릿 | `examples/alpha/tokenizer_v5/chat_template.jinja` (+config json 동기화) | 분기 주석 상단 |
-| 변환기 | `build_alpha_sft_idxmap.py` (`--fanout-train-turns`) | docstring 의도적 차이 #2 |
-| bins 64k | `sft_packed_64k_pad16/{chat_v3_if_fanout, swe_v3_keepthink, arc_agi_v1_keepthink}` | 구 디렉토리 보존 |
+| 변환기 | `build_alpha_sft_idxmap.py` (`--fanout-train-turns`, `--medium-effort`, `--truncate-reasoning-budget`) | docstring 의도적 차이 #2, §Effort/Budget |
+| bins 64k | `sft_packed_64k_pad16/{chat_v3_if_fanout_me, budget_trunc_v1_{if,math}, swe_v3_keepthink, arc_agi_v1_keepthink}` | 구 디렉토리 보존. `_me`·`budget_trunc` 는 본 변환 대기 (2026-08-25) |
 | bins 128k | `sft_packed_128k_pad16/{swe_v3_keepthink, arc_agi_v1_keepthink}` | 〃 |
 | 블렌드 | `configs/data/sft_40b_blend.yaml`, `sft_128k_blend.yaml` | 헤더에 재산출 근거 |
 | 드라이버 | `convert_sft_64k.sh`, `convert_sft_128k.sh` | keepthink/fanout 엔트리 |
-| 테스트 | `verify_chat_template.py` 31 / `test_alpha_sft_idxmap.py` 25 | |
+| 테스트 | `verify_chat_template.py` 34 / `test_alpha_sft_idxmap.py` 34 | |
 
 ## 7. 다른 세션을 위한 규칙·함정
 
 1. **새 SFT 셋 추가 시**: tool 흔적이 있으면 새 템플릿이 자동으로 보존 렌더 —
    별도 조치 불요. `train_turns` multi-True가 있으면 `--fanout-train-turns` 필수
    (전수 스캔으로 확인 — 파일 앞 30k행은 last-only라 샘플 검사가 오판함, §2.5).
-2. **템플릿 수정 시**: `tokenizer_config.json` 동기화 + verify 31종 통과 필수.
+2. **템플릿 수정 시**: `tokenizer_config.json` 동기화 + verify 34종 통과 필수.
    비-tool 렌더를 바꾸는 수정은 기존 bins 전체를 무효화하므로 각별 주의.
 3. **64k/128k 버킷은 항상 같은 템플릿 세대로 쌍 변환** (§4 여집합 규칙).
 4. **서빙/RL/평가는 tokenizer_v5 디렉토리의 apply_chat_template만 사용** —
@@ -144,14 +144,18 @@ keepthink 렌더 + agentic 카테고리 5% 내부 재비례가 경로).
 6. **구 bins 디렉토리 삭제 금지** — 본 런 개시·검증 후 공간 회수 시점에 정리.
 7. 블렌드 yaml 갱신 시 헤더의 재산출 규칙(카테고리 설계단위 고정 + 내부
    real-token 비례 + swe 1.0ep 앵커)을 따를 것 — 수동 가중치 수정 금지.
+8. **effort 마커는 데이터에 없다 — 렌더 플래그다.** IF split(GPT-OSS medium-effort
+   생성분)은 항상 `--medium-effort` 로 변환. 같은 원본을 번역한 셋(ko_chat IF 트랙)도
+   동일 적용. 절단-예산 셋은 `--truncate-reasoning-budget` 전용(두 플래그 배타).
+   근거·RL 측 요건은 `SFT_RL_DATASETS.md` §2.6.
 
 ## 8. 검증 명령
 
 ```bash
-# 템플릿 (31 tests — §6 = 시나리오 분기)
+# 템플릿 (34 tests — §6 = 시나리오 분기, §2e = medium_effort)
 python3 examples/alpha/tools/verify_chat_template.py
 
-# 변환기 (25 tests — §3 = fan-out)
+# 변환기 (34 tests — §3 = fan-out, §6 = effort/budget)
 python -m pytest tests/test_alpha_sft_idxmap.py -v
 
 # bins 게이트 (셋 단위는 심링크 트리로)

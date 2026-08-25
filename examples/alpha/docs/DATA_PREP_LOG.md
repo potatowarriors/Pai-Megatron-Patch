@@ -28,7 +28,17 @@ alpha의 **LC-phase → SFT → RL(MOPD)** 훈련 계획을 위한 데이터 준
 
 ## 1. 타임라인
 
-**08-21 — THD+CP 재패킹 요건 확정 (최신)**
+**08-25 — reasoning effort/budget: Ultra 레시피 재현 (최신)**
+- 발견: Ultra 의 medium-effort 마커 `{reasoning effort: efficient}` 는 데이터 필드가 아니라
+  **렌더 kwarg** — 공개 SFT 행엔 흔적이 없고, IF-Chat-v3 `instruction_following.jsonl`
+  자체가 GPT-OSS-120B medium-effort 생성분. RL 블렌드(rlvr1/2·mopd)엔 이미 3.5% 프롬프트에
+  붙어 있어(`alpha_blends` 승계) SFT 초기화 없이는 RL 이 처음 보는 토큰을 만난다.
+- 결정(사용자): NVIDIA 레시피 재현. 변환기 `--medium-effort`(IF 재변환 `chat_v3_if_fanout_me`)
+  + `--truncate-reasoning-budget --row-stride`(파생 셋 `budget_trunc_v1_{if,math}`, 잘린 자리
+  `</think>` 비학습). 테스트 34/34·34/34, 스모크 bins 게이트 PASS. 본 변환·블렌드 재산출은
+  유휴 노드 대기. RL 측은 NeMo-RL 내장 `effort_levels` 로 길이 보상. [`SFT_RL_DATASETS.md` §2.6]
+
+**08-21 — THD+CP 재패킹 요건 확정**
 - LC는 CP≥2 학습이고 dense 마스크 격리는 32k에서 불가 → **THD/cu_seqlens 문서 격리**
   채택 (`LC_ENTRY_GATE.md` §1.5). 데이터 요건: 모든 packed 세그먼트 길이 %16
   (`bestfit_pack --pad-doc-multiple 16`, main 70220d7).
@@ -144,6 +154,11 @@ alpha의 **LC-phase → SFT → RL(MOPD)** 훈련 계획을 위한 데이터 준
     가중치는 `stage2_v5_blend_packed_p3.yaml` 재사용, 경로만 pad16 트리로 치환.
     Nemotron 3 Ultra의 "LC 54% = 직전 phase 블렌드 재사용"과 동형.
     실행 절차: [`LC_REPACK_RUNBOOK.md`](LC_REPACK_RUNBOOK.md) §3.
+
+11. **effort/budget 는 NVIDIA 레시피 그대로** (사용자 확정 2026-08-25) — RL 블렌드에 마커가
+    이미 3.5% 섞여 있어 "무시"는 선택지가 아니다(제거 or 초기화). IF split 은 `--medium-effort`
+    렌더, 절단-예산 파생 셋 1% 슬롯, RL 은 `effort_levels` 길이 보상. 예산 분포 U(0.1,0.9)와
+    1% 는 미공개라 가정 — RL 착수 시 실측으로 조정. [`SFT_RL_DATASETS.md` §2.6]
 
 ## 4. 남은 작업 큐 (우선순위 순)
 

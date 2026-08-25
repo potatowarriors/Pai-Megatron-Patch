@@ -106,6 +106,35 @@ def main():
     out = r([{"role": "user", "content": "hi"}], add_generation_prompt=True,
             medium_effort=True)
     check("medium_effort marker", "hi\n\n{reasoning effort: efficient}" in out)
+    # 2e'. SFT 렌더(add_generation_prompt=False)·멀티턴에서도 마지막 user 1곳만.
+    #      변환기 --medium-effort 가 이 경로를 쓴다 (IF split = GPT-OSS medium-effort
+    #      생성분, docs/SFT_RL_DATASETS.md §2.6).
+    msgs_me = [
+        {"role": "user", "content": "q1"},
+        {"role": "assistant", "content": "<think>ALPHA</think>a1"},
+        {"role": "user", "content": "q2"},
+        {"role": "assistant", "content": "<think>BETA</think>a2"},
+    ]
+    out = r(msgs_me, add_generation_prompt=False, medium_effort=True)
+    check("medium_effort: last user only (multi-turn, SFT render)",
+          out.count("{reasoning effort: efficient}") == 1
+          and "q2\n\n{reasoning effort: efficient}<|im_end|>" in out
+          and "q1\n\n{reasoning" not in out, repr(out))
+    check("medium_effort default off -> no marker",
+          "{reasoning effort" not in r(msgs_me, add_generation_prompt=False))
+    tools_me = [{"type": "function", "function": {
+        "name": "f", "parameters": {"type": "object", "properties": {}}}}]
+    msgs_me = [
+        {"role": "user", "content": "w?"},
+        {"role": "assistant", "content": "",
+         "tool_calls": [{"function": {"name": "f", "arguments": {}}}]},
+        {"role": "tool", "content": "res"},
+        {"role": "assistant", "content": "<think></think>done"},
+    ]
+    out = r(msgs_me, tools=tools_me, add_generation_prompt=False, medium_effort=True)
+    check("medium_effort: tool_response pseudo-user turn not marked",
+          out.count("{reasoning effort: efficient}") == 1
+          and "w?\n\n{reasoning effort: efficient}<|im_end|>" in out, repr(out))
 
     # 2f. tools 선언 + tool_calls + tool 결과 병합
     tools = [{"type": "function", "function": {

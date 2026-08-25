@@ -88,6 +88,26 @@ megatron_patch/template/helper.py::get_batch
 create_sft_dataset 에서 소실되는 상류 버그로 CP 정렬 미동작) 우리 GDN THD+CP 는
 하드 요구라 데이터 시점에 굽는다.
 
+## Reasoning effort / budget 모드 (2026-08-25, Ultra 보고서 §3.1.1 재현)
+
+Nemotron 3 Ultra 의 medium-effort 는 데이터 필드가 아니라 **렌더 시점 템플릿
+kwarg** 다 — 공개 행에는 흔적이 없고, IF-Chat-v3 instruction_following split
+(GPT-OSS-120B medium-effort 생성분)을 학습기가 medium_effort=True 로 렌더해서
+심는다. RL 블렌드(rlvr1/2·mopd)에는 같은 마커가 프롬프트 3.5% 에 이미 붙어
+있으므로 SFT 에서 초기화하지 않으면 RL 이 처음 보는 토큰을 만난다
+(docs/SFT_RL_DATASETS.md §2.6).
+  --medium-effort: 마지막 user 턴 끝에 "\n\n{reasoning effort: efficient}"
+     (템플릿 규약, user 스팬이라 비학습). fan-out 과 결합하면 서브샘플마다
+     학습 턴 직전 user 에 붙는다 — 추론 시 토큰열과 일치.
+  --truncate-reasoning-budget: 학습 턴(마지막 user 이후)의 reasoning 을
+     무작위 예산 B = int(L · U(lo, hi)) 토큰으로 자르고(응답은 그대로) 잘린
+     자리의 </think> 토큰을 loss 에서 제외 (Ultra: "</think> tokens in the
+     truncated samples are masked"). 추론의 budget control(max_tokens 도달 시
+     </think> 강제 삽입) 분포를 학습. 예산은 (seed, uuid, 턴) 로 결정적.
+     L < --truncate-min-tokens 인 턴은 건너뛰고, 절단된 턴이 없는 행은 드롭
+     (trunc_none — 원본 셋과 중복). 두 모드는 배타 (Ultra 도 별개 컴포넌트).
+  --row-stride K: K 행마다 1행 (파생 셋 크기 조절 — 파일 앞부분 편향 회피).
+
 Usage:
   python build_alpha_sft_idxmap.py \
       --input /path/dataset.jsonl \
@@ -120,6 +140,8 @@ from bestfit_pack import bestfit_decreasing  # noqa: E402
 # ---------------------------------------------------------------------------
 IM_START_ID = 2
 IM_END_ID = 3
+THINK_START_ID = 14
+THINK_END_ID = 15      # 예산 절단 모드의 loss 마스킹 대상 (docstring §Effort/Budget)
 IGNORE_INDEX = -100
 # content 안에 있으면 naive 인코딩이 턴 구조를 오염시키는 리터럴들.
 # <|endoftext|>(id 0): SFT 경로의 리셋은 음수 마커 기반이라 경계 오염은 없지만,
@@ -313,17 +335,101 @@ def find_turn_spans(ids: List[int], tok) -> List[Tuple[int, int, str]]:
     return spans
 
 
+def _split_inline_think(content: Any) -> Optional[Tuple[str, str]]:
+    """'<think>R</think>rest' -> (R, rest). 그 형식이 아니면 None."""
+    if not isinstance(content, str) or not content.startswith("<think>"):
+        return None
+    end = content.find("</think>")
+    if end < 0:
+        return None
+    return content[len("<think>"):end], content[end + len("</think>"):]
+
+
+def truncate_reasoning(tok, norm: dict, seed: int, frac: Tuple[float, float],
+                       min_tokens: int, info: Optional[Counter] = None
+                       ) -> Tuple[Optional[dict], List[int], Optional[str]]:
+    """학습 턴(마지막 user 이후)의 reasoning 을 무작위 토큰 예산으로 절단.
+
+    반환 (새 norm, 절단된 assistant 메시지 인덱스, 드롭 사유). content(응답)
+    는 불변. reasoning_content 필드와 inline <think>…</think> 표기 모두 지원
+    (원 표기 유지). 예산은 (seed, uuid, 턴 인덱스) 로 결정적 — 워커 순서 무관.
+    마지막 user 이전 턴은 일반 대화에서 템플릿이 think 를 제거하므로 대상 아님
+    (tool 시나리오의 멀티 assistant 턴은 마지막 user 이후라 각각 독립 예산).
+    """
+    import random
+    msgs = norm["messages"]
+    tt = norm["train_turns"]
+    last_user = max((i for i, m in enumerate(msgs) if m["role"] == "user"),
+                    default=-1)
+    new_msgs = list(msgs)
+    truncated: List[int] = []
+    for i, m in enumerate(msgs):
+        if m["role"] != "assistant" or i < last_user:
+            continue
+        if tt is not None and not tt[i]:
+            continue
+        rc = m.get("reasoning_content")
+        inline = None
+        if not rc:
+            inline = _split_inline_think(m.get("content"))
+            if inline is None:
+                if info is not None:
+                    info["trunc_no_reasoning"] += 1
+                continue
+            rc = inline[0]
+        rc_ids = tok(rc, add_special_tokens=False).input_ids
+        L = len(rc_ids)
+        if L < min_tokens:
+            if info is not None:
+                info["trunc_too_short"] += 1
+            continue
+        rng = random.Random(f"{seed}|{norm['uuid']}|{i}")
+        B = max(1, int(L * rng.uniform(frac[0], frac[1])))
+        new_rc = tok.decode(rc_ids[:B], skip_special_tokens=False,
+                            clean_up_tokenization_spaces=False)
+        nm = dict(m)
+        if inline is None:
+            nm["reasoning_content"] = new_rc
+        else:
+            nm["content"] = "<think>" + new_rc + "</think>" + inline[1]
+        new_msgs[i] = nm
+        truncated.append(i)
+        if info is not None:
+            info["trunc_turns"] += 1
+            info["trunc_tokens_orig"] += L
+            info["trunc_tokens_kept"] += B
+    if not truncated:
+        return None, [], "trunc_none"
+    return dict(norm, messages=new_msgs), truncated, None
+
+
 def render_and_mask(tok, norm: dict, mask_role_header: bool = True,
-                    hdr_cache: Optional[dict] = None
+                    hdr_cache: Optional[dict] = None,
+                    medium_effort: bool = False,
+                    budget: Optional[dict] = None,
+                    info: Optional[Counter] = None
                     ) -> Tuple[Optional[EncodedSample], Optional[str]]:
-    """대화 1건 -> (토큰열, 학습마스크). 실패 시 (None, 드롭 사유)."""
+    """대화 1건 -> (토큰열, 학습마스크). 실패 시 (None, 드롭 사유).
+
+    medium_effort: 템플릿 kwarg 로 마지막 user 턴에 effort 마커 (docstring §Effort).
+    budget: {"seed", "frac": (lo, hi), "min_tokens"} — truncate_reasoning 적용
+      후 절단 턴의 첫 </think> 를 비학습으로 (info 에 trunc_* 카운터 누적).
+    """
     if has_structural_injection(norm):
         return None, "injection"
 
+    truncated_turns: List[int] = []
+    if budget is not None:
+        norm, truncated_turns, why = truncate_reasoning(
+            tok, norm, budget["seed"], budget["frac"], budget["min_tokens"], info)
+        if norm is None:
+            return None, why
+
     try:
+        kw = {"medium_effort": True} if medium_effort else {}
         rendered = tok.apply_chat_template(
             norm["messages"], tools=norm["tools"],
-            tokenize=False, add_generation_prompt=False,
+            tokenize=False, add_generation_prompt=False, **kw,
         )
         ids = tok(rendered, add_special_tokens=False).input_ids
     except Exception:
@@ -349,15 +455,30 @@ def render_and_mask(tok, norm: dict, mask_role_header: bool = True,
     else:
         hdr_len = 0
 
+    ids_np = np.asarray(ids, dtype=np.int32)
     trainable = np.zeros(len(ids), dtype=bool)
     for (s, e), train in zip(asst_spans, asst_msg_flags):
         if train:
             trainable[s + hdr_len:e] = True
 
+    if truncated_turns:
+        # 절단 턴의 첫 </think> (= 강제 삽입 지점) 는 예측 대상에서 제외.
+        # 그 다음 토큰(응답 첫 토큰)은 학습 — "</think> 가 주어지면 답한다".
+        asst_idx = [k for k, m in enumerate(norm["messages"])
+                    if m["role"] == "assistant"]
+        for t in truncated_turns:
+            s, e = asst_spans[asst_idx.index(t)]
+            hit = np.nonzero(ids_np[s:e] == THINK_END_ID)[0]
+            if hit.size == 0:
+                return None, "trunc_no_think_end"
+            trainable[s + int(hit[0])] = False
+            if info is not None:
+                info["trunc_think_end_masked"] += 1
+
     if not trainable.any():
         return None, "no_trainable"
     return EncodedSample(
-        ids=np.asarray(ids, dtype=np.int32),
+        ids=ids_np,
         trainable=trainable,
         uuid=norm["uuid"],
     ), None
@@ -420,12 +541,14 @@ _WORKER_ARGS = None
 
 
 def _worker_init(tokenizer_path: str, mask_role_header: bool,
-                 fanout_train_turns: bool = False):
+                 fanout_train_turns: bool = False, medium_effort: bool = False,
+                 budget: Optional[dict] = None):
     global _WORKER_TOK, _WORKER_ARGS
     from transformers import AutoTokenizer
     _WORKER_TOK = AutoTokenizer.from_pretrained(tokenizer_path)
     _WORKER_ARGS = {"mask_role_header": mask_role_header, "hdr_cache": {},
-                    "fanout": fanout_train_turns}
+                    "fanout": fanout_train_turns,
+                    "medium_effort": medium_effort, "budget": budget}
 
 
 def _worker_encode(rows: List[Any]
@@ -433,7 +556,8 @@ def _worker_encode(rows: List[Any]
     """행 청크 -> (인코딩 샘플, 드롭 카운터, 드롭 견본, info 카운터).
 
     str 행은 여기서 파싱. fan-out on 이면 drops 는 서브샘플 단위로 센다.
-    info: rows(입력 행 수) / fanout_rows(전개된 행) / fanout_subsamples(그 산출).
+    info: rows(입력 행 수) / fanout_rows(전개된 행) / fanout_subsamples(그 산출)
+          / trunc_*(예산 절단 카운터, render_and_mask 가 누적).
     """
     out, drops, dropped_rows, info = [], Counter(), [], Counter()
     for row in rows:
@@ -459,6 +583,9 @@ def _worker_encode(rows: List[Any]
                 _WORKER_TOK, sub,
                 mask_role_header=_WORKER_ARGS["mask_role_header"],
                 hdr_cache=_WORKER_ARGS["hdr_cache"],
+                medium_effort=_WORKER_ARGS["medium_effort"],
+                budget=_WORKER_ARGS["budget"],
+                info=info,
             )
             if enc is None:
                 drops[why] += 1
@@ -494,6 +621,19 @@ def get_args():
                    help="multi-True train_turns 행을 True 턴별 서브샘플로 전개 "
                         "— 중간 학습 턴의 reasoning 보존 (IF 계열용, "
                         "docstring 의도적 차이 #2)")
+    p.add_argument("--medium-effort", action="store_true",
+                   help="마지막 user 턴에 '{reasoning effort: efficient}' 마커 "
+                        "(템플릿 medium_effort=True; docstring §Effort/Budget)")
+    p.add_argument("--truncate-reasoning-budget", action="store_true",
+                   help="학습 턴 reasoning 을 무작위 토큰 예산으로 절단 + 잘린 자리 "
+                        "</think> 비학습 (budget-control 파생 셋). --medium-effort 와 배타")
+    p.add_argument("--truncate-frac", default="0.1,0.9",
+                   help="예산 비율 U(lo,hi) — 턴의 reasoning 토큰 길이 대비")
+    p.add_argument("--truncate-min-tokens", type=int, default=64,
+                   help="이보다 짧은 reasoning 턴은 절단 대상에서 제외")
+    p.add_argument("--truncate-seed", type=int, default=0)
+    p.add_argument("--row-stride", type=int, default=1,
+                   help="K>1 이면 K 행마다 1행만 읽음 (파생 셋 크기 조절)")
     p.add_argument("--min-tokens", type=int, default=None,
                    help="렌더 길이가 이 값 이하인 샘플 제외 — 128k 장문 버킷 생성용 "
                         "(64k 버킷과의 중복 방지: 64k 버킷은 >64k를 too_long 드롭, "
@@ -514,6 +654,15 @@ def main():
     args = get_args()
     assert args.seq_length % args.pad_doc_multiple == 0, \
         "--seq-length 는 --pad-doc-multiple 의 배수여야 함"
+    assert not (args.medium_effort and args.truncate_reasoning_budget), \
+        "--medium-effort 와 --truncate-reasoning-budget 은 배타 (별개 파생 셋)"
+    assert args.row_stride >= 1, "--row-stride 는 1 이상"
+    budget = None
+    if args.truncate_reasoning_budget:
+        lo, hi = (float(x) for x in args.truncate_frac.split(","))
+        assert 0.0 < lo <= hi < 1.0, "--truncate-frac 는 0<lo<=hi<1"
+        budget = {"seed": args.truncate_seed, "frac": (lo, hi),
+                  "min_tokens": args.truncate_min_tokens}
 
     from transformers import AutoTokenizer
     tok = AutoTokenizer.from_pretrained(args.tokenizer)
@@ -537,9 +686,13 @@ def main():
 
     def _chunks():
         buf = []
+        kept = 0
         for i, row in enumerate(iter_rows(args.input)):
-            if args.max_rows is not None and i >= args.max_rows:
+            if args.row_stride > 1 and i % args.row_stride:
+                continue
+            if args.max_rows is not None and kept >= args.max_rows:
                 break
+            kept += 1
             buf.append(row)
             if len(buf) >= args.chunk_rows:
                 yield buf
@@ -581,13 +734,14 @@ def main():
 
     if args.workers <= 1:
         _worker_init(args.tokenizer, args.mask_role_header,
-                     args.fanout_train_turns)
+                     args.fanout_train_turns, args.medium_effort, budget)
         for chunk in _chunks():
             _consume(_worker_encode(chunk))
     else:
         with mp.Pool(args.workers, initializer=_worker_init,
                      initargs=(args.tokenizer, args.mask_role_header,
-                               args.fanout_train_turns)) as pool:
+                               args.fanout_train_turns, args.medium_effort,
+                               budget)) as pool:
             for result in pool.imap(_worker_encode, _chunks(), chunksize=1):
                 _consume(result)
     dropped_f.close()
@@ -607,6 +761,11 @@ def main():
             "rows_read": n_rows,
             "fanout_rows": int(fanout_agg["fanout_rows"]),
             "fanout_subsamples": int(fanout_agg["fanout_subsamples"]),
+            "row_stride": args.row_stride,
+            "medium_effort": args.medium_effort,
+            "truncate_reasoning_budget": budget,
+            "truncate": {k: int(v) for k, v in sorted(fanout_agg.items())
+                         if k.startswith("trunc_")},
             "rows_rendered": int(lens.size),
             "drops": dict(drops),
             "total_tokens": int(lens.sum()),
@@ -674,6 +833,11 @@ def main():
         "rows_read": n_rows,
         "fanout_rows": int(fanout_agg["fanout_rows"]),
         "fanout_subsamples": int(fanout_agg["fanout_subsamples"]),
+        "row_stride": args.row_stride,
+        "medium_effort": args.medium_effort,
+        "truncate_reasoning_budget": budget,
+        "truncate": {k: int(v) for k, v in sorted(fanout_agg.items())
+                     if k.startswith("trunc_")},
         "samples_kept": len(samples),
         "drops": dict(drops),
         "too_long_hist_tok_buckets": {str(k): v for k, v in sorted(too_long_hist.items())},

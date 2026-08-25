@@ -118,6 +118,33 @@ multi-True 예: 5메시지 대화의 `[F,F,T,F,T]` — **중간 assistant 턴도
 재현: `python3 - <<'E'` 로 각 jsonl 을 순회하며
 `tt=r["metadata"]["train_turns"]; sum(tt)==1 and tt[-1]` 집계 (전수 ~2분).
 
+### 2.6 Reasoning effort / budget — IF split 의 정체와 RL 블렌드 마커 (2026-08-25)
+
+결론: Ultra 는 effort 를 데이터 필드가 아니라 **렌더 시점 템플릿 kwarg** 로 심는다.
+alpha 는 NVIDIA 레시피를 재현한다 (사용자 결정 2026-08-25).
+
+| 사실 | 근거 |
+|---|---|
+| Ultra 3 모드: off / full / **medium effort** (`chat_template_kwargs={"medium_effort": True}` → 마지막 user 턴 끝 `{reasoning effort: efficient}`) + budget control (추론 시 `max_tokens` 절단 후 `</think>` 강제) | Ultra 기술보고서 §3.1.1 "Efficiency and Control", 모델 카드 |
+| SFT 초기화 = ① GPT-OSS-120B medium-effort 샘플(math/STEM/IF) ② 기존 trace 를 무작위 예산으로 절단한 샘플(응답 동일, `</think>` loss 마스킹) → RLVR 에서 최적화 | 같은 절 |
+| 공개 SFT 행에 흔적 없음: `chat_template_kwargs` 전수 null (IF-Chat-v3 chat 20k). **`instruction_following.jsonl` 자체가 GPT-OSS-120B medium-effort 데이터** (README:50, `metadata.model` 100%) — 마커는 학습기가 렌더할 때 붙는다 | 컬렉션 README·메타 실측 |
+| 길이로는 구분 불가: IF think p50 6.9k chars > chat(GLM-5) 4.6k — medium 은 GPT-OSS high 대비 상대값 | 3k행 샘플 실측 |
+| 절단-예산 컴포넌트는 미공개 (파생 데이터) | — |
+| **RL 블렌드에는 이미 있다**: rlvr1 3,429/98,424 (3.5%) · rlvr2 3,429/99,116 (3.5%) · mopd 3,429/85,980 (4.0%); agent code_gen 1,618 / math_with_judge 995 / mcqa 816. 마스킹 math 행은 `_hf_question_placeholder.trail` 에 실려 `fill_placeholders.py` 복원 후 user 프롬프트 끝에 붙음. `alpha_blends/rlvr1_alpha.jsonl` 도 3,429 그대로 승계 | 전수 grep (마커 문자열 1종) |
+| Super 보고서: RL 프롬프트 2%→1% 를 effort 모드로, 보상 = 정답 + 생성 토큰 수 조정 | Super §3.2.1 |
+
+**alpha 적용 (NVIDIA 레시피 재현)**
+
+| 단계 | 조치 | 구현 |
+|---|---|---|
+| SFT ① | IF split 을 `--medium-effort` 로 재변환 → `chat_v3_if_fanout_me` (fan-out 결합: 서브샘플마다 학습 턴 직전 user 에 마커 = 추론 토큰열) | `build_alpha_sft_idxmap.py` docstring §Effort/Budget, `convert_sft_64k.sh` |
+| SFT ② | 절단-예산 파생 셋 `budget_trunc_v1_{if,math}`: 학습 턴 reasoning 을 B=int(L·U(0.1,0.9)) 토큰으로 절단(응답 불변), 잘린 자리 `</think>` 비학습, (seed,uuid,턴) 결정적. 블렌드 1% 슬롯 제안 (Super low-effort 2% 참조; 나머지는 ①이 담당) | 〃 `--truncate-reasoning-budget --row-stride` |
+| RL | 마커 프롬프트 유지. 길이 보상은 NeMo-RL 내장 `env.nemo_gym.effort_levels` (`low_string="{reasoning effort: efficient}"`, `low_weight>0`, `low_ub`, `low_penalty`; `lr=min(1, w·(1−len/ub))`, `reward += reward·max(lr,0) + penalty·min(lr,0)`) — GRPO yaml 에 설정 필수 | `NeMo-RL/nemo_rl/experience/rollouts.py:330` |
+| 검증 | `verify_chat_template.py` 34 (medium_effort 4종) · `test_alpha_sft_idxmap.py` 34 (§6 effort/budget 9종) · 스모크 변환 IF 3k/2k 행 `verify_sft_bins` PASS, 절단률 실측 50.8% (=U 평균) | tests |
+
+미실행 (유휴 노드·NFS 규칙): 본 변환 → stats `real_tokens` 로 블렌드 재산출. IF 는 경로 교체·가중치 불변
+(마커 +~10 tok/샘플 ≈ +0.5%, 무시). trunc 는 chat 설계단위 21 → 20 + budget 1 분할 제안 (본 변환 후 확정).
+
 ## 3. RL 자산
 
 ### 3.1 훈련 블렌드 3종 (즉시 실행 가능한 레시피 — NeMo Gym 소비 포맷)
@@ -184,6 +211,8 @@ multi-True 예: 5메시지 대화의 `[F,F,T,F,T]` — **중간 assistant 턴도
    multilingual·safety) + LongBlocks-SFT 소량 편입
 6. MOPD 재현 범위 결정: 교사 슬롯 수(2~3 vs 5), 192k→128k 캡, NeMo RL/Gym 스택
    포팅 vs 자체 구현(verl/ChatLearn 백엔드 검토)
+7. effort/budget 재변환 (§2.6): `chat_v3_if_fanout_me` + `budget_trunc_v1_{if,math}` →
+   블렌드 재산출. 변환기·테스트·스모크는 완료 (2026-08-25), 본 변환은 유휴 노드에서.
 
 ## 6. 미해결/후속
 
@@ -192,3 +221,6 @@ multi-True 예: 5메시지 대화의 `[F,F,T,F,T]` — **중간 assistant 턴도
   Megatron-Bridge SFT 레시피 공개 여부 추적
 - litmus-bench 활용법(모니터링 셋) 조사
 - 교사 rollout 서빙: sglang alpha 어댑터(`examples/alpha/sglang/`)의 batch 성능 실측
+- effort/budget 가정 2건 (§2.6): 절단 예산 분포 U(0.1,0.9)·블렌드 1% 는 Ultra 미공개라 가정;
+  NeMo-RL `effort_levels` 계수(`low_weight`/`low_ub`/`low_penalty`)도 미공개 — RL 착수 시
+  medium-effort 응답 길이 실측으로 정한다

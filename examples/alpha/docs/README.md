@@ -45,7 +45,7 @@
 | [gdn_cp_port.md](gdn_cp_port.md) | 2026-08 | GDN Context Parallel 포팅 + THD 잠복버그 규명 분석노트 3 |
 | [MUON_OFFLOAD_BACKPORT.md](MUON_OFFLOAD_BACKPORT.md) | 2026-08-22 | PR #6244 chunked offload 백포트 S0~S5, 128K@CP8 GO |
 | [SFT_RL_DATASETS.md](SFT_RL_DATASETS.md) | 2026-08 | SFT·RL 데이터 자산 49종, Ultra 파이프라인 설계, 예산·epoch 근거 |
-| [INTERLEAVED_THINKING.md](INTERLEAVED_THINKING.md) | 2026-08-24 | think-히스토리 규약 정비 (DSV4 분기·IF fan-out·keepthink) + 새 SFT 셋 규칙 7건 |
+| [INTERLEAVED_THINKING.md](INTERLEAVED_THINKING.md) | 2026-08-24 | think-히스토리 규약 정비 (DSV4 분기·IF fan-out·keepthink) + 새 SFT 셋 규칙 8건 (8 = effort 렌더 플래그) |
 
 ## study/ (실측·규명·스터디)
 

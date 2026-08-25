@@ -98,7 +98,7 @@ configs/data/      stage1_v5_blend, stage2_v5_blend_packed{,_p2,_p2b,_p3} ★,
 | `forward_sanity.py` | 변환 HF 모델 perplexity 게이트 (evaluate.sh Stage 2.5) |
 | `tools/alpha_config.py` | `load_config_from_checkpoint`, `emit-megatron-flags`, `generate-hf-config` |
 | `tools/verify_pipeline.py` | `preflight` / `compare-config` / `tokenizer-roundtrip` |
-| `tools/verify_chat_template.py` | chat template 31 tests — **마스킹 규약·injection 방어의 정본** |
+| `tools/verify_chat_template.py` | chat template 34 tests — **마스킹 규약·injection 방어의 정본** |
 | `tools/compute_blend_weights.py` | blend 가중치·epoch 표 |
 | `hf_model/` | HF 구현. `AlphaSparseMoeBlock`은 DSV3 라우팅 미러. **`e_score_correction_bias`는 fp32 `nn.Parameter` + `_keep_in_fp32_modules_strict` — 되돌리지 말 것**. `AlphaRMSNorm`은 표준(`*γ`) |
 | `../../toolkits/distributed_checkpoints_convertor/scripts/alpha/run_convert.sh` | GPU-agnostic 변환기 (EP=#GPU) |

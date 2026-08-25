@@ -71,7 +71,22 @@ done
 # chat_v3_chat 은 fan-out 불요 (train_turns 전수 last-only, docs §2.5) —
 #   복원 완료 후 별도 실행:
 #   run chat_v3_chat "$SFT/Nemotron-SFT-Instruction-Following-Chat-v3/data/chat.with_prompts.jsonl"
-run chat_v3_if_fanout "$SFT/Nemotron-SFT-Instruction-Following-Chat-v3/data/instruction_following.jsonl" \
-  --fanout-train-turns
+# 2026-08-25 부터 medium-effort 렌더본(chat_v3_if_fanout_me)이 정본 — IF split 은
+#   GPT-OSS-120B medium-effort 생성분(컬렉션 README:50)이라 Ultra 레시피상
+#   medium_effort=True 로 렌더해야 마커↔trace 조건부가 학습된다. 마커는 렌더
+#   kwarg 라 데이터에 없다 (변환기 docstring §Effort/Budget, docs/SFT_RL_DATASETS.md
+#   §2.6). 구 chat_v3_if_fanout 은 대조·롤백용 보존, 블렌드는 _me 를 가리킨다.
+run chat_v3_if_fanout_me "$SFT/Nemotron-SFT-Instruction-Following-Chat-v3/data/instruction_following.jsonl" \
+  --fanout-train-turns --medium-effort
+
+# budget_trunc_v1: Ultra §3.1.1 두 번째 컴포넌트 — 학습 턴 reasoning 을 무작위
+#   예산(U(0.1,0.9)·L 토큰)으로 절단(응답 불변) + 잘린 자리 </think> 비학습.
+#   IF(fan-out) 1/4 행 + math_v4 1/20 행 → 절단 후 ~0.35B real 예상 (블렌드 1%
+#   슬롯 제안, 가중치는 stats real_tokens 로 재산출 — yaml 헤더 규칙). 원본 셋과
+#   행이 겹치지만 절단본은 다른 분포(강제 </think>)를 가르치므로 의도된 중복.
+run budget_trunc_v1_if "$SFT/Nemotron-SFT-Instruction-Following-Chat-v3/data/instruction_following.jsonl" \
+  --fanout-train-turns --truncate-reasoning-budget --row-stride 4
+run budget_trunc_v1_math "$SFT/Nemotron-SFT-Math-v4" \
+  --truncate-reasoning-budget --row-stride 20
 
 echo "== ALL DONE ($(date +%H:%M:%S)) -> $OUT"

@@ -145,4 +145,4 @@ KST 09:00). 도입 당일 A 재생성 40% 투입 20분 만에 소진되어 발�
 - 트랙 A: `out/<run>/results.jsonl` (+ `rejects.jsonl` — 생성물 포함, 진단용)
 - 트랙 B: `artifacts/<dataset>/**.parquet` → `export_ko_chat.py` → jsonl
 - 최종 이관(예정): `/home/work/Datasets/LL_datasets/posttraining/SFT/alpha-SFT-KoChat-v1/`
-  → 64k 변환(`build_alpha_sft_idxmap.py`) → 블렌드 yaml (chat 21% 내 비중은 미정)
+  → 64k 변환(`build_alpha_sft_idxmap.py`; IF 번역본은 `--fanout-train-turns --medium-effort` — 원본이 GPT-OSS medium-effort 생성분, `docs/SFT_RL_DATASETS.md` §2.6) → 블렌드 yaml (chat 21% 내 비중은 미정)

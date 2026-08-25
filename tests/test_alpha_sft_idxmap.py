@@ -20,10 +20,13 @@ import pytest
 REPO = os.path.abspath(os.path.join(os.path.dirname(__file__), os.pardir))
 sys.path.insert(0, os.path.join(REPO, "toolkits", "sft_data_preprocessing"))
 
+from collections import Counter  # noqa: E402
+
 from build_alpha_sft_idxmap import (  # noqa: E402
     IGNORE_INDEX,
     IM_END_ID,
     IM_START_ID,
+    THINK_END_ID,
     EncodedSample,
     _worker_encode,
     _worker_init,
@@ -463,3 +466,131 @@ def test_bestfit_alignment_property():
     for b in range(num_bins):
         tot = padded[item_bin == b].sum()
         assert tot <= SEQ and tot % MULT == 0
+
+
+# ---------------------------------------------------------------------------
+# 6. reasoning effort / budget 모드 (변환기 docstring §Effort/Budget, 2026-08-25)
+# ---------------------------------------------------------------------------
+EFFORT_MARKER = "{reasoning effort: efficient}"
+LONG_R = " ".join(f"step{i}" for i in range(200))   # reasoning ≥ 200 토큰
+BUDGET = {"seed": 0, "frac": (0.3, 0.6), "min_tokens": 64}
+BUDGET_MSGS = [
+    {"role": "user", "content": "q"},
+    {"role": "assistant", "reasoning_content": LONG_R, "content": "final answer"},
+]
+
+
+def test_medium_effort_marker_on_last_user_only(tok):
+    enc = _mk_sample(tok, IF_MULTI, medium_effort=True)
+    text = tok.decode(enc.ids.tolist())
+    assert text.count(EFFORT_MARKER) == 1
+    assert "q2\n\n" + EFFORT_MARKER in text and "q1\n\n" + EFFORT_MARKER not in text
+    assert EFFORT_MARKER not in tok.decode(enc.ids[enc.trainable].tolist())  # user 스팬
+    base = _mk_sample(tok, IF_MULTI)                       # off: 기존 경로 불변
+    assert EFFORT_MARKER not in tok.decode(base.ids.tolist())
+    assert len(enc.ids) > len(base.ids)
+
+
+def test_medium_effort_fanout_each_subsample_marked(tok):
+    # fan-out 서브샘플마다 "학습 턴 직전 user" 에 마커 — 추론 시 토큰열과 일치
+    subs = expand_train_turns_fanout(_norm(IF_MULTI, train_turns=IF_TT))
+    for sub, q in zip(subs, ("q1", "q2")):
+        enc, why = render_and_mask(tok, sub, medium_effort=True)
+        assert enc is not None, why
+        text = tok.decode(enc.ids.tolist())
+        assert text.count(EFFORT_MARKER) == 1 and f"{q}\n\n{EFFORT_MARKER}" in text
+
+
+def test_medium_effort_tool_scenario_marks_real_user_only(tok):
+    # tool 결과는 <|im_start|>user 로 렌더되지만 role=tool → 마커 대상 아님
+    enc, why = render_and_mask(tok, _norm(TOOLCONV, tools=TOOLS), medium_effort=True)
+    assert enc is not None, why
+    text = tok.decode(enc.ids.tolist())
+    assert text.count(EFFORT_MARKER) == 1 and "w?\n\n" + EFFORT_MARKER in text
+
+
+def test_truncate_budget_shortens_reasoning_masks_think_end(tok):
+    info = Counter()
+    enc, why = render_and_mask(tok, _norm(BUDGET_MSGS, uuid="u1"), budget=BUDGET,
+                               info=info)
+    assert enc is not None, why
+    base = _mk_sample(tok, BUDGET_MSGS)
+    assert len(enc.ids) < len(base.ids)
+    text = tok.decode(enc.ids.tolist())
+    assert "final answer" in text and "step199" not in text   # 응답 보존, reasoning 절단
+    pos = int(np.nonzero(enc.ids == THINK_END_ID)[0][0])
+    assert not enc.trainable[pos]          # 강제 삽입 지점 </think> 는 비학습
+    assert enc.trainable[pos + 1]          # 응답 첫 토큰은 학습
+    assert enc.trainable[pos - 1]          # 절단된 reasoning 내용은 학습
+    assert info["trunc_turns"] == 1 and info["trunc_think_end_masked"] == 1
+    lo, hi = BUDGET["frac"]
+    assert lo * info["trunc_tokens_orig"] - 1 <= info["trunc_tokens_kept"] \
+        <= hi * info["trunc_tokens_orig"]
+    bpos = int(np.nonzero(base.ids == THINK_END_ID)[0][0])
+    assert base.trainable[bpos]            # 대조: 비절단 렌더의 </think> 는 학습
+
+
+def test_truncate_budget_deterministic_per_uuid(tok):
+    a, _ = render_and_mask(tok, _norm(BUDGET_MSGS, uuid="u1"), budget=BUDGET)
+    b, _ = render_and_mask(tok, _norm(BUDGET_MSGS, uuid="u1"), budget=BUDGET)
+    c, _ = render_and_mask(tok, _norm(BUDGET_MSGS, uuid="u2"), budget=BUDGET)
+    assert np.array_equal(a.ids, b.ids)
+    assert len(a.ids) != len(c.ids)        # (seed 고정 → 결정적 불일치)
+
+
+def test_truncate_budget_inline_think_form_preserved(tok):
+    msgs = [{"role": "user", "content": "q"},
+            {"role": "assistant", "content": "<think>" + LONG_R + "</think>final answer"}]
+    enc, why = render_and_mask(tok, _norm(msgs, uuid="u1"), budget=BUDGET)
+    assert enc is not None, why
+    text = tok.decode(enc.ids.tolist())
+    assert "final answer" in text and "step199" not in text
+    pos = int(np.nonzero(enc.ids == THINK_END_ID)[0][0])
+    assert not enc.trainable[pos] and enc.trainable[pos + 1]
+
+
+def test_truncate_too_short_or_no_reasoning_drops(tok):
+    info = Counter()
+    enc, why = render_and_mask(tok, _norm(IF_MULTI), budget=BUDGET, info=info)
+    assert enc is None and why == "trunc_none"       # R2 는 min_tokens 미만
+    assert info["trunc_too_short"] == 1
+    enc, why = render_and_mask(
+        tok, _norm([{"role": "user", "content": "q"},
+                    {"role": "assistant", "content": "plain"}]),
+        budget=BUDGET, info=info)
+    assert enc is None and why == "trunc_none" and info["trunc_no_reasoning"] == 1
+
+
+def test_truncate_history_turn_untouched_and_fanout(tok):
+    msgs = [
+        {"role": "user", "content": "q1"},
+        {"role": "assistant", "reasoning_content": LONG_R, "content": "a1"},
+        {"role": "user", "content": "q2"},
+        {"role": "assistant", "reasoning_content": LONG_R, "content": "a2"},
+    ]
+    info = Counter()
+    enc, why = render_and_mask(tok, _norm(msgs, uuid="u1"), budget=BUDGET, info=info)
+    assert enc is not None, why
+    assert info["trunc_turns"] == 1                    # 마지막 user 이전 턴은 대상 아님
+    assert "<think></think>a1" in tok.decode(enc.ids.tolist())
+    subs = expand_train_turns_fanout(_norm(msgs, train_turns=IF_TT, uuid="u1"))
+    for sub in subs:                                   # fan-out: 서브샘플마다 자기 턴 절단
+        info = Counter()
+        enc, why = render_and_mask(tok, sub, budget=BUDGET, info=info)
+        assert enc is not None, why
+        assert info["trunc_turns"] == 1 and info["trunc_think_end_masked"] == 1
+
+
+def test_effort_and_budget_worker_end_to_end(tok):
+    import json as _json
+    row = _json.dumps({"messages": BUDGET_MSGS, "uuid": "r0"})
+    _worker_init(TOKENIZER_DIR, True, budget=BUDGET)
+    out, drops, dropped, info = _worker_encode([row])
+    assert len(out) == 1 and not drops and info["trunc_turns"] == 1
+    _worker_init(TOKENIZER_DIR, True, medium_effort=True)
+    out, drops, dropped, info = _worker_encode([row])
+    assert len(out) == 1 and not drops and "trunc_turns" not in info
+    assert EFFORT_MARKER in tok.decode(out[0].ids.tolist())
+    _worker_init(TOKENIZER_DIR, True)                  # 기본 경로: 둘 다 off
+    out, _, _, _ = _worker_encode([row])
+    assert EFFORT_MARKER not in tok.decode(out[0].ids.tolist())
