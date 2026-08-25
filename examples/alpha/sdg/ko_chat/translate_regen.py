@@ -143,6 +143,8 @@ class Client:
                 if "error" in body:
                     raise RuntimeError(f"api error: {str(body['error'])[:200]}")
                 return body["choices"][0]["message"]["content"] or ""
+            except DailyCapExceeded:
+                raise  # 재시도 금지 — 포괄 except 가 삼키지 않도록 먼저 잡는다
             except Exception as e:  # noqa: BLE001
                 last_err = e
                 base = 2 ** attempt * 2

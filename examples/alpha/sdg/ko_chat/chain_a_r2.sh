@@ -29,15 +29,16 @@ else
   fi
 fi
 N_SEEDS=$(wc -l < "$K/seeds_r2.jsonl")
-# 로컬 Gemma 96 + OpenRouter OxAlpha 재생성 25% (재배분 2026-08-25: OR 파이의 몫을
-# 한국 맥락 트랙 B 생성으로 이전 — 0.4 였을 때 A 단독으로 429 경계 3% 폴백)
-say "r2 시드 $N_SEEDS 행 — 트랙 A r2 가동 (workers 128, openrouter regen 25%)"
+# OpenRouter OxAlpha 는 1,000 요청/일 상한(2026-08-25 실측) — 생성 백엔드로 쓰지 않는다
+# (사용자 결정: 심판 캘리브레이션 전용, calibrate_judge.py). A_OR_FRAC env 로만 재활성.
+A_OR_FRAC=${A_OR_FRAC:-0}
+say "r2 시드 $N_SEEDS 행 — 트랙 A r2 가동 (workers 128, openrouter regen frac=$A_OR_FRAC)"
 
 for i in $(seq 1 8); do
   wait_server || { say "CHAIN HALT: 서버 복구 실패"; exit 1; }
   say "A r2 실행 round $i"
   python3 "$K/translate_regen.py" --seeds "$K/seeds_r2.jsonl" --out "$K/out/r2_a" \
-    --base-url "$BASE" --workers 128 --openrouter-frac 0.25 >> "$K/out/r2_a.log" 2>&1
+    --base-url "$BASE" --workers 128 --openrouter-frac "$A_OR_FRAC" >> "$K/out/r2_a.log" 2>&1
   DONE=$(( $(cat "$K/out/r2_a/results.jsonl" 2>/dev/null | wc -l) \
         + $(cat "$K/out/r2_a/rejects.jsonl" 2>/dev/null | wc -l) ))
   say "round $i 종료: done=$DONE / $N_SEEDS"

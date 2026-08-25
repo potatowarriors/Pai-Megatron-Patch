@@ -90,19 +90,30 @@ chat_v3 는 **전 행이 `reasoning_content` 보유**(chat·IF 전수 실측)이
   **r2_a 는 파일이 조용해진 뒤** — 완주 후 packaging 때 실행. 동시 append 와
   finalize 교체가 경합하므로 quiescent 필수).
 
-## 두 번째 교사: OxAlpha (OpenRouter `stealth/ox-alpha`, 무료, 2026-08-25)
+## 두 번째 모델: OxAlpha (OpenRouter `stealth/ox-alpha`, 무료, 2026-08-25)
 
 사용자 제안으로 도입. GLM 계열로 추정되는 stealth 모델 — 1M ctx, 입출력 $0,
 reasoning 모델. 키는 `syn_data/.env` 의 `OPENROUTER`(chain_common.sh 가 source).
 
-**어디에 쓰나** — 처리량 기여는 +13% 수준(제공자 429 경계 동시 ~40 → ~440 tok/s,
-Gemma 로컬 3,400 대비). 진짜 가치는 ① 강한 교사 혼입(다양성·한국 제도 지식이
-Gemma 보다 구체적: 임차권등기명령·분쟁조정위 등 실측) ② **독립 심판**(Gemma
-셀프심판은 관대함 실증).
-- 트랙 A: 재생성 레코드의 **40%** 를 OxAlpha 로 (`--openrouter-frac 0.4`, uuid 해시
-  결정적). 번역 턴은 항상 Gemma. 레코드별 `ko_synthesis.regen_model` 과 최상위
-  `model` 에 교사 기록 — 블렌드에서 교사별 분리 가능.
-- 트랙 B r2: 심판 컬럼만 OxAlpha (`--judge-backend openrouter`, 동시 24).
+**⚠️ 계정당 1,000 요청/일 상한** (`free-models-per-day-stealth`, 리셋 UTC 00:00 =
+KST 09:00). 도입 당일 A 재생성 40% 투입 20분 만에 소진되어 발견 — `:free` 접미
+모델의 문서 한도(20/분·50/일)와 별개 버킷이고, 그 위의 상한을 "66건 연속 통과"로는
+볼 수 없었다. **대규모 생성·전수 심판 백엔드로는 불가.**
+
+**확정 용도 (사용자 결정 2026-08-25): 심판 캘리브레이션 전용.** 하루 ~900건을
+트랙 B(Gemma 생성+Gemma 심판) 표본의 **재심판**에 써서 Gemma 셀프심판의 관대함을
+정량화하고 export 임계를 보정한다 — 3,600건 판정이 B 100k+ 전체의 필터 품질을
+좌우하므로 레버리지가 가장 크다. reasoning effort **high**(사용자 지시; 요청 상한
+체제에선 요청당 가치 극대화가 맞다), max_tokens 12288(숨은 사고가 예산을 소비).
+- `calibrate_judge.py` — 같은 4축 루브릭, 결과 `out/judge_calib/<date>.jsonl`,
+  `--report` 로 축별 평균·차이·임계(<4) 통과율 비교.
+- `calib_daily.sh` — 매일 UTC 00:05 자동 실행 (sub1 nohup 루프).
+- 생성 경로(`translate_regen.py --openrouter-frac`, `ko_chat_sdg.py --gen-backend
+  openrouter`, `chain_b_r2.sh` `B_OR_SLICE`)는 구현·검증됐으나 **기본 off** —
+  상한이 풀리거나 유료 전환 시 스위치만 켜면 된다. 레코드별 `ko_synthesis.regen_model`
+  과 최상위 `model` 에 교사 기록.
+- 일일 상한 429 는 재시도 무의미 → `DailyCapExceeded` 서킷브레이커(1시간 비활성,
+  포괄 except 보다 먼저 잡아야 함 — 삼켜서 5회 재시도한 버그 실측).
 
 **실측 특성·대응** (전부 translate_regen.py 에 구현):
 | 특성 | 대응 |
@@ -112,7 +123,7 @@ Gemma 보다 구체적: 임차권등기명령·분쟁조정위 등 실측) ② *
 | 숨은 사고가 **영어** | 쓰지 않음 — 한국어 사고는 JSON 필드로 생성. `reasoning.effort=low` 로 지연 절감 |
 | 사고에 "JSON 형식을 지켜" 누출 | 프롬프트 금지 + `REASONING_FORMAT_LEAK_RE` 가드(재시도) |
 | 429 (동시 48 에서 10%) | 지수 백오프+지터 5회 → 실패 시 **Gemma 자동 폴백**(`FALLBACK` 로그). stealth 모델은 예고 없이 사라질 수 있어 무인 런이 멈추지 않게 |
-| `:free` 문서 한도(20/분·50/일) | 이 모델엔 미적용 실측(66건 연속 통과). 단 정책 변경 가능 — 폴백이 보험 |
+| 일일 상한 1,000 요청(`free-models-per-day-stealth`) | `:free` 문서 한도와 별개 버킷. 재시도 무의미 → 즉시 감지·1시간 비활성. 용도를 캘리브레이션(≤900/일)으로 한정 |
 
 파일럿(16시드): 재생성 8/8 OxAlpha 처리, 파싱 실패 0, 누출 0, 폴백 0.
 **주의**: 무료 stealth 모델은 프롬프트가 제공자 학습에 쓰일 수 있음 — 보내는 것은
