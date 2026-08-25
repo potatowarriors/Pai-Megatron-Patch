@@ -35,8 +35,10 @@ alpha의 **LC-phase → SFT → RL(MOPD)** 훈련 계획을 위한 데이터 준
   붙어 있어(`alpha_blends` 승계) SFT 초기화 없이는 RL 이 처음 보는 토큰을 만난다.
 - 결정(사용자): NVIDIA 레시피 재현. 변환기 `--medium-effort`(IF 재변환 `chat_v3_if_fanout_me`)
   + `--truncate-reasoning-budget --row-stride`(파생 셋 `budget_trunc_v1_{if,math}`, 잘린 자리
-  `</think>` 비학습). 테스트 34/34·34/34, 스모크 bins 게이트 PASS. 본 변환·블렌드 재산출은
-  유휴 노드 대기. RL 측은 NeMo-RL 내장 `effort_levels` 로 길이 보상. [`SFT_RL_DATASETS.md` §2.6]
+  `</think>` 비학습). 테스트 34/34·34/34. **본 변환 완료(같은 날, sub1·ko_chat vLLM 병행 ~3분)**:
+  3종 게이트 PASS, if_me trainable 구본 동일(마커 비학습 실증), 절단률 49.7/50.0%. 블렌드 반영
+  chat 21→20+budget 1 (ep 2.67/1.19). RL 측은 NeMo-RL 내장 `effort_levels` 로 길이 보상.
+  [`SFT_RL_DATASETS.md` §2.6]
 
 **08-21 — THD+CP 재패킹 요건 확정**
 - LC는 CP≥2 학습이고 dense 마스크 격리는 32k에서 불가 → **THD/cu_seqlens 문서 격리**

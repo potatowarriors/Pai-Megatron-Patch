@@ -122,7 +122,7 @@ keepthink 렌더 + agentic 카테고리 5% 내부 재비례가 경로).
 |---|---|---|
 | 템플릿 | `examples/alpha/tokenizer_v5/chat_template.jinja` (+config json 동기화) | 분기 주석 상단 |
 | 변환기 | `build_alpha_sft_idxmap.py` (`--fanout-train-turns`, `--medium-effort`, `--truncate-reasoning-budget`) | docstring 의도적 차이 #2, §Effort/Budget |
-| bins 64k | `sft_packed_64k_pad16/{chat_v3_if_fanout_me, budget_trunc_v1_{if,math}, swe_v3_keepthink, arc_agi_v1_keepthink}` | 구 디렉토리 보존. `_me`·`budget_trunc` 는 본 변환 대기 (2026-08-25) |
+| bins 64k | `sft_packed_64k_pad16/{chat_v3_if_fanout_me, budget_trunc_v1_{if,math}, swe_v3_keepthink, arc_agi_v1_keepthink}` | 구 디렉토리 보존. `_me`·`budget_trunc` 변환 완료 (2026-08-25) |
 | bins 128k | `sft_packed_128k_pad16/{swe_v3_keepthink, arc_agi_v1_keepthink}` | 〃 |
 | 블렌드 | `configs/data/sft_40b_blend.yaml`, `sft_128k_blend.yaml` | 헤더에 재산출 근거 |
 | 드라이버 | `convert_sft_64k.sh`, `convert_sft_128k.sh` | keepthink/fanout 엔트리 |

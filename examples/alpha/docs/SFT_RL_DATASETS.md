@@ -142,8 +142,17 @@ alpha 는 NVIDIA 레시피를 재현한다 (사용자 결정 2026-08-25).
 | RL | 마커 프롬프트 유지. 길이 보상은 NeMo-RL 내장 `env.nemo_gym.effort_levels` (`low_string="{reasoning effort: efficient}"`, `low_weight>0`, `low_ub`, `low_penalty`; `lr=min(1, w·(1−len/ub))`, `reward += reward·max(lr,0) + penalty·min(lr,0)`) — GRPO yaml 에 설정 필수 | `NeMo-RL/nemo_rl/experience/rollouts.py:330` |
 | 검증 | `verify_chat_template.py` 34 (medium_effort 4종) · `test_alpha_sft_idxmap.py` 34 (§6 effort/budget 9종) · 스모크 변환 IF 3k/2k 행 `verify_sft_bins` PASS, 절단률 실측 50.8% (=U 평균) | tests |
 
-미실행 (유휴 노드·NFS 규칙): 본 변환 → stats `real_tokens` 로 블렌드 재산출. IF 는 경로 교체·가중치 불변
-(마커 +~10 tok/샘플 ≈ +0.5%, 무시). trunc 는 chat 설계단위 21 → 20 + budget 1 분할 제안 (본 변환 후 확정).
+본 변환·블렌드 반영 완료 (2026-08-25, sub1에서 ko_chat vLLM 과 병행 ~3분):
+
+| 셋 | rows→samples | real | trainable | 절단률 | 게이트 |
+|---|---|---|---|---|---|
+| `chat_v3_if_fanout_me` | 249,748→529,472 | 1.0439B (+8.0 tok/샘플 = 마커) | 686.05M (**구본과 동일** — 마커 비학습 실증) | — | PASS |
+| `budget_trunc_v1_if` (stride 4) | 62,437→123,291 (trunc_none 8,987 드롭) | 194.75M | 115.56M | 49.7% | PASS |
+| `budget_trunc_v1_math` (stride 20) | 27,272→27,192 | 175.05M | 166.55M | 50.0% (37,108턴 전부 `</think>` 마스킹) | PASS |
+
+블렌드(`sft_40b_blend.yaml`): 설계단위 chat 21 → 20 + budget_trunc 1, 카테고리 합 0.230180 불변,
+내부 real-token 재비례 — if_me 0.069680 / chat 0.149539 (ep 2.81→2.67), budget 0.005772/0.005189 (각 1.19ep).
+타 엔트리 불변, 23경로 전부 .idx 확인.
 
 ## 3. RL 자산
 

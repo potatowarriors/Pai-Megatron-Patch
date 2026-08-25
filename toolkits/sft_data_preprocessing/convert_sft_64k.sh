@@ -81,8 +81,8 @@ run chat_v3_if_fanout_me "$SFT/Nemotron-SFT-Instruction-Following-Chat-v3/data/i
 
 # budget_trunc_v1: Ultra §3.1.1 두 번째 컴포넌트 — 학습 턴 reasoning 을 무작위
 #   예산(U(0.1,0.9)·L 토큰)으로 절단(응답 불변) + 잘린 자리 </think> 비학습.
-#   IF(fan-out) 1/4 행 + math_v4 1/20 행 → 절단 후 ~0.35B real 예상 (블렌드 1%
-#   슬롯 제안, 가중치는 stats real_tokens 로 재산출 — yaml 헤더 규칙). 원본 셋과
+#   IF(fan-out) 1/4 행 + math_v4 1/20 행 → 실측 369.8M real (블렌드 1% 슬롯,
+#   2026-08-25 yaml 반영 — 헤더 규칙으로 재산출). 원본 셋과
 #   행이 겹치지만 절단본은 다른 분포(강제 </think>)를 가르치므로 의도된 중복.
 run budget_trunc_v1_if "$SFT/Nemotron-SFT-Instruction-Following-Chat-v3/data/instruction_following.jsonl" \
   --fanout-train-turns --truncate-reasoning-budget --row-stride 4
