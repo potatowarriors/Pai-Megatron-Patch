@@ -95,7 +95,9 @@ SLOG=$(ls "$SMOKE_DIR"/logs/train_*.log 2>/dev/null | head -1)
 [ -n "$SLOG" ] || alert "smoke log missing in $SMOKE_DIR"
 
 grep -qE "iteration +10/" "$SLOG" || alert "smoke did not reach iteration 10 — $SLOG"
-if grep -E "lm loss:" "$SLOG" | grep -qiE "nan|inf"; then
+# 주의: 라인 전체에서 nan을 찾으면 정상 필드 "number of nan iterations: 0"에 오탐
+# (2026-08-26 실제 오탐 사례 — 스모크 전 게이트 실질 통과였는데 HOLD). loss 값 위치만 본다.
+if grep -qiE "lm loss( value)?: *(nan|inf)" "$SLOG"; then
     alert "smoke loss non-finite — $SLOG"
 fi
 if grep -qi "CUDA out of memory" "$SLOG"; then
