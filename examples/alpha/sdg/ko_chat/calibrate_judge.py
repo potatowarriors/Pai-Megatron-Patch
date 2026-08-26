@@ -85,6 +85,10 @@ def load_candidates(globs):
             except Exception:  # noqa: BLE001
                 continue
             if {"assistant_turn", "judge", "record_uuid"} <= set(df.columns):
+                # 출처 태깅 — r1(구 프롬프트) vs r2(strict-facts) 효과 비교용
+                df = df.copy()
+                p = Path(f).parent
+                df["_src"] = p.parent.name if p.name == "parquet-files" else p.name
                 frames.append(df)
     if not frames:
         return pd.DataFrame()
@@ -112,25 +116,34 @@ def report(out_dir):
         print("no calibration rows")
         return
     print(f"calibration rows: {len(rows)}")
-    print(f"{'dim':20s} {'gemma':>6s} {'ox':>6s} {'diff':>6s} {'ox<gem':>7s} {'gem<4':>6s} {'ox<4':>6s}")
-    for d in DIMS:
-        pairs = [(r["gemma"][d], r["ox"][d]) for r in rows
-                 if r["gemma"].get(d) is not None and r["ox"].get(d) is not None]
-        if not pairs:
-            continue
-        g = [p[0] for p in pairs]; o = [p[1] for p in pairs]
-        print(f"{d:20s} {statistics.mean(g):6.2f} {statistics.mean(o):6.2f} "
-              f"{statistics.mean(o) - statistics.mean(g):+6.2f} "
-              f"{sum(1 for a, b in pairs if b < a) / len(pairs):7.0%} "
-              f"{sum(1 for x in g if x < 4) / len(g):6.0%} {sum(1 for x in o if x < 4) / len(o):6.0%}")
+    groups = {"ALL": rows}
+    for r in rows:
+        groups.setdefault(r.get("src") or "unknown(08-26 구 런 표본)", []).append(r)
+    for gname, grows in groups.items():
+        print(f"--- {gname} (n={len(grows)})")
+        print(f"{'dim':20s} {'gemma':>6s} {'ox':>6s} {'diff':>6s} {'ox<gem':>7s} {'gem<4':>6s} {'ox<4':>6s}")
+        for d in DIMS:
+            pairs = [(r["gemma"][d], r["ox"][d]) for r in grows
+                     if r["gemma"].get(d) is not None and r["ox"].get(d) is not None]
+            if not pairs:
+                continue
+            g = [p[0] for p in pairs]; o = [p[1] for p in pairs]
+            print(f"{d:20s} {statistics.mean(g):6.2f} {statistics.mean(o):6.2f} "
+                  f"{statistics.mean(o) - statistics.mean(g):+6.2f} "
+                  f"{sum(1 for a, b in pairs if b < a) / len(pairs):7.0%} "
+                  f"{sum(1 for x in g if x < 4) / len(g):6.0%} {sum(1 for x in o if x < 4) / len(o):6.0%}")
 
 
 def main():
     ap = argparse.ArgumentParser()
+    # 주의: DD 는 resume 폴백 시 `<name>_<timestamp>/` 를 새로 판다 — 와일드카드 필수.
+    # 08-26 1일차 887건은 구 런(think 없음) 표본이었음 (glob 누락 실측).
     ap.add_argument("--artifacts", nargs="*", default=[
-        str(HERE / "artifacts/ko_chat_b_r1/**/*.parquet"),
-        str(HERE / "artifacts/ko_chat_b_r2/**/*.parquet"),
+        str(HERE / "artifacts/ko_chat_b_r1*/**/*.parquet"),
+        str(HERE / "artifacts/ko_chat_b_r2*/**/*.parquet"),
     ])
+    ap.add_argument("--require-reasoning", action="store_true", default=True,
+                    help="assistant_turn.reasoning 있는 행만 (새 스키마 런) — 기본 on")
     ap.add_argument("--n", type=int, default=900)
     ap.add_argument("--concurrency", type=int, default=8)
     ap.add_argument("--effort", default="high")
@@ -155,6 +168,8 @@ def main():
         done.update(json.loads(l)["record_uuid"] for l in open(f))
 
     cands = load_candidates(args.artifacts)
+    if args.require_reasoning:
+        cands = cands[cands["assistant_turn"].apply(lambda v: bool(_d(v).get("reasoning")))]
     cands = cands[~cands["record_uuid"].astype(str).isin(done)]
     if args.match:
         want = set()
@@ -197,6 +212,7 @@ def main():
             rec = {
                 "record_uuid": str(row["record_uuid"]),
                 "axes": {k: row.get(k) for k in ("task_type", "domain", "persona", "turn_shape")},
+                "src": row.get("_src"),
                 "gemma": {d: _score(row["judge"], d) for d in DIMS},
                 "ox": ox,
                 "ox_reasoning": {d: (obj.get(d) or {}).get("reasoning", "") if isinstance(obj.get(d), dict) else ""
