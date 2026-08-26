@@ -117,7 +117,9 @@ def collect_track_a():
     return recs, drops, per_src
 
 
-def collect_track_b():
+def collect_track_b(b_mode="verified"):
+    """b_mode: verified = OxAlpha 재심판 전 축 ≥4 행만 / all = reasoning 있는 새 런 행 전부
+    (1차 트랜치는 사용자 결정 08-26 로 r1 완주분 전량 — 미검증, OxAlpha <4 판정분만 제외)."""
     import pandas as pd
     sys.path.insert(0, str(HERE))
     from export_ko_chat import build_record, _as_dict  # noqa: E402
@@ -141,11 +143,11 @@ def collect_track_b():
             continue
         for _, row in df.iterrows():
             uid = str(row.get("record_uuid"))
-            if uid not in verified:
-                drops["not_ox_verified"] += 1
-                continue
-            if not verified[uid]:
+            if uid in verified and not verified[uid]:
                 drops["ox_below_4"] += 1
+                continue
+            if b_mode == "verified" and uid not in verified:
+                drops["not_ox_verified"] += 1
                 continue
             chk = _as_dict(row.get("ko_check"))
             if not chk.get("is_valid", False):
@@ -156,7 +158,7 @@ def collect_track_b():
                 drops["schema"] += 1
                 continue
             rec["metadata"]["ko_synthesis"]["think"] = True
-            rec["metadata"]["ko_synthesis"]["ox_verified"] = True
+            rec["metadata"]["ko_synthesis"]["ox_verified"] = uid in verified
             if gate_row(rec, drops):
                 recs.append(rec)
     recs, d2 = dedup(recs, key_fn=lambda r: (r["metadata"]["axes"].get("task_type"),
@@ -176,11 +178,12 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--out-dir", default=None)
     ap.add_argument("--dry-run", action="store_true")
+    ap.add_argument("--b-mode", choices=["verified", "all"], default="all")
     args = ap.parse_args()
 
     a, da, src = collect_track_a()
     summarize("trackA", a, da, src)
-    b, db = collect_track_b()
+    b, db = collect_track_b(args.b_mode)
     summarize("trackB", b, db)
 
     if args.dry_run or not args.out_dir:
