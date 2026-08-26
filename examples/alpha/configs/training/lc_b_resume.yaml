@@ -1,0 +1,99 @@
+# LC-B 재개 preset — 08-26 검증 일시중단(iter ~165) 후 iter-150 ckpt에서 속행.
+#
+#   bash train.sh baseline_48L lc_b_resume lc_b_128k_blend
+#
+# lc_b.yaml과의 차이(그 외 전부 동일 — 수정 시 양쪽 동기화):
+#   - load: 자기 run의 ckpt (optim state 153GB 동봉 — Muon momentum·스케줄러·
+#     consumed 14,400 samples 전부 이어짐. finetune/no-load-optim 없음)
+#   - warmup은 이미 소비됨(스케줄러 상태 승계) — LR 7.5e-6 constant로 즉시 속행
+#
+# 중단 사유와 검증 결과(전부 PASS): STATUS.md LC-B 행 + outputs/lc_b_midrun_eval/.
+#   CP8 backward 등가 PASS · iter-150 vs LC-A최종 위치별 NLL 격차 위치-단조(+0.089
+#   @120k, ≤16k 동률) · NIAH 200/200 · GBS 96 노이즈는 산술적(σ비 2.07=√4) → GBS 유지.
+
+# ── 예산 / LR (lc_b.yaml과 동일) ──────────────────────────────────────────
+train-samples: 30720
+lr-warmup-samples: 4800
+lr-decay-samples: 30720
+lr: 7.5e-6
+min-lr: 7.5e-6
+lr-decay-style: constant
+
+# ── 병렬화 ────────────────────────────────────────────────────────────────
+tensor-model-parallel-size: 1
+pipeline-model-parallel-size: 1
+expert-model-parallel-size: 8
+expert-tensor-parallel-size: 1
+context-parallel-size: 8
+
+# ── Muon chunked optimizer-state offload ──────────────────────────────────
+chunked-optimizer-state-offload: true
+optimizer-state-offload-chunk-size-mb: 256
+
+# ── 배치 / 시퀀스 ─────────────────────────────────────────────────────────
+seq-length: 131072
+micro-batch-size: 1
+global-batch-size: 96
+
+# ── THD 문서 격리 플래그셋 ────────────────────────────────────────────────
+reset-position-ids: true
+no-create-attention-mask-in-dataloader: true
+reset-attention-mask: false
+eod-mask-loss: true
+
+# ── 리컴퓨트 ──────────────────────────────────────────────────────────────
+recompute-granularity: selective
+recompute-modules: "layernorm moe"
+
+# ── MoE 라우팅 ────────────────────────────────────────────────────────────
+moe-router-load-balancing-type: seq_aux_loss
+moe-router-score-function: sigmoid
+moe-router-enable-expert-bias: true
+moe-router-bias-update-rate: 0.001
+moe-token-dispatcher-type: alltoall
+
+# ── Optimizer ─────────────────────────────────────────────────────────────
+optimizer: dist_muon
+weight-decay: 0.1
+adam-beta1: 0.9
+adam-beta2: 0.95
+muon-momentum: 0.95
+muon-use-nesterov: true
+muon-num-ns-steps: 5
+muon-scale-mode: spectral
+muon-fp32-matmul-prec: medium
+muon-tp-mode: blockwise
+muon-extra-scale-factor: 0.2
+init-method-std: 0.008
+clip-grad: 8.0
+
+# ── LayerNorm WD ──────────────────────────────────────────────────────────
+no-weight-decay-cond-type: apply_wd_to_qk_layernorm
+
+# ── Precision ─────────────────────────────────────────────────────────────
+bf16: true
+
+# ── 체크포인트 / 평가 ─────────────────────────────────────────────────────
+save-interval: 50
+ckpt-format: torch_dist
+eval-iters: 2
+eval-interval: 50
+
+# ── 로깅 / 런타임 ─────────────────────────────────────────────────────────
+log-interval: 1
+log-timers-to-tensorboard: true
+log-memory-to-tensorboard: true
+log-validation-ppl-to-tensorboard: true
+log-throughput: true
+tensorboard-queue-size: 1
+distributed-timeout-minutes: 180
+manual-gc: true
+manual-gc-interval: 5
+overlap-grad-reduce: true
+attention-backend: auto
+cross-entropy-loss-fusion: true
+cross-entropy-fusion-impl: te
+wandb-project: alpha-pretraining
+
+# ── 재개 (optim 동봉 ckpt — finetune/no-load-optim 없음) ──────────────────
+load: /home/work/vidsearch/repos/project_s/Pai-Megatron-Patch/examples/alpha/outputs/alpha_baseline_48L_lc_b_20260826_033011/checkpoints

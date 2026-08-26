@@ -68,17 +68,31 @@ def main():
         s = sums.setdefault(src, np.zeros(nb))
         c = counts.setdefault(src, np.zeros(nb))
         with torch.inference_mode():
-            out = model(input_ids=ids, use_cache=False)
-            logits = out.logits[0]  # [L, V] bf16
-            for lo in range(0, L - 1, 4096):
-                hi = min(lo + 4096, L - 1)
-                lg = logits[lo:hi].float()
-                tg = ids[0, lo + 1: hi + 1]
-                loss = F.cross_entropy(lg, tg, reduction="none")  # 목표 위치 lo+1..hi
-                pos = np.arange(lo + 1, hi + 1)
-                np.add.at(s, pos // BUCKET, loss.float().cpu().numpy())
-                np.add.at(c, pos // BUCKET, 1)
-            del out, logits
+            if L > 40960:
+                # 128k: 전체 logits [L,V]는 ~43GB — trunk 1회 + lm_head 청크 적용
+                hidden = model.model(input_ids=ids, use_cache=False).last_hidden_state[0]
+                for lo in range(0, L - 1, 4096):
+                    hi = min(lo + 4096, L - 1)
+                    lg = model.lm_head(hidden[lo:hi]).float()
+                    tg = ids[0, lo + 1: hi + 1]
+                    loss = F.cross_entropy(lg, tg, reduction="none")
+                    pos = np.arange(lo + 1, hi + 1)
+                    np.add.at(s, pos // BUCKET, loss.float().cpu().numpy())
+                    np.add.at(c, pos // BUCKET, 1)
+                    del lg
+                del hidden
+            else:
+                out = model(input_ids=ids, use_cache=False)
+                logits = out.logits[0]  # [L, V] bf16
+                for lo in range(0, L - 1, 4096):
+                    hi = min(lo + 4096, L - 1)
+                    lg = logits[lo:hi].float()
+                    tg = ids[0, lo + 1: hi + 1]
+                    loss = F.cross_entropy(lg, tg, reduction="none")  # 목표 위치 lo+1..hi
+                    pos = np.arange(lo + 1, hi + 1)
+                    np.add.at(s, pos // BUCKET, loss.float().cpu().numpy())
+                    np.add.at(c, pos // BUCKET, 1)
+                del out, logits
         if (i + 1) % 8 == 0:
             dt = (time.time() - t0) / (i + 1)
             print(f"[{i+1}/{arr.shape[0]}] {dt:.1f}s/seq", flush=True)

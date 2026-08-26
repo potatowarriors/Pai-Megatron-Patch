@@ -27,11 +27,14 @@ import torch.distributed as dist
 # num_v_heads = 2 * num_k_heads so the GQA repeat_interleave path is active).
 # ---------------------------------------------------------------------------
 HIDDEN = 64
-NUM_V_HEADS = 8
+# CP8은 k-head가 cp 이상이어야 하므로 env로 형상 확대 (기본값은 CP{1,2,4}용 toy).
+# CP8 실행 예: GDN_TEST_K_HEADS=8 GDN_TEST_V_HEADS=16 GDN_TEST_SEQ_LEN=128 \
+#   torchrun --nproc_per_node=8 tests/test_gdn_context_parallel.py
+NUM_V_HEADS = int(os.environ.get("GDN_TEST_V_HEADS", 8))
 HEAD_V_DIM = 16
-NUM_K_HEADS = 4
+NUM_K_HEADS = int(os.environ.get("GDN_TEST_K_HEADS", 4))
 HEAD_K_DIM = 16
-SEQ_LEN = 64  # must be divisible by 2 * cp_size
+SEQ_LEN = int(os.environ.get("GDN_TEST_SEQ_LEN", 64))  # must be divisible by 2 * cp_size
 BATCH = 2
 SEED = 1234
 
