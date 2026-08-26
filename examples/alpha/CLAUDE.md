@@ -181,6 +181,7 @@ TP=1 전용. **chunked optimizer-state offload 지원**: `--chunked-optimizer-st
 - **wandb 409 "filestream at capacity" 1건**으로 run이 죽은 것처럼 보여도 학습은 무영향. 판별은 노드 로그의 iteration 타임스탬프 + `[diloco]` sync 라인. `wandb sync <run_dir>`로 백필.
 - **sub1 시계가 main1보다 ~5.4분 늦고 TZ 라벨도 다름** — 두 노드 로그 시각 직접 비교 금지. Megatron iteration 로그는 **마지막 rank**(2노드면 sub1)에 찍힘.
 - **alpha 풀모델은 실행 간 비결정** (TE fused attention bwd, iter 3부터 상대 ~2.7e-3). `NVTE_ALLOW_NONDETERMINISTIC_ALGO=0` 무효. A/B는 같은 구성 재실행의 산포 포락선으로 판정, 비트 검증은 결정론 유닛 골든 (`study/nondeterminism_probe.md`).
+- **CP>1의 PyTorch UserWarning `c10d::allreduce_: an autograd kernel was not registered`는 무해** (첫 backward 랭크당 1회). helper.py loss CP 집계가 fallback identity-backward에 의존 — 수학적으로 정확(∂Σ/∂local=1), upstream pretrain_gpt 동일 패턴. 증거: CP{1,2,4} grad 등가 1.2e-4 + LC-A 완주. CP1에선 안 나옴.
 - 감시 스크립트의 `pgrep -f`는 자기 명령줄과 자기매치 → `[p]attern`. ssh 원격 `A && nohup X &`는 체인 전체가 백그라운드로 가 nohup 미도달.
 - 연속 torchrun은 잔류 프로세스로 EADDRINUSE — 런 사이 GPU idle 대기. 생산 병행 중 `.bin`만 있고 `.idx` 없는 반완성 파일 경합 — 존재 확인이 아니라 로드 검증.
 - NFS mtime이 UTC보다 9h 늦게 찍힘 (정체 오판 주의). 콜드 캐시 블렌드 첫 로드 80분+ > NCCL 기본 60분 → 타임아웃 180분.
