@@ -63,11 +63,12 @@ run_dd() {  # $1=seed parquet $2=num $3=dataset $4=max-parallel $5=extra flags $
 
 say "트랙 B r2 가동 — Gemma 슬라이스($N_GEMMA, par 96)$([ "$B_OR_SLICE" -gt 0 ] && echo " ∥ OR 슬라이스($B_OR_SLICE, gen OxAlpha, par 8)")"
 PID_OR=""
+# --strict-facts: 캘리브레이션 실측(08-26) 기반 사실성 규칙 — r2 부터 (r1 지문 보존)
 if [ "$B_OR_SLICE" -gt 0 ]; then
-  run_dd "$K/ko_seed_r2_or.parquet" "$B_OR_SLICE" ko_chat_b_r2_or 8 "--gen-backend openrouter" "$K/out/r2_b_or.log" &
+  run_dd "$K/ko_seed_r2_or.parquet" "$B_OR_SLICE" ko_chat_b_r2_or 8 "--gen-backend openrouter --strict-facts" "$K/out/r2_b_or.log" &
   PID_OR=$!
 fi
-run_dd "$K/ko_seed_r2.parquet" "$N_GEMMA" ko_chat_b_r2 96 "" "$K/out/r2_b.log"
+run_dd "$K/ko_seed_r2.parquet" "$N_GEMMA" ko_chat_b_r2 96 "--strict-facts" "$K/out/r2_b.log"
 [ -n "$PID_OR" ] && wait $PID_OR
 
 # OR 슬라이스 잔여 → Gemma 로 회수 (시드 단위 폴백)

@@ -134,37 +134,51 @@ def main():
     ap.add_argument("--n", type=int, default=900)
     ap.add_argument("--concurrency", type=int, default=8)
     ap.add_argument("--effort", default="high")
-    ap.add_argument("--out-dir", default=str(HERE / "out/judge_calib"))
+    ap.add_argument("--out-dir", default=None)
     ap.add_argument("--report", action="store_true")
+    ap.add_argument("--backend", choices=["openrouter", "local"], default="openrouter",
+                    help="local = 같은 엄격 루브릭을 Gemma(vLLM)에 — OxAlpha 프록시 가설 검증용")
+    ap.add_argument("--match", default=None,
+                    help="이 디렉토리의 jsonl 에 있는 uuid 만 대상 (백엔드 간 동일 표본 비교)")
+    ap.add_argument("--base-url", default="http://127.0.0.1:8000/v1")
     args = ap.parse_args()
 
-    out_dir = Path(args.out_dir)
+    out_dir = Path(args.out_dir or (HERE / ("out/judge_calib" if args.backend == "openrouter"
+                                            else "out/judge_calib_local")))
     out_dir.mkdir(parents=True, exist_ok=True)
     if args.report:
         report(out_dir)
         return
 
-    key = os.environ.get("OPENROUTER")
-    if not key:
-        raise SystemExit("환경변수 OPENROUTER 없음")
     done = set()
     for f in glob.glob(str(out_dir / "*.jsonl")):
         done.update(json.loads(l)["record_uuid"] for l in open(f))
 
     cands = load_candidates(args.artifacts)
     cands = cands[~cands["record_uuid"].astype(str).isin(done)]
+    if args.match:
+        want = set()
+        for f in glob.glob(str(Path(args.match) / "*.jsonl")):
+            want.update(json.loads(l)["record_uuid"] for l in open(f))
+        cands = cands[cands["record_uuid"].astype(str).isin(want)]
     today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
     rng = random.Random(today)
     idx = list(range(len(cands)))
     rng.shuffle(idx)
     batch = cands.iloc[idx[: args.n]]
-    print(f"candidates={len(cands)} (done={len(done)}) → batch={len(batch)} date={today}", flush=True)
+    print(f"candidates={len(cands)} (done={len(done)}) → batch={len(batch)} date={today} backend={args.backend}", flush=True)
     if len(batch) == 0:
         return
 
-    client = Client("https://openrouter.ai/api/v1", "stealth/ox-alpha", timeout=900,
-                    api_key=key, retries=3, name="openrouter",
-                    extra_payload={"reasoning": {"effort": args.effort}})
+    if args.backend == "openrouter":
+        key = os.environ.get("OPENROUTER")
+        if not key:
+            raise SystemExit("환경변수 OPENROUTER 없음")
+        client = Client("https://openrouter.ai/api/v1", "stealth/ox-alpha", timeout=900,
+                        api_key=key, retries=3, name="openrouter",
+                        extra_payload={"reasoning": {"effort": args.effort}})
+    else:
+        client = Client(args.base_url, "gemma-4-31b", timeout=600, retries=3, name="local")
     out_path = out_dir / f"{today}.jsonl"
     lock = threading.Lock()
     stats = {"ok": 0, "fail": 0, "cap": False}
@@ -174,7 +188,8 @@ def main():
             return
         try:
             raw = client.chat([{"role": "user", "content": RUBRIC.format(conv=render_conv(row))}],
-                              max_tokens=12288, temperature=0.2)
+                              max_tokens=12288 if client.name == "openrouter" else 2048,
+                              temperature=0.2)
             obj = extract_json_obj(raw)
             ox = {d: _score(obj, d) for d in DIMS}
             if any(v is None for v in ox.values()):

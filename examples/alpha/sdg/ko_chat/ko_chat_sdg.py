@@ -135,6 +135,15 @@ PROMPT_ASSISTANT = """\
 8. reasoning 필드에는 답변 전 사고 과정을 한국어로 쓴다 — 요청의 핵심, 접근,
    주의점. content 에서 사고 과정을 반복하지 않는다."""
 
+# 캘리브레이션 실측(2026-08-26, OxAlpha 887건): factuality<4 가 10%, 2점 사례는 전부
+# 지어낸 상호·지점명·가격·시설 정보. Gemma 심판은 엄격 루브릭으로도 이를 못 잡으므로
+# (재현율 0.23) 필터 대신 원천 차단 — r2 부터 --strict-facts 로 부착.
+STRICT_FACTS_RULE = """
+8. [사실성 강화] 확실히 아는 경우가 아니면 **구체적 상호·지점명·가격·통계 수치·법 조항
+   번호·연도·전화번호**를 쓰지 않는다. 대신 확인 방법(공식 사이트·검색어·문의처 유형)을
+   안내하거나 일반적인 범위로 말한다. 예시가 꼭 필요하면 "예를 들어 ○○ 같은" 처럼
+   가상의 예임을 드러낸다. 실존하는 것처럼 꾸며낸 구체 정보는 어떤 경우에도 금지."""
+
 PROMPT_FOLLOWUP = """\
 아래 대화의 사용자가 이어서 할 법한 **후속 발화 하나**를 만드세요.
 
@@ -249,7 +258,12 @@ def validate_ko_chat(df: pd.DataFrame) -> pd.DataFrame:
 # =============================================================================
 
 def build_config(seed_path: Path, model_id: str, max_parallel: int, timeout: int,
-                 judge_backend: str = "local", gen_backend: str = "local"):
+                 judge_backend: str = "local", gen_backend: str = "local",
+                 strict_facts: bool = False):
+    extra_rule = STRICT_FACTS_RULE if strict_facts else ""
+    p_assistant = PROMPT_ASSISTANT + extra_rule
+    p_assistant_2 = PROMPT_ASSISTANT_2 + extra_rule
+    p_assistant_3 = PROMPT_ASSISTANT_3 + extra_rule
     if gen_backend == "openrouter":
         # 재배분(2026-08-25): OxAlpha 의 강점(한국 제도 지식)이 가장 필요한 곳이 이 트랙.
         # 숨은 사고는 영어라 effort low 로 억제하고 한국어 사고는 구조화 필드로 받는다.
@@ -349,7 +363,7 @@ def build_config(seed_path: Path, model_id: str, max_parallel: int, timeout: int
     builder.add_column(
         dd.LLMStructuredColumnConfig(
             name="assistant_turn", model_alias=MODEL_ALIAS,
-            prompt=PROMPT_ASSISTANT, output_format=AssistantTurn,
+            prompt=p_assistant, output_format=AssistantTurn,
         )
     )
     builder.add_column(
@@ -362,7 +376,7 @@ def build_config(seed_path: Path, model_id: str, max_parallel: int, timeout: int
     builder.add_column(
         dd.LLMStructuredColumnConfig(
             name="assistant_turn_2", model_alias=MODEL_ALIAS,
-            prompt=PROMPT_ASSISTANT_2, output_format=AssistantTurn,
+            prompt=p_assistant_2, output_format=AssistantTurn,
         )
     )
     builder.add_column(
@@ -375,7 +389,7 @@ def build_config(seed_path: Path, model_id: str, max_parallel: int, timeout: int
     builder.add_column(
         dd.LLMStructuredColumnConfig(
             name="assistant_turn_3", model_alias=MODEL_ALIAS,
-            prompt=PROMPT_ASSISTANT_3, output_format=AssistantTurn,
+            prompt=p_assistant_3, output_format=AssistantTurn,
         )
     )
 
@@ -485,6 +499,8 @@ def main() -> None:
                         help="openrouter = OxAlpha 독립 심판 (환경변수 OPENROUTER 필요)")
     parser.add_argument("--gen-backend", choices=["local", "openrouter"], default="local",
                         help="openrouter = 생성 컬럼 전부 OxAlpha (슬라이스 단위로만 — 레코드별 폴백 없음)")
+    parser.add_argument("--strict-facts", action="store_true",
+                        help="사실성 강화 규칙 부착 (r2~; r1 resume 지문 보존을 위해 기본 off)")
     args = parser.parse_args()
 
     if not args.seed_path.exists():
@@ -500,7 +516,8 @@ def main() -> None:
             name=OPENROUTER_PROVIDER, endpoint="https://openrouter.ai/api/v1", api_key=key))
 
     builder = build_config(args.seed_path, args.model, args.max_parallel, args.timeout,
-                           judge_backend=args.judge_backend, gen_backend=args.gen_backend)
+                           judge_backend=args.judge_backend, gen_backend=args.gen_backend,
+                           strict_facts=args.strict_facts)
     designer = DataDesigner(artifact_path=args.artifact_path, model_providers=providers)
     designer.set_run_config(
         dd.RunConfig(
