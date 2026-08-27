@@ -3,7 +3,7 @@
 **규칙**: 세션 종료 시 자기 트랙의 행을 갱신하고 **커밋·push**한다. 상태는 여기에만 쓴다 — Claude auto-memory에 쓰지 않는다
 (메모리는 컨테이너·노드별이라 다른 세션이 못 본다). 날짜는 절대 표기. 끝난 트랙은 "완료" 절로 내리고 정본 링크만 남긴다.
 
-_마지막 갱신: 2026-08-27 (LC-B 완주. **main1 GPU는 ~13시까지 LC-B 최종 ckpt 평가가 점유**(사용자 지시: 320 벤치·NIAH/NLL·256K/512K 프로브) — SFT 본 런은 그 후 개시)_
+_마지막 갱신: 2026-08-27 12:30 (LC-B 최종 평가 완료 — **main1 GPU 유휴, SFT 개시 가능**. 결과 정본: `study/lc_b_final_eval.md`)_
 
 ## 진행 중
 
@@ -26,7 +26,7 @@ _마지막 갱신: 2026-08-27 (LC-B 완주. **main1 GPU는 ~13시까지 LC-B 최
 | 트랙 | 결과 | 정본 |
 |---|---|---|
 | Pre-training stage2 (DiLoCo 2노드) | **완주 2026-08-22** iter 26,832, train 1.145/1.141, valid(P3) 1.1658. 커리큘럼 자연→P2→P2b→P3 + bias-sync + 블록-순환 샤딩 적용. **stage3 없음(사용자 확정)**. 1-노드 재저장본 `outputs/alpha_baseline_48L_stage2_20260822_123916/checkpoints`. 완주 벤치마크 평가 결과는 미기록 — 실행했다면 여기 갱신 | `STAGE2_CURRICULUM_LOG.md` |
-| **LC-B 128K@CP8 CPT** | **완주 2026-08-27** 320 iters (4.03B tokens, GBS 96·LR 7.5e-6 constant), final valid 1.6744/PPL 5.34. **최종 ckpt = `outputs/alpha_baseline_48L_lc_b_resume_20260826_223836/checkpoints` iter 320** (optim 포함 153GB) — **SFT load는 반드시 이 경로** (run1 033011은 iter150에서 검증 중단, resume1 172926은 iter222 크래시 — 둘 다 최종본 아님). 중간 검증 5종 PASS: NIAH 200/200·위치별 NLL 위치-단조(+0.089@120k)·표준벤치 Δ−0.10pp(망각 無)·CP8 backward 등가·GBS 노이즈 분석 (`outputs/lc_b_midrun_eval/`). 사고 2건: 자동연계 NaN 게이트 오탐(수정 bb279c9)·재개1 rank6 cuDNN driver 실행실패(일과성 판정, 재발 시 GPU6 하드웨어 의심). 완주 ckpt 자체 평가(NIAH/NLL@320·RULER@128K)는 미실행 — GPU 창구에서 사후 | `configs/training/lc_b.yaml`·`lc_b_resume.yaml` 헤더, `LC_DATASETS.md` |
+| **LC-B 128K@CP8 CPT** | **완주 2026-08-27** 320 iters (4.03B tokens, GBS 96·LR 7.5e-6 constant), final valid 1.6744/PPL 5.34. **최종 ckpt = `outputs/alpha_baseline_48L_lc_b_resume_20260826_223836/checkpoints` iter 320** (optim 포함 153GB) — **SFT load는 반드시 이 경로** (run1 033011은 iter150에서 검증 중단, resume1 172926은 iter222 크래시 — 둘 다 최종본 아님). 중간 검증 5종 PASS: NIAH 200/200·위치별 NLL 위치-단조(+0.089@120k)·표준벤치 Δ−0.10pp(망각 無)·CP8 backward 등가·GBS 노이즈 분석 (`outputs/lc_b_midrun_eval/`). 사고 2건: 자동연계 NaN 게이트 오탐(수정 bb279c9)·재개1 rank6 cuDNN driver 실행실패(일과성 판정, 재발 시 GPU6 하드웨어 의심). **최종 평가 완료(08-27)**: 벤치 11종 Δ−0.26pp(망각 無)·NIAH 4k~131k 200/200·**256K 95%(LC-A 42.5% 대비 — LC-B가 만든 외삽력)**·384K 0%(실사용 창 ~256K)·512K는 fla 커널 층당 작업공간 한계로 측정 불가 — 정본 `study/lc_b_final_eval.md`. RULER 풀 하니스(13태스크)는 미구축 | `configs/training/lc_b.yaml`·`lc_b_resume.yaml` 헤더, `LC_DATASETS.md` |
 | **LC-A 32K@CP4 THD CPT** | **완주 2026-08-26** iter 1113 (14B tokens), final valid **1.4420 / PPL 4.23** (iter100 1.5357 대비 −0.094). iter100 조기 검증 GO(NLL 위치-단조, NIAH 160/160), 사고 1건(iter170 리터럴 EOD) 수리 포함. 최종 ckpt `outputs/alpha_baseline_48L_lc_a_resume_20260823_070651/checkpoints`(weights-only). 롤링 검증(`outputs/lc_a_early_eval/run_evals.sh`)은 미실행 — 4-GPU 창구 필요, 사용자 판단 | `configs/training/lc_a.yaml`, `study/lc_a_early_eval.md`, KNOWN_ISSUES 08-23 |
 | LC 진입 게이트 | 판정 1~6 통과, LC-A GO. qk-clip은 LC preset에서 제거(TE 2.9 thd 비호환, max logit 19.4 = 임계 1/5) | `LC_ENTRY_GATE.md` |
 | GDN CP + varlen/THD 스티치 | main 흡수(c9f65ad). CP{1,2,4} 32K 실데이터 등가 1.2e-4. 잠복버그 4건 수정 | `gdn_cp_port.md` |

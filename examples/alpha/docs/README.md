@@ -58,6 +58,7 @@
 | [../study/nondeterminism_probe.md](../study/nondeterminism_probe.md) | 실행 간 비결정 원천 = TE fused attn bwd + 재현 `.py` (2026-08-22) |
 | [../study/flashqla_poc.md](../study/flashqla_poc.md) | FlashQLA GDN 커널 벤치 — 채택 보류, 128K에서 재평가 (2026-08-22) |
 | [../study/lc_a_early_eval.md](../study/lc_a_early_eval.md) | LC-A iter100 위치별 NLL + NIAH 조기 검증 GO (2026-08-23) |
+| [../study/lc_b_final_eval.md](../study/lc_b_final_eval.md) | LC-B 최종 평가 — 벤치 3자(망각 無)·NIAH 4K→384K 스펙트럼(실사용 창 ~256K)·NLL 곡선·512K 불가 원인 (2026-08-27) |
 | [../study/netbench/](../study/netbench/) | 노드 간 TCP/NCCL 실측 스크립트 (IB 부재 확인) |
 
 ## sdg/ (합성 데이터 파이프라인 — docs 밖, 코드와 동거)

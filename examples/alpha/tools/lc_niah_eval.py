@@ -26,14 +26,31 @@ QUERY = ("\n\nQuestion: What is the special magic number mentioned in this "
          "document?\nAnswer: The special magic number mentioned in this document is")
 
 
-def load(model_dir, device):
+def load(model_dir, device, max_gpu_mem=None):
     from transformers import AutoModelForCausalLM, AutoTokenizer
     tok = AutoTokenizer.from_pretrained(model_dir, trust_remote_code=True)
     for impl in ("flash_attention_2", "sdpa"):
         try:
-            m = AutoModelForCausalLM.from_pretrained(
-                model_dir, torch_dtype=torch.bfloat16,
-                trust_remote_code=True, attn_implementation=impl)
+            # device="auto": 레이어를 가시 GPU 전체에 분산 (512K처럼 단일 GPU
+            # 활성값 한계를 넘는 길이용). 입력은 cuda:0(첫 레이어 쪽)에 두면
+            # accelerate 훅이 레이어 경계에서 넘겨준다.
+            # 주의: max_memory 없이는 auto가 GPU0에 전량 탐욕 적재해 분산이 안 됨
+            # (512K GDN 커널의 일시 작업공간 ~40GB가 못 들어가 OOM — 08-27 실측).
+            # --max-gpu-mem "18GiB"로 가중치 상한을 걸어 강제 분산.
+            kw = dict(torch_dtype=torch.bfloat16, trust_remote_code=True,
+                      attn_implementation=impl)
+            if device == "auto":
+                mm = None
+                if max_gpu_mem:
+                    mm = {i: max_gpu_mem for i in range(torch.cuda.device_count())}
+                m = AutoModelForCausalLM.from_pretrained(
+                    model_dir, device_map="auto", max_memory=mm, **kw)
+                print(f"loaded with attn_implementation={impl}, device_map=auto, "
+                      f"max_memory={mm}")
+                print("hf_device_map:", {k: v for k, v in list(m.hf_device_map.items())[:3]},
+                      "...", {k: v for k, v in list(m.hf_device_map.items())[-2:]})
+                return tok, m.eval()
+            m = AutoModelForCausalLM.from_pretrained(model_dir, **kw)
             print(f"loaded with attn_implementation={impl}")
             return tok, m.to(device).eval()
         except Exception as e:  # noqa: BLE001
@@ -52,12 +69,16 @@ def main():
     ap.add_argument("--trials", type=int, default=8)
     ap.add_argument("--seed", type=int, default=1234)
     ap.add_argument("--max-new", type=int, default=16)
+    ap.add_argument("--max-gpu-mem", default=None,
+                    help='--device auto 시 GPU당 가중치 상한 (예 "18GiB") — 분산 강제')
     args = ap.parse_args()
 
     lengths = [int(x) for x in args.lengths.split(",")]
     depths = [float(x) for x in args.depths.split(",")]
     hay = np.load(args.hay)
-    tok, model = load(args.model, args.device)
+    tok, model = load(args.model, args.device, args.max_gpu_mem)
+    if args.device == "auto":
+        args.device = "cuda:0"  # 입력은 첫 레이어 쪽 GPU에 (accelerate 훅이 이관)
     enc = lambda t: tok(t, add_special_tokens=False)["input_ids"]  # noqa: E731
 
     pre = enc(PREAMBLE)
