@@ -36,7 +36,9 @@ run() {
     || echo "!! $name FAILED (exit $?)"
 }
 
-run "kochat_b$SUFFIX"            "$SFT/trackB.jsonl"
+# trackB: 전 assistant 턴 학습(멀티턴 43.7%가 multi-True) → fan-out 필수
+# (INTERLEAVED_THINKING §7 규칙 1). medium-effort 는 GPT-OSS 산출이 아니라 미적용.
+run "kochat_b_fanout$SUFFIX"     "$SFT/trackB.jsonl" --fanout-train-turns
 run "kochat_if_fanout_me$SUFFIX" "$SFT/trackA_if.jsonl" --fanout-train-turns --medium-effort
 run "kochat_chat$SUFFIX"         "$SFT/trackA_chat.jsonl"
 
