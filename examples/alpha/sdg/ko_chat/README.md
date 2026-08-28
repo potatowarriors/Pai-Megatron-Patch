@@ -149,6 +149,18 @@ KST 09:00). 도입 당일 A 재생성 40% 투입 20분 만에 소진되어 발�
 **주의**: 무료 stealth 모델은 프롬프트가 제공자 학습에 쓰일 수 있음 — 보내는 것은
 공개 데이터(Nemotron CC-BY-4.0·WildChat) 파생물과 우리 합성 출력뿐.
 
+## 종료 (2026-08-28, 사용자 결정) — sub1 은 SFT 이후 RL 검증 자원으로 전환
+
+2차 트랜치까지로 합성 종료. 최종 산출(SFT 블렌드 반영본, `alpha-SFT-KoChat-v2/` →
+`sft_packed_64k_pad16/*_t2`): **A 544,771행(IF 번역 164,560·chat 재생성 380,211) +
+B 33,831행(r1 19,259·r2 strict-facts 14,572) = 한국어 real 1.35B**, 동일 epoch 1.89,
+chat 슬롯 29.1%. 미소비 잔여: A 시드 ~200k(미생성), B r2 85k(미생성), 리젝 16.6k
+(`out/r2_a/rejects.jsonl`, salvage 가능). 원본·중간 산출은 `out/`·`artifacts/` 에 보존.
+재개 절차: 서버(`serve/serve_gemma31b.sh`) → 체인(`chain_a_r2.sh` / `chain_b_r2.sh`;
+B 는 정체 시 타임스탬프 디렉토리 직접 resume) → `cut_tranche.py` → `convert_kochat_64k.sh`
+(SUFFIX=_t3) → `update_blend_kochat.py`. OxAlpha 는 2026-08-27 퇴출(404) — 캘리브레이션
+재개 시 다른 독립 심판 필요. 20개 언어 chat 보강(번역 프롬프트 목표 언어만 교체)은 미착수.
+
 ## 함정 (재발 방지)
 
 1. **빈 system content 를 LLM에 넣으면 메타응답**("번역할 지시문을 주세요")이
