@@ -12,23 +12,23 @@
 #   전량 정확히 1.00 epoch — 앵커가 버킷 분할 없이 성립. LR 사이클 1개.
 # - Ultra3 도 294,912 단일 pack (버킷 분할 없음).
 #
-# 예산: 51.32B bin-tokens = 391,584 samples = 4,079 iters @ GBS 96 ≈ **9.4일**
+# 예산: 51.34B bin-tokens = 391,680 samples = 2,448 iters @ GBS 160 ≈ **9.3일** (실측 329.7s/iter)
 #   (64k 기준 40B 설계의 멤버별 epoch 압력 보존 + 꼬리 편입 +28%).
 #
 # LR 설계 (Ultra3 비율 이식, 2026-08-28 보고 §1):
 #   Ultra SFT peak / pretrain peak = 1.5e-5 / 2.5e-4 = 6% → alpha 6% × 4e-4 = 2.4e-5,
-#   배치 보정 √(12.6/18.9)=0.82 → **2.0e-5**. min-lr 은 Ultra 비율(peak/15) → 1.5e-6.
+#   배치 보정 √(21.0/18.9)=1.05 → **2.5e-5**. min-lr 은 Ultra 비율(peak/15) → 1.5e-6.
 #   같은 optimizer 내 상대값이라 Adam→Muon 이식 문제가 없는 유일한 앵커.
-#   warmup 4.7% (Ultra 150/3200 미러) = 192 iters. 조기중단 가드: valid loss
-#   (eval 40 iters 마다) 상승 전환 시 직전 ckpt 채택.
+#   warmup 4.7% (Ultra 150/3200 미러) = 115 iters. 조기중단 가드: valid loss
+#   (eval 25 iters 마다) 상승 전환 시 직전 ckpt 채택.
 
 train-mode: finetune
 
 # ── 예산 / LR ─────────────────────────────────────────────────────────────
-train-samples: 391584             # 4,079 iters @ GBS 96 (sft_128k_mixed_blend.yaml)
-lr-warmup-samples: 18432          # 192 iters (4.7%)
-lr-decay-samples: 391584
-lr: 2.0e-5
+train-samples: 391680             # 2,448 iters @ GBS 160 (51.34B; sft_128k_mixed_blend.yaml)
+lr-warmup-samples: 18400          # 115 iters (4.7%)
+lr-decay-samples: 391680
+lr: 2.5e-5
 min-lr: 1.5e-6
 lr-decay-style: cosine
 
@@ -45,7 +45,11 @@ optimizer-state-offload-chunk-size-mb: 256
 # ── 배치 / 시퀀스 (THD는 MBS 1 필수 — helper assert) ──────────────────────
 seq-length: 131072
 micro-batch-size: 1
-global-batch-size: 96             # 12.58M tok/iter — 전 스테이지 토큰 배치 상수 관례
+# GBS 160 = 20.97M tok/iter (사용자, 2026-08-28: Ultra SFT 18.9M 스케일).
+# 실측(2-iter 스모크): 329.7s/iter = 63.6k tok/s, 263 TFLOP/s — GBS 96(62.9k) 대비
+# +1% 로 처리량은 사실상 동일(iter 고정비 ~6s). 근거는 최적화 설계: Ultra 배치
+# 동일 스케일·스텝 2,448(Ultra 3,200 동급)·LR 비율 이식 무보정. 메모리 불변(MBS 1).
+global-batch-size: 160
 
 # ── THD 문서 격리 플래그셋 (SFT 경로: 음수 마커 기반 리셋, EOD 무관) ──────
 reset-position-ids: true
@@ -86,12 +90,12 @@ no-weight-decay-cond-type: apply_wd_to_qk_layernorm
 # ── Precision ─────────────────────────────────────────────────────────────
 bf16: true
 
-# ── 체크포인트 / 평가 (4,079 iters 규모) ──────────────────────────────────
-save-interval: 40                 # 0.5B tok (~2.2h) 간격 — 조기중단 가드 해상도
+# ── 체크포인트 / 평가 (2,448 iters 규모) ──────────────────────────────────
+save-interval: 25                 # 0.52B tok (~2h) 간격 — 조기중단 가드 해상도
 # optimizer state 저장 기본 (63c466f) — 무봉합 재개
 ckpt-format: torch_dist
 eval-iters: 4
-eval-interval: 40
+eval-interval: 25
 
 # ── 로깅 / 런타임 ─────────────────────────────────────────────────────────
 log-interval: 1
