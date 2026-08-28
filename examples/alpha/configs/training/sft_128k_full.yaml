@@ -20,7 +20,7 @@
 #   배치 보정 √(21.0/18.9)=1.05 → **2.5e-5**. min-lr 은 Ultra 비율(peak/15) → 1.5e-6.
 #   같은 optimizer 내 상대값이라 Adam→Muon 이식 문제가 없는 유일한 앵커.
 #   warmup 4.7% (Ultra 150/3200 미러) = 115 iters. 조기중단 가드: valid loss
-#   (eval 25 iters 마다) 상승 전환 시 직전 ckpt 채택.
+#   (eval 300 iters 마다) 상승 전환 시 직전 ckpt 채택.
 
 train-mode: finetune
 
@@ -91,11 +91,11 @@ no-weight-decay-cond-type: apply_wd_to_qk_layernorm
 bf16: true
 
 # ── 체크포인트 / 평가 (2,448 iters 규모) ──────────────────────────────────
-save-interval: 25                 # 0.52B tok (~2h) 간격 — 조기중단 가드 해상도
+save-interval: 300                # 6.3B tok (~27h) 간격, 총 8회 + 종료 시 (사용자, 08-28)
 # optimizer state 저장 기본 (63c466f) — 무봉합 재개
 ckpt-format: torch_dist
 eval-iters: 4
-eval-interval: 25
+eval-interval: 300
 
 # ── 로깅 / 런타임 ─────────────────────────────────────────────────────────
 log-interval: 1
