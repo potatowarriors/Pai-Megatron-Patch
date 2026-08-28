@@ -1,4 +1,8 @@
-# SFT 64K — post-LC supervised fine-tuning (초안 2026-08-23, 스모크 전 미검증)
+# ⚠️ SUPERSEDED (2026-08-28): 본 런은 단일 128k 혼합 버킷 `sft_128k_full.yaml`
+#   × `sft_128k_mixed_blend.yaml` 로 확정 (실측: 128k·CP8 62.9k tok/s 가 64k·CP4
+#   GBS64 실측보다 빠르고 fill 99%·꼬리 전량 편입). 이 파일은 투버킷 설계의
+#   64k 본 런 프리셋 — 대조·롤백용 보존.
+# SFT 64K — post-LC supervised fine-tuning (초안 2026-08-23)
 #
 #   bash train.sh baseline_48L sft_64k <sft_data_preset>
 #

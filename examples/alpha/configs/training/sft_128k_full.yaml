@@ -1,0 +1,117 @@
+# SFT 본 런 — 단일 128k 혼합 버킷 (2026-08-28 확정, 사용자 결정)
+#
+#   bash train.sh baseline_48L sft_128k_full sft_128k_mixed_blend
+#
+# 투버킷(sft_64k + sft_128k 꼬리) 설계를 대체. 근거 (실측, 08-28):
+# - 128k·CP8+offload·GBS 96 실블렌드 스모크: 200.1s/iter = 62.9k tok/s,
+#   260 TFLOP/s/GPU, max-alloc 55.3~59.2GB. 64k·CP4 GBS 64 실측(47.5k) 대비
+#   1.32× — iter당 고정비(offload 스트리밍·Muon NS·allreduce)가 12.58M 배치에서
+#   희석되어 CP8 의 DP1 손해를 상쇄.
+# - 혼합 패킹 fill 98.7~100% (투버킷 128k 꼬리 57~68%) → 패딩 낭비 소멸.
+# - 전 카테고리 >64k 꼬리가 epoch 비례로 편입(gen_mixed_blend.py), SWE-v3 9.61B
+#   전량 정확히 1.00 epoch — 앵커가 버킷 분할 없이 성립. LR 사이클 1개.
+# - Ultra3 도 294,912 단일 pack (버킷 분할 없음).
+#
+# 예산: 51.32B bin-tokens = 391,584 samples = 4,079 iters @ GBS 96 ≈ **9.4일**
+#   (64k 기준 40B 설계의 멤버별 epoch 압력 보존 + 꼬리 편입 +28%).
+#
+# LR 설계 (Ultra3 비율 이식, 2026-08-28 보고 §1):
+#   Ultra SFT peak / pretrain peak = 1.5e-5 / 2.5e-4 = 6% → alpha 6% × 4e-4 = 2.4e-5,
+#   배치 보정 √(12.6/18.9)=0.82 → **2.0e-5**. min-lr 은 Ultra 비율(peak/15) → 1.5e-6.
+#   같은 optimizer 내 상대값이라 Adam→Muon 이식 문제가 없는 유일한 앵커.
+#   warmup 4.7% (Ultra 150/3200 미러) = 192 iters. 조기중단 가드: valid loss
+#   (eval 40 iters 마다) 상승 전환 시 직전 ckpt 채택.
+
+train-mode: finetune
+
+# ── 예산 / LR ─────────────────────────────────────────────────────────────
+train-samples: 391584             # 4,079 iters @ GBS 96 (sft_128k_mixed_blend.yaml)
+lr-warmup-samples: 18432          # 192 iters (4.7%)
+lr-decay-samples: 391584
+lr: 2.0e-5
+min-lr: 1.5e-6
+lr-decay-style: cosine
+
+# ── 병렬화 (128K = CP8 강제; offload 로 GO — MUON_OFFLOAD_BACKPORT S5) ────
+tensor-model-parallel-size: 1
+pipeline-model-parallel-size: 1
+expert-model-parallel-size: 8
+expert-tensor-parallel-size: 1
+context-parallel-size: 8
+
+chunked-optimizer-state-offload: true
+optimizer-state-offload-chunk-size-mb: 256
+
+# ── 배치 / 시퀀스 (THD는 MBS 1 필수 — helper assert) ──────────────────────
+seq-length: 131072
+micro-batch-size: 1
+global-batch-size: 96             # 12.58M tok/iter — 전 스테이지 토큰 배치 상수 관례
+
+# ── THD 문서 격리 플래그셋 (SFT 경로: 음수 마커 기반 리셋, EOD 무관) ──────
+reset-position-ids: true
+no-create-attention-mask-in-dataloader: true
+reset-attention-mask: false
+eod-mask-loss: false
+
+# ── 리컴퓨트 ──────────────────────────────────────────────────────────────
+recompute-granularity: selective
+recompute-modules: "layernorm moe"
+
+# ── MoE 라우팅 (DSV3-strict, 전 스테이지 동일) ────────────────────────────
+moe-router-load-balancing-type: seq_aux_loss
+moe-router-score-function: sigmoid
+moe-router-enable-expert-bias: true
+moe-router-bias-update-rate: 0.001
+moe-token-dispatcher-type: alltoall
+
+# ── Optimizer (전 스테이지 연속성: Muon 유지) ─────────────────────────────
+optimizer: dist_muon
+weight-decay: 0.1
+adam-beta1: 0.9
+adam-beta2: 0.95
+muon-momentum: 0.95
+muon-use-nesterov: true
+muon-num-ns-steps: 5
+muon-scale-mode: spectral
+muon-fp32-matmul-prec: medium
+muon-tp-mode: blockwise
+muon-extra-scale-factor: 0.2
+init-method-std: 0.008
+
+clip-grad: 8.0                    # ×cp 산식 (lc_a.yaml 실측), CP8
+
+# ── LayerNorm WD ──────────────────────────────────────────────────────────
+no-weight-decay-cond-type: apply_wd_to_qk_layernorm
+
+# ── Precision ─────────────────────────────────────────────────────────────
+bf16: true
+
+# ── 체크포인트 / 평가 (4,079 iters 규모) ──────────────────────────────────
+save-interval: 40                 # 0.5B tok (~2.2h) 간격 — 조기중단 가드 해상도
+# optimizer state 저장 기본 (63c466f) — 무봉합 재개
+ckpt-format: torch_dist
+eval-iters: 4
+eval-interval: 40
+
+# ── 로깅 / 런타임 ─────────────────────────────────────────────────────────
+log-interval: 1
+log-timers-to-tensorboard: true
+log-memory-to-tensorboard: true
+log-validation-ppl-to-tensorboard: true
+log-throughput: true
+tensorboard-queue-size: 1
+# 26종 128k 콜드 캐시 빌드 실측 25분 (64k 는 80분+) — 콜드 재빌드 대비 여유
+distributed-timeout-minutes: 180
+manual-gc: true
+manual-gc-interval: 5
+overlap-grad-reduce: true
+attention-backend: auto
+cross-entropy-loss-fusion: true
+cross-entropy-fusion-impl: te
+wandb-project: alpha-posttraining
+
+# ── Stage 전환 (dataset 변경 → finetune: true, 카운터 리셋) ────────────────
+# LC-B 최종 ckpt iter 320 (STATUS.md 정본). --finetune 은 optimizer state 미로드.
+load: /home/work/vidsearch/repos/project_s/Pai-Megatron-Patch/examples/alpha/outputs/alpha_baseline_48L_lc_b_resume_20260826_223836/checkpoints
+finetune: true
+no-load-optim: true

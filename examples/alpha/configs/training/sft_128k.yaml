@@ -1,3 +1,5 @@
+# ⚠️ SUPERSEDED (2026-08-28): 투버킷 설계 폐기 — 단일 128k 런 `sft_128k_full.yaml`
+#   참조. 이 파일은 "64k 본 런 뒤 >64k 꼬리만" 돌리는 구 설계의 프리셋 (보존).
 # SFT 128K 장문 버킷 — 64k 본 런 종료 후 이어 실행 (초안 2026-08-23)
 #
 #   bash train.sh baseline_48L sft_128k sft_128k_blend
