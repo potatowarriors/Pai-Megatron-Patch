@@ -133,7 +133,8 @@ def collect_track_b(b_mode="verified"):
     recs = []
     # DD 는 resume 폴백 시 타임스탬프 디렉토리를 새로 판다 (ko_chat_b_r1_08-24-2026_200831) —
     # 구 런(think 없음)·새 런 모두 훑고, 게이트가 think 부재를 거른다
-    files = sorted(glob.glob(str(HERE / "artifacts/ko_chat_b_r1*/**/*.parquet"), recursive=True))
+    files = sorted(glob.glob(str(HERE / "artifacts/ko_chat_b_r1*/**/*.parquet"), recursive=True)
+                   + glob.glob(str(HERE / "artifacts/ko_chat_b_r2*/**/*.parquet"), recursive=True))
     for f in files:
         try:
             df = pd.read_parquet(f)
@@ -159,6 +160,9 @@ def collect_track_b(b_mode="verified"):
                 continue
             rec["metadata"]["ko_synthesis"]["think"] = True
             rec["metadata"]["ko_synthesis"]["ox_verified"] = uid in verified
+            # r2 = --strict-facts 프롬프트(사실성 규칙 8). 효과는 미측정(OxAlpha 퇴출 08-27)
+            rec["metadata"]["ko_synthesis"]["strict_facts"] = "ko_chat_b_r2" in f
+            rec["metadata"]["ko_synthesis"]["run"] = "r2" if "ko_chat_b_r2" in f else "r1"
             if gate_row(rec, drops):
                 recs.append(rec)
     recs, d2 = dedup(recs, key_fn=lambda r: (r["metadata"]["axes"].get("task_type"),
@@ -190,10 +194,14 @@ def main():
         return
     out = Path(args.out_dir)
     out.mkdir(parents=True, exist_ok=True)
-    for name, recs in (("trackA", a), ("trackB", b)):
+    # trackA 는 변환 플래그가 다른 두 파일로 바로 분리 (IF 번역 = fanout+medium-effort)
+    a_if = [r for r in a if r["metadata"]["ko_synthesis"]["method"] == "full_translate"]
+    a_chat = [r for r in a if r["metadata"]["ko_synthesis"]["method"] != "full_translate"]
+    for name, recs in (("trackA_if", a_if), ("trackA_chat", a_chat), ("trackB", b)):
         with open(out / f"{name}.jsonl", "w") as f:
             for r in recs:
                 f.write(json.dumps(r, ensure_ascii=False) + "\n")
+    print(f"trackA split: if={len(a_if)} chat={len(a_chat)}")
     manifest = {
         "cut": "tranche1", "trackA": len(a), "trackB": len(b),
         "drops": {"A": dict(da), "B": dict(db)}, "sources": dict(src),

@@ -10,7 +10,10 @@
 # 실행 (sub1): NCORES=96 nohup bash convert_kochat_64k.sh > /path/log 2>&1 &
 set -u
 REPO=$(cd "$(dirname "$0")/../.." && pwd)
-SFT=/home/work/Datasets/LL_datasets/posttraining/SFT/alpha-SFT-KoChat-v1
+# SFT_DIR: 컷 산출 디렉토리 (1차 alpha-SFT-KoChat-v1, 2차 alpha-SFT-KoChat-v2 …)
+# SUFFIX: 산출 세트명 접미사 (2차는 "_t2" — 1차 세트 보존, 블렌드에서 교체)
+SFT=${SFT_DIR:-/home/work/Datasets/LL_datasets/posttraining/SFT/alpha-SFT-KoChat-v1}
+SUFFIX=${SUFFIX:-}
 OUT=${OUT:-/home/work/Datasets/LL_preprocessed/v5/sft_packed_64k_pad16}
 NCORES=${NCORES:-96}
 TOK=$REPO/examples/alpha/tokenizer_v5
@@ -33,8 +36,8 @@ run() {
     || echo "!! $name FAILED (exit $?)"
 }
 
-run kochat_b            "$SFT/trackB.jsonl"
-run kochat_if_fanout_me "$SFT/trackA_if.jsonl" --fanout-train-turns --medium-effort
-run kochat_chat         "$SFT/trackA_chat.jsonl"
+run "kochat_b$SUFFIX"            "$SFT/trackB.jsonl"
+run "kochat_if_fanout_me$SUFFIX" "$SFT/trackA_if.jsonl" --fanout-train-turns --medium-effort
+run "kochat_chat$SUFFIX"         "$SFT/trackA_chat.jsonl"
 
 echo "== ALL DONE ($(date +%H:%M:%S)) -> $OUT"
