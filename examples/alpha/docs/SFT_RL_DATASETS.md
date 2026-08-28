@@ -154,6 +154,16 @@ alpha 는 NVIDIA 레시피를 재현한다 (사용자 결정 2026-08-25).
 내부 real-token 재비례 — if_me 0.069680 / chat 0.149539 (ep 2.81→2.67), budget 0.005772/0.005189 (각 1.19ep).
 타 엔트리 불변, 23경로 전부 .idx 확인.
 
+사전 점검 재확인 (2026-08-28, SFT 개시 전):
+- KoChat-v1 합류(08-26) 후에도 effort 엔트리 보존 — 블렌드 26경로 합 0.999998, budget 가중치 불변(1.19ep),
+  chat 계열은 KoChat 합류로 2.67→2.28ep 재비례 (가중치 정본은 yaml 헤더 08-26 주석).
+- KoChat IF 트랜치(t2 포함)도 규칙 8대로 `--medium-effort --fanout-train-turns` 렌더 실증
+  (`kochat_if_fanout_me{,_t2}` stats: medium_effort=True). kochat_chat/b 는 마커 없음 — 원본이
+  GPT-OSS medium-effort 생성분이 아니므로 정상.
+- 128k 버킷(`sft_128k_blend.yaml`)에 effort 셋 없음은 **의도** — Ultra effort 도메인(math/STEM/IF)은
+  전부 64k 수용, 128k 는 long-tail 6종 전용. `sft_smoke_64k.yaml` 이 구 `chat_v3_if` 를 가리키는 것도
+  무해 (preset 스모크 전용 단일셋, 학습 블렌드 아님).
+
 ## 3. RL 자산
 
 ### 3.1 훈련 블렌드 3종 (즉시 실행 가능한 레시피 — NeMo Gym 소비 포맷)
@@ -220,8 +230,7 @@ alpha 는 NVIDIA 레시피를 재현한다 (사용자 결정 2026-08-25).
    multilingual·safety) + LongBlocks-SFT 소량 편입
 6. MOPD 재현 범위 결정: 교사 슬롯 수(2~3 vs 5), 192k→128k 캡, NeMo RL/Gym 스택
    포팅 vs 자체 구현(verl/ChatLearn 백엔드 검토)
-7. effort/budget 재변환 (§2.6): `chat_v3_if_fanout_me` + `budget_trunc_v1_{if,math}` →
-   블렌드 재산출. 변환기·테스트·스모크는 완료 (2026-08-25), 본 변환은 유휴 노드에서.
+7. ~~effort/budget 재변환 (§2.6)~~ **완료 (2026-08-25 변환·블렌드 반영, 08-28 사전 점검 재확인)**
 
 ## 6. 미해결/후속
 
