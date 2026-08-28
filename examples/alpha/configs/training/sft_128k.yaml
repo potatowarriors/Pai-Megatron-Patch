@@ -2,10 +2,10 @@
 #
 #   bash train.sh baseline_48L sft_128k sft_128k_blend
 #
-# 설계: sft_64k.yaml 파생. 차이 = seq 131072·CP8(+offload 필수)·GBS 32
+# 설계: sft_64k.yaml 파생. 차이 = seq 131072·CP8(+offload 필수)·GBS 96
 # (토큰 배치 유지: 32×131072 = 64×65536 = 4.19M tok/iter), clip-grad ×cp 산식 8.0.
 # 구성 실증: 128K@CP8+offload = MUON_OFFLOAD_BACKPORT S5 GO (54.9~58.8GB).
-# 예산: 42,304 samples = 1,322 iters ≈ 5.54B bin-tokens ≈ 1.7일 (앵커 2종 1-pass,
+# 예산: 42,336 samples = 441 iters @ GBS 96 ≈ 5.55B bin-tokens ≈ 1.7일 (앵커 2종 1-pass,
 # sft_128k_blend.yaml 헤더 참조).
 #
 # TODO (64k 본 런 후):
@@ -16,9 +16,9 @@
 train-mode: finetune
 
 # ── 예산 / LR ─────────────────────────────────────────────────────────────
-train-samples: 42304              # 1,322 iters @ GBS 32 (5.54B bin-tokens)
-lr-warmup-samples: 1984           # 62 iters (~4.7%)
-lr-decay-samples: 42304
+train-samples: 42336              # 441 iters @ GBS 96 (5.55B bin-tokens, 1.0007 pass)
+lr-warmup-samples: 2016           # 21 iters (~4.7%)
+lr-decay-samples: 42336
 lr: 3.0e-6                        # TODO 2: 64k cosine 종점(1e-6)~중반 사이 재검토
 min-lr: 1.0e-6
 lr-decay-style: cosine
@@ -36,7 +36,7 @@ optimizer-state-offload-chunk-size-mb: 256
 # ── 배치 / 시퀀스 (THD는 MBS 1 필수) ──────────────────────────────────────
 seq-length: 131072
 micro-batch-size: 1
-global-batch-size: 32             # 토큰 배치 유지 (64k GBS 64 와 동일 tok/iter)
+global-batch-size: 96             # 12.58M tok/iter — 64k GBS 192 와 동일 (전 스테이지 상수 관례)
 
 # ── THD 문서 격리 플래그셋 (sft_64k 와 동일) ──────────────────────────────
 reset-position-ids: true
@@ -77,12 +77,12 @@ no-weight-decay-cond-type: apply_wd_to_qk_layernorm
 # ── Precision ─────────────────────────────────────────────────────────────
 bf16: true
 
-# ── 체크포인트 / 평가 (1,322 iters 규모) ──────────────────────────────────
-save-interval: 100
+# ── 체크포인트 / 평가 (441 iters 규모) ────────────────────────────────────
+save-interval: 40                 # 0.5B tok 간격 (64k 와 동일)
 # optimizer state 저장 기본 (63c466f)
 ckpt-format: torch_dist
 eval-iters: 2                     # 128K eval 고비용 — 최소 표본
-eval-interval: 200
+eval-interval: 40
 
 # ── 로깅 / 런타임 (sft_64k 와 동일) ───────────────────────────────────────
 log-interval: 1

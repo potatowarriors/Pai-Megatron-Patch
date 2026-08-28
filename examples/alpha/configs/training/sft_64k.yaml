@@ -38,12 +38,11 @@ train-mode: finetune              # idxmap 2S 문서 분해 + 라벨/마스크 �
 # 근거: Ultra3 함의 epoch 역산(60.4B ≈ SWE-v1 1.1ep 앵커와 일치) → alpha 는
 # SWE-v3(9.78B) 전량 1ep 고정 + 나머지 비율 배분 + chat E_max 4~5 정합.
 # 블렌드 가중치 표는 convert_sft_64k.sh 헤더 (yaml 은 bins 완성 후 작성).
-train-samples: 610368             # 40.0B / 65536 = 9,537 iters @ GBS 64
-                                  # 실블렌드 스모크 실측 88.2s/iter → **~9.7일**
-                                  # (chat 단독 71.7s와 달리 장문 세그먼트 +23%).
-                                  # 단축 옵션: LC 종료 후 main1 합류 2-node
-                                  # (DiLoCo-SFT 또는 sync-DP) ≈ ~5일.
-lr-warmup-samples: 28672          # ~4.7% (ultra3 150/3200 미러) = 448 iters
+train-samples: 610368             # 40.0B / 65536 = **3,179 iters @ GBS 192**
+                                  # ETA ~9.7일 (실블렌드 스모크 88.2s/iter @GBS 64
+                                  # 실측의 토큰당 비용 × 3; 2-node 단축안은
+                                  # 사용자 기각 2026-08-25 → 1노드 확정)
+lr-warmup-samples: 28800          # 150 iters = 4.7% (ultra3 150/3200 미러)
 lr-decay-samples: 610368
 lr: 1.5e-5
 min-lr: 1.0e-6
@@ -63,7 +62,12 @@ optimizer-state-offload-chunk-size-mb: 256
 # ── 배치 / 시퀀스 (THD는 MBS 1 필수 — helper assert) ──────────────────────
 seq-length: 65536
 micro-batch-size: 1
-global-batch-size: 64             # ultra3 미러 = 4.2M tok/iter; TODO 2와 함께 재검토
+# GBS 192 = 12.58M tok/iter — 전 스테이지 토큰 배치 상수 관례(P3 3072×4k = LC-A
+# 384×32k = LC-B 96×128k) 유지. 초기값 64(4.2M)는 Ultra3 의 GBS 숫자만 미러하고
+# 패킹 길이 차(294,912 vs 65,536)를 놓친 오류 — Ultra SFT 실제 토큰 배치는
+# 18.9M(pretrain 25.2M 의 75%). Ultra LR 1.5e-5 는 18.9M 에서 검증된 값이라
+# 12.6M 은 보수 안전측. (사용자 확정 2026-08-28)
+global-batch-size: 192
 
 # ── THD 문서 격리 플래그셋 (LC-A와 동일 — LC_ENTRY_GATE §1.5) ─────────────
 # SFT 경로는 position-id를 음수 마커에서 유도 (EOD 무관); eod-mask-loss는
@@ -108,13 +112,13 @@ no-weight-decay-cond-type: apply_wd_to_qk_layernorm
 bf16: true
 
 # ── 체크포인트 / 평가 ─────────────────────────────────────────────────────
-save-interval: 100
+save-interval: 40                 # 40 iters × 12.58M ≈ 0.5B tok (~3h) — GBS 192 환산
 # optimizer state 저장이 기본 (사용자 확정 2026-08-23, 63c466f 하우스 룰 반전):
 # 재개 시 Muon momentum·스케줄러 무봉합 복원. SFT 는 조기중단 가드(과적합 시
 # 중간 ckpt 채택) 운용이라 무봉합 재개 가치가 특히 큼.
 ckpt-format: torch_dist
 eval-iters: 4
-eval-interval: 100
+eval-interval: 40                 # save 와 동주기 (조기중단 판정용 valid loss)
 
 # ── 로깅 / 런타임 (LC-A와 동일) ───────────────────────────────────────────
 log-interval: 1
@@ -135,7 +139,9 @@ cross-entropy-fusion-impl: te
 wandb-project: alpha-posttraining
 
 # ── Stage 전환 (dataset 변경 → finetune: true, 카운터 리셋) ────────────────
-# TODO 1: LC 최종 체크포인트로 교체
-# load: <LC 최종 ckpt>
+# LC-B 최종 ckpt iter 320 (STATUS.md 정본 — run1/resume1 은 최종본 아님).
+# 개시는 수동: 합성 SFT 데이터 세션의 추가분이 블렌드에 합류한 뒤
+# (사용자 2026-08-28) — bash train.sh baseline_48L sft_64k sft_40b_blend
+load: /home/work/vidsearch/repos/project_s/Pai-Megatron-Patch/examples/alpha/outputs/alpha_baseline_48L_lc_b_resume_20260826_223836/checkpoints
 finetune: true
 no-load-optim: true
