@@ -11,7 +11,7 @@
 # TODO (64k 본 런 후):
 #  1. load: 64k SFT 최종 체크포인트로 교체 (finetune: true 가 카운터 리셋,
 #     Megatron --finetune 은 optimizer state 도 로드하지 않음 — LR 재웜업 62 iters)
-#  2. LR: 64k 종료 시점 LR 근처에서 재시작 검토 (현재 = 64k cosine 꼬리 근사 3e-6)
+#  2. ~~LR~~ 해소(08-28): 64k 종료 LR 1e-6 constant 상속 (아래 LR 블록 주석)
 
 train-mode: finetune
 
@@ -19,9 +19,14 @@ train-mode: finetune
 train-samples: 42336              # 441 iters @ GBS 96 (5.55B bin-tokens, 1.0007 pass)
 lr-warmup-samples: 2016           # 21 iters (~4.7%)
 lr-decay-samples: 42336
-lr: 3.0e-6                        # TODO 2: 64k cosine 종점(1e-6)~중반 사이 재검토
+# LR = 64k 런 종료 LR(min-lr 1e-6) 을 constant 로 상속 — 같은 SFT 목적의
+# 연속이므로 새 사이클 없이 이어감 (LC-A 가 P3 종료 7.5e-6 을 constant 상속한
+# 선례·Ultra LC 의 pretrain-min 상속 동형). 초기 placeholder 3e-6 cosine 은
+# 64k 종점 위로 되올라가는 형태라 폐기 (2026-08-28). warmup 21 iters 는
+# finetune 리셋 후 Muon momentum 재예열용 (LC-A 50 iters 선례).
+lr: 1.0e-6
 min-lr: 1.0e-6
-lr-decay-style: cosine
+lr-decay-style: constant
 
 # ── 병렬화 (128K = CP8 강제; offload 로 GO — 백포트 S5 실증) ──────────────
 tensor-model-parallel-size: 1
