@@ -54,6 +54,7 @@ python tools/alpha_config.py emit-megatron-flags --from-checkpoint <ckpt>   # GP
 - YAML 키 = Megatron CLI 플래그명. `yaml_to_flags`가 `true`→`--flag`, `false`→생략, 리스트→`a,b`로 emit. 뒤에 붙인 인자는 그대로 전달(YAML 덮어씀).
 - preset 이름에 `smoke`이 있거나 data가 `mock`이면 `WANDB_MODE=disabled` 자동. 배너에 `wandb: DISABLED/online/off` 표시.
 - `evaluate.sh`는 preflight → convert → verify(config.json↔common.pt) → weight diff → **forward_sanity(ppl 게이트)** → 벤치. 모든 변환·검증 args는 ckpt `common.pt`에서 유도.
+  `--skip-convert`/`--skip-validate`는 **이미 통과한 산출물 재사용 전용** — 검증 실패를 우회하는 용도로 쓰지 않는다 (루트 CLAUDE.md "검증 규칙").
 - 추론 서빙: SGLang 스택은 2026-08-18 제거. 벤치는 HF 기반 `scripts/run_benchmarks.sh`. **RL(post-training)은 이 리포 범위 밖** — alpha vLLM 플러그인·Megatron-Bridge·NeMo-RL 환경은 `project_s/NeMo-RL/`(`NEMO_RL_SETUP.md`)에 있다.
 - 프로파일: `NSYS=1 bash train.sh analysis_24L profile mock --profile-ranks 0 --profile-step-start 6 --profile-step-end 7 --train-iters 9` → `tools/analyze_nsys_trace.py`. 레버·판정은 `docs/throughput_optimization.md` (per-step 레버(optimizer)는 prod로 이전 안 됨, per-token 레버만).
 

@@ -170,6 +170,20 @@ submodule `tests/unit_tests/test_step_batch_size_schedule.py`, `test_muon_optimi
 - **DO** modify `megatron_patch/training.py` or add patches.
 - **Exception**: core infrastructure not exposed for patching (e.g. the num-microbatches calculator) may be patched directly — see [Custom Training Features](#custom-training-features-alpha-stage1) for the precedent.
 
+### 검증 규칙 (adopted 2026-08-29)
+
+검증을 거치지 않은 결과는 믿을 수 없다. 검증을 건너뛰어 얻은 "성공"은 잠재 문제를 안은 채 다음 단계로 넘기는 것이다.
+
+1. **검증이 깨지면 검증을 고친다 — 절대 건너뛰지 않는다.** 검증 스크립트·게이트가 환경 문제(라이브러리 몽키패치,
+   버전 충돌 등)로 실패하면 그 원인을 제거해 검증을 복원한다. `--skip-validate`류 우회 플래그, 검증 단계 주석 처리,
+   게이트 임계 완화로 "해결"하지 않는다. 우회 플래그는 **이미 통과한 산출물을 재사용**할 때만 쓴다.
+   선례: 2026-08-29 NGC modelopt가 HF 로드를 깨뜨리자 `--skip-validate`로 우회하던 것을 되돌리고 modelopt import
+   차단으로 검증을 복원 (`757fe93`).
+2. **모든 작업은 검증을 완료한 뒤 진행한다.** 코드·설정·데이터·체크포인트 어느 단계든 "검증 없이 그냥 진행"은 없다.
+   검증 수단이 없으면 먼저 **검증 방법을 제시**하고(단위 테스트, ON/OFF differential, smoke run, 수치 게이트 등)
+   완료한 뒤 다음 단계로 간다. 보고에는 무엇을 어떻게 검증했고 어떤 수치가 나왔는지 그대로 적는다
+   (예: `14181/14181 matched, ppl 5.91 PASS`). 실패·부분 통과·미실행을 통과처럼 쓰지 않는다.
+
 ### Commit & History Rules (adopted 2026-08-18)
 
 이 저장소의 커밋 이력 관리 규칙. Claude Code 세션에서도 동일하게 적용한다.
