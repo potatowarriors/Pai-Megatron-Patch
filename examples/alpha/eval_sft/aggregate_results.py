@@ -16,9 +16,11 @@ METRIC = {
     "hmmt_feb_2025": "exact_match,none",
     "ifeval": "inst_level_loose_acc,none",
     "gpqa_diamond": "acc,none",
+    "simpleqa_verified": "accuracy,none",
+    "logickor": "score,none",
 }
 # 표 컬럼 = 상위 태스크만(하위 카테고리 mmlu_pro_* 등 제외). 순서 고정.
-TASK_ORDER = ["mmlu_pro", "gpqa_diamond_generative_n_shot", "aime25", "hmmt_feb_2025", "ifeval"]
+TASK_ORDER = ["mmlu_pro", "gpqa_diamond_generative_n_shot", "aime25", "hmmt_feb_2025", "ifeval", "simpleqa_verified", "logickor"]
 
 def pick_metric(task_res: dict, task: str) -> float | None:
     pref = METRIC.get(task)
