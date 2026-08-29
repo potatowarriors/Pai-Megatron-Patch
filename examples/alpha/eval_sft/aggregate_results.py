@@ -43,21 +43,21 @@ def main():
         if not tagdir.is_dir(): continue
         jsons = list(tagdir.rglob("results_*.json")) + list(tagdir.rglob("results.json"))
         if not jsons: continue
-        latest = max(jsons, key=lambda p: p.stat().st_mtime)
-        try:
-            d = json.loads(latest.read_text())
-        except Exception:
-            continue
-        res = d.get("results", {})
         run, it = parse_tag(tagdir.name)
         cell = rows.setdefault((run, it), {})
         keep = set(TASK_ORDER) | set(METRIC)
-        for task, tr in res.items():
-            if task not in keep:
+        # 같은 디렉토리의 모든 결과 JSON을 mtime 오름차순 병합 → 나중 실행이 같은 태스크를 덮어씀
+        for jf in sorted(jsons, key=lambda p: p.stat().st_mtime):
+            try:
+                res = json.loads(jf.read_text()).get("results", {})
+            except Exception:
                 continue
-            v = pick_metric(tr, task)
-            if v is not None:
-                cell[task] = v; tasks.add(task)
+            for task, tr in res.items():
+                if task not in keep:
+                    continue
+                v = pick_metric(tr, task)
+                if v is not None:
+                    cell[task] = v; tasks.add(task)
     ordered = [t for t in TASK_ORDER if t in tasks]
     extra = sorted(t for t in tasks if t not in TASK_ORDER and t in METRIC)
     tasks = ordered + extra
