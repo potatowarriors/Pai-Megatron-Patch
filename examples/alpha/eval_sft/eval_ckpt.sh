@@ -57,10 +57,13 @@ done
 
 # ---- 3) 티어 실행 ----
 rc=0
-case ",$TIERS," in
-  *,t1,*) echo "[eval] T1 실행"; bash "$HERE/run_tier1.sh" "http://localhost:$PROXY_PORT/v1" "$RUN_TAG" || rc=1 ;;
+BURL="http://localhost:$PROXY_PORT/v1"
+case ",$TIERS," in *,t1,*) echo "[eval] T1 실행"; bash "$HERE/run_tier1.sh" "$BURL" "$RUN_TAG" || rc=1 ;; esac
+case ",$TIERS," in *,t3,*)
+  echo "[eval] T3 SimpleQA 실행"; python3 "$HERE/runners/run_simpleqa.py" --base-url "$BURL" --run-name "$RUN_TAG" || rc=1
+  echo "[eval] T3 LogicKor 실행"; python3 "$HERE/runners/run_logickor.py" --base-url "$BURL" --run-name "$RUN_TAG" || rc=1
 esac
-# (t2/t3 러너는 추가되면 여기 case 확장)
+# (t2 RULER 는 별도 롱컨텍스트 fleet 필요 — 여기 미포함)
 
 # ---- 4) 깨끗한 종료 ----
 echo "[eval] fleet 종료"
