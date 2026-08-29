@@ -125,6 +125,31 @@ ssh -F /home/work/vidsearch/.ssh-keys/config -N -R 8000:localhost:8000 alpha-eva
 - **500 전량 투입 전 `df -h /var/lib/docker` 재확인** — 사전빌드 pull 총량 ~100–200GB대 가능.
   현재 여유 1.1TB(공용 서버라 변동). 컨테이너 재시작 시 dockerd 수동 기동(§4) 먼저.
 
+## 6.6 alpha 모델 SWE-bench 실행 (에이전틱, 2026-08-29 연결 검증)
+
+**연결**: gpu06 컨테이너 → sub1 fleet 역터널. sub1에서 keepalive 실행(NFS 스크립트):
+```bash
+ssh sub1 'bash /home/work/vidsearch/tools/start_swe_tunnel.sh'   # 컨테이너:8199 → sub1:8100(fleet)
+```
+컨테이너에서 `curl localhost:8199/v1/models` 로 확인. fleet 는 **TOOLS=1 로 서빙**해야 함
+(mini-swe-agent litellm 이 tool_choice=auto 전송 → `--enable-auto-tool-choice` 필요; `serve_alpha.sh` TOOLS=1).
+
+**에이전트**: mini-swe-agent 2.4.6 (컨테이너 `/opt/swebench/venv`). 예측 생성:
+```bash
+# 단일 인스턴스 (루프 검증)
+export OPENAI_API_KEY=dummy OPENAI_API_BASE=http://localhost:8199/v1
+mini-extra swebench-single -y --cost-limit 0 \
+  --subset SWE-bench/SWE-bench_Verified --split test -i <instance_id> \
+  -m openai/alpha -c swebench.yaml -c model.model_kwargs.api_base=http://localhost:8199/v1 \
+  -o traj.json
+# 배치 (베이스라인/체크포인트) → preds.jsonl 생성 후 채점:
+mini-extra swebench --subset SWE-bench/SWE-bench_Verified --split test -m openai/alpha \
+  -c swebench.yaml -c model.model_kwargs.api_base=http://localhost:8199/v1 -o preds.jsonl -w <N>
+swebench eval SWE-bench/SWE-bench_Verified -p preds.jsonl --run-id alpha_iterNNN -j 8
+```
+함정: `-c` 를 주면 기본 config 가 빠지므로 **`-c swebench.yaml` 을 반드시 먼저**. 데이터셋은
+신 스키마 `SWE-bench/SWE-bench_Verified`. 베이스라인(SFT 전)은 패치 생성력이 없어 ~0 예상.
+
 ## 7. 주의
 
 - **공용 서버다.** gpu06에는 타 사용자 컨테이너 20+개가 상시 가동 중(`docker ps` 확인).
