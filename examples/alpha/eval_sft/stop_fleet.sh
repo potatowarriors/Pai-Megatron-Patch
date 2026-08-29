@@ -2,9 +2,9 @@
 # stop_fleet.sh — fleet(vLLM 서버들 + 프록시) 깨끗한 종료.
 # GPU0 누수 교훈: hard-kill(-9) 전에 SIGTERM으로 CUDA 컨텍스트를 정상 정리시키고,
 # GPU 메모리 반납을 확인한 뒤에야 다음 단계로 넘어간다.
-# 사용: bash eval_sft/stop_fleet.sh [GPUS]   # GPUS 예 "1,2,3,4,5,6,7" (메모리 회수 검증 대상)
+# 사용: bash eval_sft/stop_fleet.sh [GPUS]   # GPUS 예 "0,1,2,3,4,5,6,7" (메모리 회수 검증 대상)
 set -uo pipefail
-GPUS="${1:-1,2,3,4,5,6,7}"
+GPUS="${1:-0,1,2,3,4,5,6,7}"
 
 # 1) 프록시 먼저 (새 요청 차단)
 pkill -TERM -f "eval_sft/lb_proxy.py" 2>/dev/null || true
@@ -25,6 +25,17 @@ if [ "$(pgrep -f 'alpha_serve_venv/bin/vllm' | wc -l)" -gt 0 ]; then
     pkill -9 -f "alpha_serve_venv/bin/vllm" 2>/dev/null || true
     sleep 3
 fi
+# 6) 고아 vLLM spawn 워커 정리 (hard-kill 시 남아 GPU 메모리를 쥐는 잔재; 2026-08-29 GPU0 사고)
+#    nvidia FD를 쥔 + 우리 벤치 마커(alpha_serve_venv)를 가진 python 워커만. ipykernel 등은 제외.
+for pp in $(ls /proc 2>/dev/null | grep -E "^[0-9]+$"); do
+    grep -qa "ipykernel" /proc/$pp/cmdline 2>/dev/null && continue
+    if ls -la /proc/$pp/fd 2>/dev/null | grep -q "/dev/nvidia"; then
+        if grep -qa "alpha_serve_venv" /proc/$pp/environ 2>/dev/null || grep -qa "spawn_main" /proc/$pp/cmdline 2>/dev/null; then
+            grep -qa "alpha_serve_venv" /proc/$pp/environ 2>/dev/null && kill -9 "$pp" 2>/dev/null || true
+        fi
+    fi
+done
+sleep 2
 # 5) GPU 메모리 회수 확인 (누수 조기 감지)
 IFS=',' read -ra GL <<< "$GPUS"
 leaked=""

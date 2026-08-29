@@ -8,14 +8,14 @@
 #     ITER    : 반복번호 또는 latest (기본 latest). hfmodel_* 를 직접 주면 무시.
 #     TIERS   : 콤마구분 (기본 "t1"). 현재 t1 지원, t2/t3 는 러너 추가 시.
 # 환경:
-#   GPUS   : fleet·변환에 쓸 GPU 목록 (기본 "1,2,3,4,5,6,7" — GPU0 누수 제외)
+#   GPUS   : fleet·변환에 쓸 GPU 목록 (기본 8장 0~7)
 #   MAXLEN : 서버 max-model-len (기본 49152)
 #   WANDB  : 1이면 결과 wandb 업로드(있으면)
 set -uo pipefail
 HERE="$(cd "$(dirname "$0")" && pwd)"; ALPHA="$(dirname "$HERE")"
 ROOT="$(cd "$ALPHA/../.." && pwd)"
 INPUT="${1:?RUN_DIR 또는 hfmodel 경로 필요}"; ITER="${2:-latest}"; TIERS="${3:-t1}"
-GPUS="${GPUS:-1,2,3,4,5,6,7}"; MAXLEN="${MAXLEN:-49152}"
+GPUS="${GPUS:-0,1,2,3,4,5,6,7}"; MAXLEN="${MAXLEN:-49152}"
 N=$(( $(echo "$GPUS" | tr ',' '\n' | wc -l) )); PROXY_PORT=8100
 export HF_TOKEN=$(grep -E '^HF_TOKEN=' "$ALPHA/.env" 2>/dev/null | cut -d= -f2)
 

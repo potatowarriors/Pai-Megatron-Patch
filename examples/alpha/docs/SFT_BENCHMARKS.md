@@ -87,6 +87,25 @@ main1 SFT save → sub1 감시 → ① run_convert.sh(EP=8, ~30–40분)
 
 서빙 기동: `bash eval_sft/serve_alpha.sh <hfmodel> [max_len] [DP] [port]` (§3).
 
+## 3.7 세션 재생성 후 환경 복원 (sub1)
+
+컨테이너 세션이 초기화되면 **NFS는 살아남고 시스템·user-site는 소멸**한다.
+
+| 살아남음 (NFS `vidsearch/tools/`) | 소멸 → 재적용 필요 |
+|---|---|
+| serve venv(9.5G)·`lm_eval0412`·compat deb+백업·참조로짓 / HF캐시(`Datasets/benchmarks`) | ① CUDA13 compat 시스템 스왑(`/usr/local/cuda/compat`) ② ifeval leaf 의존성(nltk≥3.9.1·langdetect·immutabledict, `~/.local`) |
+
+**복원 = 명령 하나** (멱등):
+```bash
+cd examples/alpha && bash eval_sft/restore_bench_env.sh
+```
+이 스크립트가 ①② 재적용 + 검증(serve venv vllm/플러그인, lm_eval, 참조로짓, HF캐시)까지 한다.
+서빙 전 필수. **먼저 Pai 환경 복원**(`RESTORE_AFTER_REBOOT.md`)이 되어 있어야 시스템 python·GPU 접근이 선다.
+
+주의: serve venv의 torch는 cu13이라 **compat 스왑 없이는 `torch.cuda.is_available()=False`** → 복원 스크립트가
+compat부터 처리한다. gpu06 docker 노드는 별도([EVAL_DOCKER_NODE.md]) — 그쪽은 컨테이너 `--restart`로 살아남고
+dockerd만 수동 기동.
+
 ## 3.6 반복 실행 워크플로 (학습 중 체크포인트마다)
 
 학습이 진행되며 체크포인트(300 iters마다)가 나오면 반복 평가한다. 스크립트는 모두
@@ -105,9 +124,9 @@ main1 SFT save → sub1 감시 → ① run_convert.sh(EP=8, ~30–40분)
 ```bash
 cd examples/alpha
 # 무인 반복: 새 ckpt 나올 때마다 자동 평가
-GPUS=1,2,3,4,5,6,7 bash eval_sft/eval_watch.sh outputs/<sft_run> t1 600
+GPUS=0,1,2,3,4,5,6,7 bash eval_sft/eval_watch.sh outputs/<sft_run> t1 600
 # 또는 특정 ckpt 1회:
-GPUS=1,2,3,4,5,6,7 bash eval_sft/eval_ckpt.sh outputs/<sft_run> 300 t1
+GPUS=0,1,2,3,4,5,6,7 bash eval_sft/eval_ckpt.sh outputs/<sft_run> 300 t1
 ```
 결과: `eval_sft/results/<run>_iter<N>/` (lm_eval 원자료) + `results/TRACKING.md`(iter별 추이).
 
