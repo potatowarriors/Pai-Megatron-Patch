@@ -106,6 +106,25 @@ ssh -F /home/work/vidsearch/.ssh-keys/config -N -R 8000:localhost:8000 alpha-eva
 
 하니스에는 OpenAI-호환 base_url `http://localhost:8000/v1` 로 준다.
 
+## 6.5 SWE-bench Verified — 하니스 설치·검증 완료 (2026-08-29)
+
+컨테이너 `/opt/swebench/`(venv + README)에 설치. gold-patch 헬스체크 통과
+(`pallets__flask-5014` → RESOLVED), 하니스가 태스크 컨테이너 획득·실행·채점 전 과정 정상.
+
+| 항목 | 값 |
+|---|---|
+| swebench | **5.0.2** (venv `/opt/swebench/venv`, py3.12) |
+| 데이터셋 | **`SWE-bench/SWE-bench_Verified`** (신 스키마 500 인스턴스) |
+| gold 헬스체크 | RESOLVED, ~48초, 디스크 +4.25GB |
+
+**함정 (반드시 준수)**:
+- swebench 5.x는 **신 스키마** 데이터셋만 읽는다. 구 `princeton-nlp/SWE-bench_Verified`를 주면
+  `make_test_spec`에서 `KeyError: 'image'`. 반드시 `SWE-bench/SWE-bench_Verified` 사용.
+- 5.x는 태스크 이미지를 **로컬 빌드하지 않고 Docker Hub 사전빌드 이미지 pull**
+  (`swebench/sweb.eval.x86_64.<inst>:latest`, 인스턴스당 ~1–4GB).
+- **500 전량 투입 전 `df -h /var/lib/docker` 재확인** — 사전빌드 pull 총량 ~100–200GB대 가능.
+  현재 여유 1.1TB(공용 서버라 변동). 컨테이너 재시작 시 dockerd 수동 기동(§4) 먼저.
+
 ## 7. 주의
 
 - **공용 서버다.** gpu06에는 타 사용자 컨테이너 20+개가 상시 가동 중(`docker ps` 확인).
