@@ -42,6 +42,18 @@ MEGATRON_PATH = os.path.join(ROOT_DIR, "backends/megatron/Megatron-LM-251125")
 sys.path.insert(0, ROOT_DIR)
 sys.path.insert(0, MEGATRON_PATH)
 
+# modelopt(0.25.0) neutralization: NGC modelopt monkey-patches transformers'
+# _load_pretrained_model with an OLD signature, incompatible with the installed
+# transformers → `_new__load_pretrained_model() missing pretrained_model_name_or_path`
+# when Megatron path pulls modelopt in. Block modelopt imports so transformers loads
+# HF weights unpatched. Verified 2026-08-29: without this, load_hf_model crashes.
+class _BlockModelopt:
+    def find_spec(self, name, path=None, target=None):
+        if name == "modelopt" or name.startswith("modelopt."):
+            raise ModuleNotFoundError("modelopt neutralized (transformers API incompat)")
+        return None
+sys.meta_path.insert(0, _BlockModelopt())
+
 import torch
 import torch.nn.functional as F
 
