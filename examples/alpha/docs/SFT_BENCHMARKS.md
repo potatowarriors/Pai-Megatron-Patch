@@ -137,6 +137,29 @@ GPUS=0,1,2,3,4,5,6,7 bash eval_sft/eval_ckpt.sh outputs/<sft_run> 300 t1
   누수를 만든다(2026-08-29 GPU0 사고). fleet 기본 GPU = 1~7 (GPU0 회수 전까지 제외).
 - 변환은 `evaluate.sh`(forward_sanity ppl 게이트 포함) 재사용 — 잘못 변환된 ckpt는 게이트가 막음.
 
+## 3.8 LC-B iter320 베이스라인 결과 (2026-08-29)
+
+SFT 전(LC-B 128K CPT 완료) 모델의 전 티어 베이스라인 = SFT 효과의 비교 기준선.
+낮은 값은 정상 — SFT 전 모델은 chat/thinking·boxed·패치 형식을 학습하지 않았다.
+
+| 티어 | 벤치 | LC-B iter320 | 비고 |
+|---|---|---|---|
+| T1 | MMLU-Pro (5-shot CoT EM) | **24.1%** | |
+| T1 | GPQA-Diamond (0-shot gen) | **19.2%** | |
+| T1 | AIME 2025 (EM) | **0.0%** | boxed 미출력 |
+| T1 | HMMT Feb 2025 (EM) | **0.0%** | boxed 미출력 |
+| T1 | IFEval (inst loose) | **39.0%** | |
+| T3 | SimpleQA-Verified (accuracy) | **0.8%** | 시도율 15%, judge=gemini-3.7-flash |
+| T3 | LogicKor (overall /10) | **1.42** | 한국어 chat, 2턴 judge |
+| T2 | NIAH 256K (single-needle) | **95%** | 정본 `study/lc_b_final_eval.md`(4k~131k 200/200·384K 0%) |
+| 에이전틱 | SWE-bench Verified | 파이프라인 검증 완료, 베이스라인 실행 중 | mini-swe-agent+gpu06 DinD |
+
+추이표: `eval_sft/results/TRACKING.md` (iter별 자동 누적). SFT 체크포인트마다
+이 값들이 오르는 것이 SFT 효과. 특히 AIME/HMMT 0→N%, SimpleQA·LogicKor 상승이 핵심 신호.
+
+**미완(후속)**: full RULER 13태스크(현재는 NIAH가 대표), Terminal-Bench(하니스 미설치).
+SWE-bench 배치 베이스라인(단일 인스턴스로 루프 검증 후 배치).
+
 ## 4. docker 부재 — 실측과 경로
 
 main1·sub1 공통 실측(2026-08-29): sudo는 passwordless로 존재하나 CapBnd에

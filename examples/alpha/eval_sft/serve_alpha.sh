@@ -22,8 +22,15 @@ export TOKENIZERS_PARALLELISM=false
 # IB admin-disabled 클러스터 (ko_chat serve 전례)
 export NCCL_IB_DISABLE=1 NCCL_SOCKET_IFNAME=eth0 GLOO_SOCKET_IFNAME=eth0
 
-echo "[serve] ckpt=$CKPT max_len=$MAX_LEN DP=$DP port=$PORT"
+TOOL_FLAGS=""
+if [ "${TOOLS:-0}" = "1" ]; then
+  # mini-swe-agent/litellm 이 tool_choice=auto 를 보냄 → vLLM 이 수용하도록.
+  # (에이전트는 텍스트 파싱이라 파서 종류 무관; hermes 로 요청만 통과시킴)
+  TOOL_FLAGS="--enable-auto-tool-choice --tool-call-parser hermes"
+fi
+echo "[serve] ckpt=$CKPT max_len=$MAX_LEN DP=$DP port=$PORT tools=${TOOLS:-0}"
 exec $VENV/bin/vllm serve "$CKPT" \
+  $TOOL_FLAGS \
   --served-model-name alpha \
   --trust-remote-code \
   --tensor-parallel-size 1 \
