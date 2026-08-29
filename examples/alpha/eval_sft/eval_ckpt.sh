@@ -71,6 +71,11 @@ bash "$HERE/stop_fleet.sh" "$GPUS" || echo "[eval] ⚠️ 종료 시 GPU 회수 
 
 # ---- 5) 결과 집계 ----
 python3 "$HERE/aggregate_results.py" --results-dir "$HERE/results" --out "$HERE/results/TRACKING.md" || true
+# wandb 로깅 (alpha-post-eval). WANDB=0 이면 skip.
+if [ "${WANDB:-1}" != "0" ]; then
+    ( source "$ALPHA/scripts/setup_wandb.sh" >/dev/null 2>&1; export WANDB_SILENT=true
+      python3 "$HERE/log_eval_wandb.py" --results-dir "$HERE/results" --run-tag "$RUN_TAG" )       || echo "[eval] ⚠️ wandb 로깅 실패 (비치명)"
+fi
 [ "$rc" -eq 0 ] && touch "$OUTD/.done"
 echo "[eval] 완료: $RUN_TAG (rc=$rc). 결과: $OUTD, 추이표: $HERE/results/TRACKING.md"
 exit $rc

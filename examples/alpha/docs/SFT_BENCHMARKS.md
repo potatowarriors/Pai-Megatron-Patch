@@ -120,6 +120,10 @@ dockerd만 수동 기동.
 | `run_tier1.sh` | T1 lm_eval chat-completions (mmlu_pro·gpqa·ifeval·aime25·hmmt) |
 | `aggregate_results.py` | 전 체크포인트 결과→`results/TRACKING.md` 추이표 |
 
+**wandb**: 결과는 프로젝트 **`alpha-post-eval`**에 학습 run 별로 로깅(iter=step, resume 누적).
+post-train(`alpha-evals`)과 별도. `eval_ckpt.sh`가 집계 후 자동 업로드(WANDB=0 이면 skip).
+수동: `python3 eval_sft/log_eval_wandb.py --results-dir eval_sft/results --run-tag <run>_iter<N>`.
+
 **전형적 사용** (SFT 학습 중, sub1에서):
 ```bash
 cd examples/alpha
