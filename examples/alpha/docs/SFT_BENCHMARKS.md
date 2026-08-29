@@ -87,6 +87,37 @@ main1 SFT save → sub1 감시 → ① run_convert.sh(EP=8, ~30–40분)
 
 서빙 기동: `bash eval_sft/serve_alpha.sh <hfmodel> [max_len] [DP] [port]` (§3).
 
+## 3.6 반복 실행 워크플로 (학습 중 체크포인트마다)
+
+학습이 진행되며 체크포인트(300 iters마다)가 나오면 반복 평가한다. 스크립트는 모두
+`examples/alpha/eval_sft/`. 멱등적(이미 한 건 skip)이고 GPU 정리를 내장한다.
+
+| 스크립트 | 역할 |
+|---|---|
+| `eval_ckpt.sh <RUN_DIR> [ITER\|latest] [tiers]` | 한 체크포인트 전체: 변환(MG→HF)→fleet 기동→티어 실행→**깨끗한 종료**→집계 |
+| `eval_watch.sh <RUN_DIR> [tiers] [poll_s]` | 새 체크포인트 감시→자동 평가 (무인 반복). 중단: `touch <RUN_DIR>/.eval_watch_stop` |
+| `serve_fleet.sh` / `lb_proxy.py` | 단일GPU 서버 N개 + 라운드로빈 프록시 (vLLM DP munmap 우회) |
+| `stop_fleet.sh [GPUS]` | 프로세스그룹 SIGTERM→GPU 회수 검증→필요시 SIGKILL (누수 방지) |
+| `run_tier1.sh` | T1 lm_eval chat-completions (mmlu_pro·gpqa·ifeval·aime25·hmmt) |
+| `aggregate_results.py` | 전 체크포인트 결과→`results/TRACKING.md` 추이표 |
+
+**전형적 사용** (SFT 학습 중, sub1에서):
+```bash
+cd examples/alpha
+# 무인 반복: 새 ckpt 나올 때마다 자동 평가
+GPUS=1,2,3,4,5,6,7 bash eval_sft/eval_watch.sh outputs/<sft_run> t1 600
+# 또는 특정 ckpt 1회:
+GPUS=1,2,3,4,5,6,7 bash eval_sft/eval_ckpt.sh outputs/<sft_run> 300 t1
+```
+결과: `eval_sft/results/<run>_iter<N>/` (lm_eval 원자료) + `results/TRACKING.md`(iter별 추이).
+
+**반복성 불변식**:
+- lm_eval 0.4.12 고정, 태스크·few-shot·seed·gen 파라미터 러너에 하드코딩(`run_tier1.sh`).
+- 서버 `max-model-len 49152`·`max_gen_toks 24576`(prompt 여유 확보, 400 방지). thinking 기본.
+- **GPU 정리 규율**: 교체 시 `stop_fleet.sh`로 SIGTERM→회수확인. hard-kill 반복이 GPU 좀비
+  누수를 만든다(2026-08-29 GPU0 사고). fleet 기본 GPU = 1~7 (GPU0 회수 전까지 제외).
+- 변환은 `evaluate.sh`(forward_sanity ppl 게이트 포함) 재사용 — 잘못 변환된 ckpt는 게이트가 막음.
+
 ## 4. docker 부재 — 실측과 경로
 
 main1·sub1 공통 실측(2026-08-29): sudo는 passwordless로 존재하나 CapBnd에
