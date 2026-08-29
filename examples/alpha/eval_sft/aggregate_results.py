@@ -15,7 +15,10 @@ METRIC = {
     "aime25": "exact_match,none",
     "hmmt_feb_2025": "exact_match,none",
     "ifeval": "inst_level_loose_acc,none",
+    "gpqa_diamond": "acc,none",
 }
+# 표 컬럼 = 상위 태스크만(하위 카테고리 mmlu_pro_* 등 제외). 순서 고정.
+TASK_ORDER = ["mmlu_pro", "gpqa_diamond_generative_n_shot", "aime25", "hmmt_feb_2025", "ifeval"]
 
 def pick_metric(task_res: dict, task: str) -> float | None:
     pref = METRIC.get(task)
@@ -48,11 +51,16 @@ def main():
         res = d.get("results", {})
         run, it = parse_tag(tagdir.name)
         cell = rows.setdefault((run, it), {})
+        keep = set(TASK_ORDER) | set(METRIC)
         for task, tr in res.items():
+            if task not in keep:
+                continue
             v = pick_metric(tr, task)
             if v is not None:
                 cell[task] = v; tasks.add(task)
-    tasks = sorted(tasks)
+    ordered = [t for t in TASK_ORDER if t in tasks]
+    extra = sorted(t for t in tasks if t not in TASK_ORDER and t in METRIC)
+    tasks = ordered + extra
     lines = ["# 벤치 추이 (eval_ckpt 집계)\n",
              "각 SFT 체크포인트별 점수. `eval_ckpt.sh`/`eval_watch.sh` 가 갱신. 100분율.\n",
              "| run | iter | " + " | ".join(tasks) + " |",
