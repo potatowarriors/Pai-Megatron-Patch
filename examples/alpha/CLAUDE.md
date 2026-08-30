@@ -154,6 +154,7 @@ TP=1 전용. **chunked optimizer-state offload 지원**: `--chunked-optimizer-st
 
 | 날짜 | 증상 | 원인 → 대응 |
 |---|---|---|
+| 08-30 | SFT ckpt 벤치 전 항목 무효 (MMLU 추출실패 34%, AIME 0/30, SWE 0/20) | HF 변환기가 `generation_config.json` 미생성 → eos가 `<\|endoftext\|>`(0)뿐이라 `<\|im_end\|>`(3)에서 안 멈춤 + `</think>` special=True라 출력에서 삭제. **변환 후 eos 정합·서빙 1건 스모크(finish=stop) 게이트 통과 전 수치 기록 금지** |
 | 08-23 | THD+CP `cu_seqlens must be divisible by 2*cp_size` 정지 (LC-A iter170) | 합성 원문의 리터럴 `<\|endoftext\|>`가 문서 중간 id 0 → 문서 분열. 런타임 `snap_cu_seqlens_to_grid`(CP>1 전용) + 투입 전 `scan_internal_eod.py` |
 | 08-22 | THD+CP≥2 첫 스텝 MoE `Split sizes doesn't match` | mamba_model rope에 packed_seq_params 미전달 → q/k NaN → CUDA topk 중복 인덱스. gpt_model 미러. **MoE 라우팅 크래시는 hidden NaN부터**; mock 데이터로 THD+CP 검증 불가 |
 | 08-17 | DiLoCo 두 노드 loss 거울상 시소 (주기 ~336 iter) | 짝/홀 샤딩 × blend 가중치 합 ±1e-6 잔차 세차운동 → `DILOCO_SHARD_BLOCK` 블록-순환 |

@@ -5,6 +5,13 @@ SFT 본 런(`sft_128k_full`, 2,448 iters, save 300)의 체크포인트별 평가
 instruct 능력을 측정한다. 참조 좌표는 DSV4 post-training 표 + Nemotron 3 Ultra Table 10
 (SFT 데이터가 Ultra 레시피이므로 후자가 1차 준거). 진행 상태는 [STATUS.md](STATUS.md).
 
+> **⚠️ 2026-08-30 — 이 스위트로 산출한 수치는 전량 무효 판정·삭제됐다.**
+> HF 변환 체크포인트에 `generation_config.json`이 없어 eos가 `<|endoftext|>`(0)뿐이었고
+> (SFT 턴 종료는 `<|im_end|>` id 3), `</think>`가 `special=True`라 출력에서 삭제됐다.
+> 모델이 아니라 서빙 설정을 측정한 것이다. 경위·증거는 [KNOWN_ISSUES.md](KNOWN_ISSUES.md) 2026-08-30 항목.
+> **아래 §7 게이트 3종을 통과하기 전에는 어떤 수치도 기록하지 않는다.**
+> 설계(§1 판정, §2 티어, §3 인프라)와 러너 코드 자체는 유효하며 재사용한다.
+
 ## 0. 결정 로그 (사용자, 2026-08-29)
 
 | 결정 | 내용 |
@@ -79,7 +86,7 @@ alpha 는 `<think>` 강제 시작 = DeepSeek-R1/Qwen3 계열 **reasoning 모델*
 | AIME25, HMMT25 | **0.6** | 0.95 | 32768 | **avg@16** | R1(64)→실무 16 |
 | IFEval | 0.0 | — | 2048 | 1, greedy | 지시이행 관례 |
 | SimpleQA, LogicKor | 0.6 | 0.95 | 32768 | 1 | R1 |
-| RULER/NIAH | 0.0 | — | 128 | greedy | needle 추출 |
+| RULER/NIAH | 0.0 | — | ~~128~~ **재설계 필요** | greedy | needle 추출. **128토큰은 reasoning 모델에 무효** — 서두 설명에 전부 소진해 needle 미도달(2026-08-30). 같은 모델이 LC-B 자체 NIAH는 4k~131k 200/200 |
 | SWE, Terminal | **0.0** | 1.0 | per-call 8192 상한 | step_limit 250 | mini-swe/터미널 기본 |
 
 - **서빙 컨텍스트는 벤치 요구만큼만**: 표준 fleet **32768**(T1·T3·SWE·Terminal), 롱 fleet
@@ -216,3 +223,18 @@ Google Generative Language API v1beta 엔드포인트
 - [ ] Phase 3: judge 러너(T3, 키 수령 후) + SWE 프록시 레인
 - [ ] Phase 4: 오케스트레이터(ckpt 감시→변환→스위트→wandb) 상시화
 - [ ] docker 경로 확정 시: SWE-bench Verified·Terminal-Bench 2.0 온보딩
+
+## 7. 투입 전 게이트 (2026-08-30 신설, 필수)
+
+2026-08-30 사고의 재발 방지. **셋 다 통과해야 수치를 `results/TRACKING.md`에 기입한다.**
+
+| # | 게이트 | 판정 기준 | 실패 시 |
+|---|---|---|---|
+| G1 | **변환 산출물 eos 정합** | HF ckpt에 `generation_config.json` 존재 + `eos_token_id`가 챗 템플릿 턴 종료 토큰(`<\|im_end\|>` id 3)을 포함 | 변환기 수정. 수동 패치본으로 벤치 돌리지 않는다 |
+| G2 | **태그 관측 가능성** | 하니스가 파싱하는 태그(`</think>`, `<tool_call>`)가 `special=False`라 vLLM 출력에 살아남음 | tokenizer_config 수정 후 재변환 |
+| G3 | **서빙 1건 스모크** | 쉬운 질문 1건에 `finish_reason=stop`, `</think>` 관측, `content` 비어있지 않음. 어려운 질문 1건에 `finish_reason=stop` | 원인 규명 전 배치 실행 금지 |
+
+부수 불변량:
+- `--max-model-len` ≥ `max_gen_toks` + 프롬프트 최대치. 32768 모델길이에 32768 생성예산은 성립 불가.
+- 장시간 러너·프로브는 `setsid` + NFS 로그로 분리 실행 (세션 종료에 죽지 않도록).
+- 한 번에 한 변수만 바꾼다. 길이·온도·파서·모델 디렉토리를 동시에 바꾸면 원인 분리가 불가능하다.
