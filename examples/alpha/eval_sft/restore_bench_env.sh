@@ -26,9 +26,9 @@ else
 fi
 
 echo "== 2) ifeval leaf 의존성 (user-site, 휘발) =="
-python3 -c "import langdetect, immutabledict; from importlib.metadata import version; assert version('nltk')>='3.9.1'" 2>/dev/null \
+python3 -c "import langdetect, immutabledict, wonderwords; from importlib.metadata import version; assert version('nltk')>='3.9.1'" 2>/dev/null \
   && echo "  이미 설치됨 — skip" \
-  || { PIP_CONSTRAINT= pip install -q --user "nltk>=3.9.1" langdetect immutabledict 2>&1 | tail -1; echo "  → 설치 완료"; }
+  || { PIP_CONSTRAINT= pip install -q --user "nltk>=3.9.1" langdetect immutabledict wonderwords 2>&1 | tail -1; echo "  → 설치 완료"; }
 
 echo "== 3) 검증 =="
 PIP_CONSTRAINT= $VENV/bin/python -c "import torch; assert torch.cuda.is_available(), 'CUDA 미인식(compat 실패?)'; import vllm; import vllm_alpha_plugin; vllm_alpha_plugin.register(); from vllm import ModelRegistry; assert 'AlphaForCausalLM' in ModelRegistry.get_supported_archs(); print('  serve venv OK: torch', torch.__version__, '| vllm', vllm.__version__, '| 플러그인 등록 True')" || { echo "  ❌ serve venv 검증 실패"; exit 1; }

@@ -150,6 +150,26 @@ swebench eval SWE-bench/SWE-bench_Verified -p preds.jsonl --run-id alpha_iterNNN
 함정: `-c` 를 주면 기본 config 가 빠지므로 **`-c swebench.yaml` 을 반드시 먼저**. 데이터셋은
 신 스키마 `SWE-bench/SWE-bench_Verified`. 베이스라인(SFT 전)은 패치 생성력이 없어 ~0 예상.
 
+## 6.7 Terminal-Bench 실행 (에이전틱, 2026-08-30 설치·검증)
+
+컨테이너 `/opt/terminalbench/`(venv + README)에 설치. oracle 헬스체크 통과(hello-world resolved, 전 파이프라인).
+
+| 항목 | 값 |
+|---|---|
+| terminal-bench | **0.2.18** (CLI `tb`, venv `/opt/terminalbench/venv`) |
+| 데이터셋 | `terminal-bench-core==0.1.1` (80 tasks) |
+| 함정 | DinD docker.io에 **Compose v2 플러그인 없음** → `/usr/libexec/docker/cli-plugins/docker-compose`(v5.5.0) 설치(볼륨에 영속). 없으면 `docker compose build` exit 125 |
+
+**실행** (역터널·TOOLS 서빙 전제, §6.6과 동일):
+```bash
+export OPENAI_API_KEY=dummy OPENAI_API_BASE=http://localhost:8199/v1
+cd /opt/terminalbench
+./venv/bin/tb run --agent terminus --model openai/alpha -k api_base=http://localhost:8199/v1 \
+  --dataset terminal-bench-core --n-tasks <N> --run-id <id> --output-path runs
+```
+엔드포인트는 **하니스 프로세스(컨테이너) 기준 localhost** — 태스크 컨테이너가 아니라 컨테이너의 8199(역터널).
+러너: `examples/alpha/eval_sft/run_terminal.sh`. 베이스라인(약한 SFT)은 ~0 예상.
+
 ## 7. 주의
 
 - **공용 서버다.** gpu06에는 타 사용자 컨테이너 20+개가 상시 가동 중(`docker ps` 확인).
