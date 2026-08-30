@@ -4,6 +4,32 @@
 CLAUDE.md의 "함정 표"는 이 문서의 한 줄 요약이며, 새 사고는 **여기에 서사를 쓰고 CLAUDE.md 표에는 한 줄만** 추가한다.
 날짜는 절대 표기. 두 스테이지 이상 지난 항목은 스테이지 경계에서 `archive/`로 이동.
 
+## RULER 를 추론 켠 채 128토큰으로 돌렸다 (2026-08-30 ✅)
+
+- **증상**: RULER-NIAH 65536 구간 6~25%. 같은 모델이 LC-B 자체 NIAH 하니스에서는 4k~131k
+  **200/200**(100%)이었다. 두 수치가 모순된다.
+- **원인**: 추론을 **켠 채** 출력 예산만 128 토큰으로 조였다. 추론 모델은 그 128 토큰을
+  서두 분석에 전부 쓴다 — 실제 응답이
+  `"The user is asking for the special magic number for straight-place mentioned in the
+  provided text.\n\n1. **Analyze the Re"` 에서 잘렸다. needle 을 쓸 기회가 없었다.
+- **프론티어는 RULER 에서 추론을 끈다**: Nemotron Nano 9B v2 카드 —
+  *"except RULER, which is evaluated in **Reasoning-Off** mode"*. Nemotron 3 Ultra 는
+  RULER 를 instruct 가 아닌 base 스위트로 분리하고 `temp 0.00001 / top_p 0.99` 를 쓴다.
+  Qwen3-235B 는 thinking budget 을 8,192 로 제한한다("to avoid overly verbose reasoning").
+- **실측 대조** (iter300, 동일 needle 프롬프트): thinking ON = `finish=length`, 512토큰
+  소진, needle 실패 / thinking OFF = **`finish=stop`, 21토큰, needle 성공**.
+- **수정**: `eval_sft/tasks/ruler_niah_*_aa.yaml` 4종 + `ruler_utils.py`.
+  요청에 `chat_template_kwargs: {enable_thinking: false}` — alpha 챗 템플릿이 그때
+  `<|im_start|>assistant\n<think></think>` 로 사고를 미리 닫아 렌더한다. 상세는
+  `docs/SFT_BENCHMARKS.md` §3.9.
+- **동반 결함**: 구 `common_utils.process_results` 가 센티넬 dict 를 하드코딩된
+  `DEFAULT_SEQ_LENGTHS = [4096]` 로 만들어, 샘플이 0개인 4096 구간에 `-1.0` 이 결과에
+  남았다. 새 `ruler_utils.SEQ_LENGTHS` 는 yaml 3곳과 일치를 강제한다(어긋나면 예외).
+  **모듈 전역에 실행 중 값을 쌓는 방식은 쓸 수 없다** — lm_eval 의 `!function` 로더가
+  모듈을 파일 경로로 따로 로드해 인스턴스가 갈린다(이 사실도 이번에 실측으로 확인).
+- **교훈**: 벤치 설정을 모델 종류에 맞추지 않으면 모델이 아니라 설정을 측정한다. 두 하니스가
+  같은 모델에 모순된 값을 주면 **모델을 의심하기 전에 설정을 대조**한다.
+
 ## T1 벤치 태스크가 base 모델용이었다 — 추출 실패·avg@k 무효화 (2026-08-30 ✅)
 
 체크포인트 종료 토큰 사고(아래 항목)를 고치는 과정에서 발견한 **별개 결함 3건**. 셋 다

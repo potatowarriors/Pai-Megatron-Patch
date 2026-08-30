@@ -91,6 +91,8 @@ Ultra 레시피이므로 그 쪽을 준거로 삼는다. (R1·Qwen3 계열은 0.
 | `seed` | **null** | 시드를 고정하면 반복 k개가 동일 표본이 된다 |
 | 반복 (avg@k) | MMLU-Pro 1 · GPQA 8 · IFEval 8 · AIME/HMMT 16 | Ultra `num_repeats`; 수학은 R1 64→실무 16 |
 
+**RULER 는 예외** — 추론을 끄고 `temp 0.00001 / top_p 0.99 / max_gen 512` 로 돈다 (§3.9).
+
 `pass@1` 은 greedy 1회가 아니라 **k회 평균**이다 (R1 카드: "generate 64 responses per
 query to estimate pass@1"). 문항 수가 적을수록 k 를 키운다 — GPQA 198 문항에 1회 측정은
 분산이 크다.
@@ -123,6 +125,46 @@ lm_eval 내장 태스크를 쓰지 않는다. 내장은 base 모델용이라 채
 `resps` 에 k개를 쌓는데, `filter_list` 를 지정하지 않으면 lm_eval 이 기본 `take_first` 를
 꽂아 1개만 남긴다. 구 `aime25_avg16`·`hmmt_feb_2025_avg16` 은 16배 연산을 쓰고 avg@1 을
 계산하고 있었다. 새 태스크는 `take_first_k` 로 k개를 모두 넘긴다.
+
+## 3.9 T2 RULER — Reasoning-Off 재설계 (2026-08-30)
+
+**RULER 는 needle 추출 과제이지 추론 과제가 아니다.** 프론티어 셋이 방법은 달라도 같은
+판단을 한다:
+
+| 출처 | RULER 처리 |
+|---|---|
+| Nemotron Nano 9B v2 | *"except RULER, which is evaluated in **Reasoning-Off** mode"* |
+| Nemotron 3 Ultra | instruct 가 아닌 **base 스위트**로 분리, `temp 0.00001 / top_p 0.99` |
+| Qwen3-235B | **thinking budget 8,192** — *"To avoid overly verbose reasoning"* |
+
+구 설정은 추론을 켠 채 출력 예산만 128 토큰으로 조였다. 모델이 서두 분석에 예산을 소진해
+needle 에 도달하지 못했고 65536 구간 6~25% 가 나왔다 — 같은 모델이 LC-B 자체 NIAH 에서는
+4k~131k **200/200** 이었다. 모순의 원인은 모델이 아니라 태스크 설정이었다.
+
+**실측 대조** (iter300, 동일 needle 프롬프트, 2026-08-30):
+
+| 모드 | finish | tokens | needle 추출 |
+|---|---|---:|---|
+| thinking ON | length | 512 소진 | 실패 |
+| thinking OFF | **stop** | **21** | **성공** |
+
+alpha 챗 템플릿은 `enable_thinking=false` 일 때 `<|im_start|>assistant\n<think></think>` 로
+사고를 미리 닫아 렌더한다. 요청의 `chat_template_kwargs` 한 줄로 Reasoning-Off 가 된다.
+
+| 항목 | 값 |
+|---|---|
+| 태스크 | `ruler_niah_{single_1,single_2,multikey_1,multivalue}_aa` |
+| 구간 / 표본 | 65536 · 131072, 구간당 20 (Qwen3 도 길이당 20) |
+| temp / top_p | 0.00001 / 0.99 (Nemotron base 스위트) |
+| max_gen_toks | 512 (실측 21토큰이면 충분) |
+| 서빙 | **롱 fleet `--max-model-len ≥ 139264`** — 표준 fleet(40960)로 돌리면 전량 실패 |
+| 러너 | `eval_sft/run_tier2.sh` |
+
+**같이 고친 것**: 구 `common_utils.process_results` 는 센티넬 dict 를 하드코딩된
+`DEFAULT_SEQ_LENGTHS = [4096]` 로 만들어, 샘플이 0개인 4096 구간에 `-1.0` 이 결과에 남았다.
+새 `ruler_utils.SEQ_LENGTHS` 는 yaml 의 `metric_list`·`metadata.max_seq_lengths` 와 일치를
+**강제**한다(어긋나면 `_build` 가 예외). 모듈 전역에 실행 중 값을 쌓는 방식은 lm_eval 이
+모듈을 경로별로 따로 로드해 인스턴스가 갈리므로 쓸 수 없다.
 
 ## 3.5 sub1 서빙 환경 — vllm 0.25.1 + CUDA 13 compat (2026-08-29)
 
@@ -198,28 +240,15 @@ GPUS=0,1,2,3,4,5,6,7 bash eval_sft/eval_ckpt.sh outputs/<sft_run> 300 t1
   누수를 만든다(2026-08-29 GPU0 사고). fleet 기본 GPU = 1~7 (GPU0 회수 전까지 제외).
 - 변환은 `evaluate.sh`(forward_sanity ppl 게이트 포함) 재사용 — 잘못 변환된 ckpt는 게이트가 막음.
 
-## 3.8 LC-B iter320 베이스라인 결과 (2026-08-29)
+## 3.8 베이스라인 — 무효, 재측정 대기 (2026-08-30)
 
-SFT 전(LC-B 128K CPT 완료) 모델의 전 티어 베이스라인 = SFT 효과의 비교 기준선.
-낮은 값은 정상 — SFT 전 모델은 chat/thinking·boxed·패치 형식을 학습하지 않았다.
+**2026-08-29 에 기록한 LC-B iter320 베이스라인 표는 전량 무효 판정·삭제됐다.** 체크포인트
+종료 토큰 결함 + base 모델용 태스크로 측정한 값이었다(경위: [KNOWN_ISSUES.md](KNOWN_ISSUES.md)
+2026-08-30 두 항목). 새 T1(§3.6)·T2(§3.9)로 다시 재야 한다.
 
-| 티어 | 벤치 | LC-B iter320 | 비고 |
-|---|---|---|---|
-| T1 | MMLU-Pro (5-shot CoT EM) | **24.1%** | |
-| T1 | GPQA-Diamond (0-shot gen) | **19.2%** | |
-| T1 | AIME 2025 (EM) | **0.0%** | boxed 미출력 |
-| T1 | HMMT Feb 2025 (EM) | **0.0%** | boxed 미출력 |
-| T1 | IFEval (inst loose) | **39.0%** | |
-| T3 | SimpleQA-Verified (accuracy) | **0.8%** | 시도율 15%, judge=gemini-3.7-flash |
-| T3 | LogicKor (overall /10) | **1.42** | 한국어 chat, 2턴 judge |
-| T2 | NIAH 256K (single-needle) | **95%** | 정본 `study/lc_b_final_eval.md`(4k~131k 200/200·384K 0%) |
-| 에이전틱 | SWE-bench Verified | 파이프라인 검증 완료, 베이스라인 실행 중 | mini-swe-agent+gpu06 DinD |
-
-추이표: `eval_sft/results/TRACKING.md` (iter별 자동 누적). SFT 체크포인트마다
-이 값들이 오르는 것이 SFT 효과. 특히 AIME/HMMT 0→N%, SimpleQA·LogicKor 상승이 핵심 신호.
-
-**미완(후속)**: full RULER 13태스크(현재는 NIAH가 대표), Terminal-Bench(하니스 미설치).
-SWE-bench 배치 베이스라인(단일 인스턴스로 루프 검증 후 배치).
+살아남은 유일한 롱컨텍스트 수치는 LC-B 자체 NIAH 하니스 결과다 — 이번 스위트와 무관한
+별도 측정이라 영향이 없다: 4k~131k **200/200**, 256K **95%**, 384K 0%
+(정본 `study/lc_b_final_eval.md`).
 
 ## 4. docker 부재 — 실측과 경로
 
