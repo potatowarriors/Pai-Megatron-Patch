@@ -46,7 +46,7 @@
 | [MUON_OFFLOAD_BACKPORT.md](MUON_OFFLOAD_BACKPORT.md) | 2026-08-22 | PR #6244 chunked offload 백포트 S0~S5, 128K@CP8 GO |
 | [SFT_RL_DATASETS.md](SFT_RL_DATASETS.md) | 2026-08 | SFT·RL 데이터 자산 49종, Ultra 파이프라인 설계, 예산·epoch 근거 |
 | [INTERLEAVED_THINKING.md](INTERLEAVED_THINKING.md) | 2026-08-24 | think-히스토리 규약 정비 (DSV4 분기·IF fan-out·keepthink) + 새 SFT 셋 규칙 8건 (8 = effort 렌더 플래그) |
-| [SFT_BENCHMARKS.md](SFT_BENCHMARKS.md) | 2026-08-29~ | SFT 벤치 스위트 설계 — DSV4 26종 판정, 티어·주기, sub1 vLLM 인프라, judge=gemini-3.7-flash |
+| [SFT_BENCHMARKS.md](SFT_BENCHMARKS.md) | 2026-08-29~ | **SFT 벤치 스위트 정본** — 운영 절차(§2.5)·구성요소(§2.6)·프론티어 규약(§3.4)·태스크 정의(§3.6·§3.9)·측정 결과(§3.8)·게이트 G1~G3·A1~A4(§7) |
 | [EVAL_DOCKER_NODE.md](EVAL_DOCKER_NODE.md) | 2026-08-29 | 에이전틱 벤치(SWE·Terminal) 실행용 외부 docker 호스트 gpu06 DinD — 접속·복구·재구축 runbook |
 
 ## study/ (실측·규명·스터디)

@@ -71,11 +71,6 @@ configs/data/      stage1_v5_blend, stage2_v5_blend_packed{,_p2,_p2b,_p3} ★,
                    sft_40b_blend ★, sft_128k_blend ★, sft_smoke_64k, mock
 ```
 
-핵심 모델 키(`baseline_48L.yaml`): `num-layers 48`, `hybrid-override-pattern`, `hidden-size 2048`, `ffn-hidden-size 8192`,
-`num-attention-heads 16`, `kv-channels 256`, `num-query-groups 2`, `num-experts 192`, `moe-router-topk 8`, `moe-ffn-hidden-size 512`,
-`moe-router-num-groups 8`, `moe-router-group-topk 4`, `moe-router-topk-scaling-factor 2.5`, `moe-aux-loss-coeff 1e-4`,
-`qk-layernorm true`, `padded-vocab-size 163968`, `seq-length 4096`, `max-position-embeddings 262144`.
-
 **Tokenizer** `tokenizer_v5/`: HF `PreTrainedTokenizerFast`, 5 파일. EOS/EOD id 0, PAD id 1, BOS 없음. chat template = Nemotron 3 Ultra 기반 + DSV4식 tool-시나리오 분기(2026-08-24). `tokenizer_config.json`·`special_tokens_map.json`·`training_config.yaml` **3파일 동기화 필수**.
 
 **Resume·전환 규칙** (training preset YAML 안에 평면적으로 — 셸이 끼워넣지 않음):
@@ -148,12 +143,31 @@ TP=1 전용. **chunked optimizer-state offload 지원**: `--chunked-optimizer-st
 (128K@CP8 −21GB; 32K@CP4에는 불필요). QGKV 4-way split은 자동 — 시작 로그 `Muon QKV matcher: 3-way=0, 4-way=N` 확인.
 기존 ckpt에 적용하면 optimizer 역학이 바뀌므로 stage 경계에서.
 
+## 비-upstream 학습 기능 (Megatron-LM-251125)
+
+전문·CLI·구현 위치·테스트 명령: [`../../docs/CUSTOM_TRAINING_FEATURES.md`](../../docs/CUSTOM_TRAINING_FEATURES.md).
+
+| # | 기능 | CLI / 트리거 | 위치 |
+|---|---|---|---|
+| 1 | Step-wise GBS 스케줄 (토큰 임계마다 GBS 계단) | `--step-batch-size-schedule "0:768 250B:1536 …"` (`--rampup-batch-size`와 배타, `--train-samples` 전용) | submodule `num_microbatches_calculator.py`, `arguments.py`, `training.py` |
+| 2 | Progressive auxiliary blend (aux 데이터셋 선형 램프) | `--progressive-blend-config blend.yaml` (`--data-path`류와 배타) | `megatron_patch/data/progressive_mix_dataset.py` |
+| 3 | Muon QGKV 4-way split (Gated Attention `linear_qgkv`) | 자동 (`dist_muon`, `--muon-no-split-qkv` 아님). 시작 로그 `Muon QKV matcher` 확인 | submodule `optimizer/muon.py` |
+| 4 | Muon chunked optimizer-state CPU offload (PR #6244 백포트) | `--chunked-optimizer-state-offload --optimizer-state-offload-chunk-size-mb 256` (torch_dist·동기 save 필수) | submodule `optimizer/cpu_offloading/`, `layer_wise_optimizer.py` |
+| 5 | THD+CP 잠복버그 3건 (utils NameError·None 가드, mamba_model THD rope 미배선) | 자동 | submodule `core/utils.py`, `models/mamba/mamba_model.py` |
+| + | DiLoCo 2노드 (IB 없는 클러스터) | `examples/alpha/launch_diloco.sh` | `examples/alpha/diloco_patch.py` (submodule 아님) |
+
+테스트 전체 목록은 위 문서 § Tests. 대표: `tests/test_progressive_mix_dataset.py`, `tests/test_diloco_shard_view.py`,
+submodule `tests/unit_tests/test_step_batch_size_schedule.py`, `test_muon_optimizer.py`, `test_chunked_offload_s*.py`, `tests/test_gdn_*.py`.
+
 ## 함정 표 — Known Issues 한 줄 요약
 
 서사·재현·회귀 테스트는 [`docs/KNOWN_ISSUES.md`](docs/KNOWN_ISSUES.md) (같은 제목). 새 사고는 거기에 쓰고 여기엔 한 줄.
 
 | 날짜 | 증상 | 원인 → 대응 |
 |---|---|---|
+| 08-30 | 에이전틱 SWE/Terminal 0점 — 모델 아님 | ① litellm 미등록 모델 비용계산 RuntimeError ② **tool-call 파서 불일치**(hermes=JSON vs 우리 모델=XML `<function=…>`) ③ preds.json↔.jsonl 경로. → `TOOL_PARSER=qwen3_xml`, 레지스트리 등록, 게이트 A4(파서가 실제로 파싱하는지) |
+| 08-30 | 벤치 태스크가 base 모델용 (GPQA strict 원리적 0점, MMLU-Pro 5-shot, avg@16이 실질 avg@1) | 내장 lm_eval 태스크를 채팅·추론 모델에 그대로 사용. → `tasks/*_aa.yaml` 재작성(0-shot·8단 폴백·take_first_k·사고 분리) |
+| 08-30 | RULER 6~25% (자체 NIAH는 200/200) | 추론 켠 채 128토큰 예산 → 서두에서 소진. → Reasoning-Off(`enable_thinking:false`), 실측 512토큰 소진→21토큰 stop |
 | 08-30 | SFT ckpt 벤치 전 항목 무효 (MMLU 추출실패 34%, AIME 0/30, SWE 0/20) | HF 변환기가 `generation_config.json` 미생성 → eos가 `<\|endoftext\|>`(0)뿐이라 `<\|im_end\|>`(3)에서 안 멈춤 + `</think>` special=True라 출력에서 삭제. **변환 후 eos 정합·서빙 1건 스모크(finish=stop) 게이트 통과 전 수치 기록 금지** |
 | 08-23 | THD+CP `cu_seqlens must be divisible by 2*cp_size` 정지 (LC-A iter170) | 합성 원문의 리터럴 `<\|endoftext\|>`가 문서 중간 id 0 → 문서 분열. 런타임 `snap_cu_seqlens_to_grid`(CP>1 전용) + 투입 전 `scan_internal_eod.py` |
 | 08-22 | THD+CP≥2 첫 스텝 MoE `Split sizes doesn't match` | mamba_model rope에 packed_seq_params 미전달 → q/k NaN → CUDA topk 중복 인덱스. gpt_model 미러. **MoE 라우팅 크래시는 hidden NaN부터**; mock 데이터로 THD+CP 검증 불가 |
