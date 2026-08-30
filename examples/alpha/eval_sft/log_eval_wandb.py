@@ -11,30 +11,46 @@ from __future__ import annotations
 import argparse, json, re, os, hashlib
 from pathlib import Path
 
-# 대표 지표 (집계기와 동일 정의) → wandb 키
-METRIC = {
-    "mmlu_pro": ("exact_match,custom-extract", "mmlu_pro"),
-    "gpqa_diamond_generative_n_shot": ("exact_match,flexible-extract", "gpqa_diamond"),
-    "aime25": ("exact_match,none", "aime25"),
-    "hmmt_feb_2025": ("exact_match,none", "hmmt_feb_2025"),
-    "ifeval": ("inst_level_loose_acc,none", "ifeval_inst_loose"),
-    "simpleqa_verified": ("accuracy,none", "simpleqa_verified"),
-    "logickor": ("score,none", "logickor"),
-}
+import sys
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from bench_registry import HEADLINE, DIAGNOSTIC, get, invalid_reasons  # noqa: E402
 
 def parse_tag(tag: str):
     m = re.search(r"_iter(\d+)$", tag)
     return (tag[:m.start()] if m else tag, int(m.group(1)) if m else 0)
 
-def collect(tagdir: Path) -> dict:
-    out = {}
+def collect(tagdir: Path) -> tuple[dict, list[str]]:
+    """(로깅할 지표, 무효 판정된 태스크 목록).
+
+    **무효 셀은 올리지 않는다.** 측정이 성립하지 않은 값을 wandb 곡선에 넣으면
+    나중에 되돌릴 수 없는 잘못된 이력이 된다 (2026-08-30 사고 교훈 — 무효 수치가
+    클라우드에 올라가 자격증명 부재로 삭제하지 못했다).
+    진단 지표(no_answer 등)는 `diag/` 네임스페이스로 함께 올려 원인을 남긴다.
+    """
+    out, invalid = {}, []
     for jf in sorted(tagdir.rglob("results_*.json"), key=lambda p: p.stat().st_mtime):
-        try: res = json.loads(jf.read_text()).get("results", {})
-        except Exception: continue
-        for task, (metric_key, wkey) in METRIC.items():
-            if task in res and metric_key in res[task]:
-                out[f"bench/{wkey}"] = res[task][metric_key]
-    return out
+        try:
+            res = json.loads(jf.read_text()).get("results", {})
+        except Exception:
+            continue
+        for task, tr in res.items():
+            spec = HEADLINE.get(task)
+            if not spec:
+                continue
+            metric, wkey = spec
+            bad = invalid_reasons(tr)
+            if bad:
+                invalid.append(f"{task}: {', '.join(bad)}")
+                continue
+            v = get(tr, metric)
+            if v is not None:
+                out[f"bench/{wkey}"] = v
+            for d in DIAGNOSTIC:
+                dv = get(tr, d)
+                if dv is not None:
+                    out[f"diag/{wkey}_{d}"] = dv
+    return out, invalid
+
 
 def main():
     ap = argparse.ArgumentParser()
@@ -47,10 +63,15 @@ def main():
     if not tagdir.is_dir():
         raise SystemExit(f"[wandb] 결과 디렉토리 없음: {tagdir}")
     run_name, it = parse_tag(a.run_tag)
-    metrics = collect(tagdir)
+    metrics, invalid = collect(tagdir)
+    for msg in invalid:
+        print(f"[wandb] ⛔ 무효 — 업로드 제외: {msg}")
     if not metrics:
         raise SystemExit(f"[wandb] {tagdir} 에 로깅할 지표 없음")
-    metrics_pct = {k: (v * 100.0 if v <= 1.0 else v) for k, v in metrics.items()}
+    # 비율 지표만 100분율. gen_chars/samples_k 같은 절대값은 그대로 둔다.
+    RAW = ("gen_chars", "samples_k")
+    metrics_pct = {k: (v if any(k.endswith(r) for r in RAW) else (v * 100.0 if v <= 1.0 else v))
+                   for k, v in metrics.items()}
     print(f"[wandb] run={run_name} iter={it} project={a.project}")
     for k, v in sorted(metrics_pct.items()): print(f"   {k} = {v:.2f}")
     if a.dry_run:

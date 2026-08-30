@@ -1,81 +1,100 @@
-"""벤치 결과 집계 — results/<run>_iter<N>/ 아래 lm_eval JSON 들을 iter별 추이표로.
+"""벤치 결과 집계 — results/<run>_iter<N>/ 아래 JSON 들을 iter별 추이표(TRACKING.md)로.
 
-각 eval_ckpt 실행이 results/<RUN_TAG>/ 에 lm_eval 결과(results_*.json)를 남긴다.
-이 스크립트가 전부 훑어 (run, iter, task) → metric 표를 TRACKING.md 로 만든다.
-반복 평가에서 학습 곡선을 한 눈에 보기 위한 것.
+태스크↔지표 매핑은 `bench_registry.py` 정본을 쓴다.
+
+**무효 판정을 통과한 결과만 기록한다.** 추출 실패율(`no_answer`)이 높거나 사고 마감률
+(`think_closed`)이 낮으면 측정이 성립하지 않은 것이고, 그런 값을 표에 넣으면 "모델이
+약하다"로 읽히는 측정 실패가 이력에 남는다 — 2026-08-30 사고가 정확히 그랬다.
+무효 셀은 `무효`로 표기하고 점수를 쓰지 않는다.
 """
+
 from __future__ import annotations
-import argparse, json, re
+
+import argparse
+import json
+import re
+import sys
 from pathlib import Path
 
-# 태스크별 대표 메트릭 (표에 뽑을 것)
-METRIC = {
-    "mmlu_pro": "exact_match,custom-extract",
-    "gpqa_diamond_generative_n_shot": "exact_match,flexible-extract",
-    "aime25": "exact_match,none",
-    "hmmt_feb_2025": "exact_match,none",
-    "ifeval": "inst_level_loose_acc,none",
-    "gpqa_diamond": "acc,none",
-    "simpleqa_verified": "accuracy,none",
-    "logickor": "score,none",
-}
-# 표 컬럼 = 상위 태스크만(하위 카테고리 mmlu_pro_* 등 제외). 순서 고정.
-TASK_ORDER = ["mmlu_pro", "gpqa_diamond_generative_n_shot", "aime25", "hmmt_feb_2025", "ifeval", "simpleqa_verified", "logickor"]
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from bench_registry import (  # noqa: E402
+    TASK_ORDER, display_name, headline, invalid_reasons,
+)
 
-def pick_metric(task_res: dict, task: str) -> float | None:
-    pref = METRIC.get(task)
-    if pref and pref in task_res: return task_res[pref]
-    for k, v in task_res.items():
-        if isinstance(v, (int, float)) and k not in ("alias",) and "stderr" not in k:
-            return v
-    return None
 
-def parse_tag(tag: str):
+def parse_tag(tag: str) -> tuple[str, int]:
     m = re.search(r"_iter(\d+)$", tag)
-    return (tag[:m.start()] if m else tag, int(m.group(1)) if m else -1)
+    return (tag[: m.start()] if m else tag, int(m.group(1)) if m else -1)
 
-def main():
+
+def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--results-dir", required=True)
     ap.add_argument("--out", required=True)
     a = ap.parse_args()
-    rows = {}  # (run, iter) -> {task: value}
-    tasks = set()
+
+    rows: dict[tuple[str, int], dict[str, tuple[float | None, list[str]]]] = {}
+    seen: set[str] = set()
+
     for tagdir in sorted(Path(a.results_dir).glob("*")):
-        if not tagdir.is_dir(): continue
+        if not tagdir.is_dir():
+            continue
         jsons = list(tagdir.rglob("results_*.json")) + list(tagdir.rglob("results.json"))
-        if not jsons: continue
+        if not jsons:
+            continue
         run, it = parse_tag(tagdir.name)
         cell = rows.setdefault((run, it), {})
-        keep = set(TASK_ORDER) | set(METRIC)
-        # 같은 디렉토리의 모든 결과 JSON을 mtime 오름차순 병합 → 나중 실행이 같은 태스크를 덮어씀
+        # mtime 오름차순 병합 — 나중 실행이 같은 태스크를 덮어쓴다
         for jf in sorted(jsons, key=lambda p: p.stat().st_mtime):
             try:
                 res = json.loads(jf.read_text()).get("results", {})
-            except Exception:
+            except Exception:  # noqa: BLE001
                 continue
             for task, tr in res.items():
-                if task not in keep:
-                    continue
-                v = pick_metric(tr, task)
-                if v is not None:
-                    cell[task] = v; tasks.add(task)
-    ordered = [t for t in TASK_ORDER if t in tasks]
-    extra = sorted(t for t in tasks if t not in TASK_ORDER and t in METRIC)
-    tasks = ordered + extra
-    lines = ["# 벤치 추이 (eval_ckpt 집계)\n",
-             "각 SFT 체크포인트별 점수. `eval_ckpt.sh`/`eval_watch.sh` 가 갱신. 100분율.\n",
-             "| run | iter | " + " | ".join(tasks) + " |",
-             "|---|---|" + "|".join("---" for _ in tasks) + "|"]
-    for (run, it) in sorted(rows, key=lambda x: (x[0], x[1])):
+                if task not in TASK_ORDER:
+                    continue  # 하위 카테고리(mmlu_pro_biology 등) 제외
+                cell[task] = (headline(task, tr), invalid_reasons(tr))
+                seen.add(task)
+
+    tasks = [t for t in TASK_ORDER if t in seen]
+    if not tasks:
+        Path(a.out).write_text(
+            "# 벤치 추이 (eval_ckpt 집계)\n\n**유효 수치 없음.**\n"
+            "게이트(`check_gates.py`)와 판정(`summarize.py`)을 통과한 결과만 여기 들어온다.\n"
+        )
+        print("[aggregate] 기록할 태스크 없음")
+        return 0
+
+    hdr = [display_name(t) for t in tasks]
+    lines = [
+        "# 벤치 추이 (eval_ckpt 집계)\n",
+        "각 체크포인트별 대표 점수(100분율). 매핑 정본은 `bench_registry.py`.\n",
+        "`무효` = 추출 실패율/사고 마감률이 임계를 벗어나 측정이 성립하지 않은 셀 "
+        "(판정: `summarize.py`).\n",
+        "| run | iter | " + " | ".join(hdr) + " |",
+        "|---|---|" + "|".join("---" for _ in hdr) + "|",
+    ]
+    for run, it in sorted(rows, key=lambda x: (x[0], x[1])):
         cell = rows[(run, it)]
         vals = []
         for t in tasks:
-            v = cell.get(t)
-            vals.append(f"{v*100:.1f}" if isinstance(v, float) else "—")
+            got = cell.get(t)
+            if got is None:
+                vals.append("—")
+                continue
+            score, bad = got
+            if bad:
+                vals.append("무효")
+            elif isinstance(score, float):
+                vals.append(f"{score * 100:.1f}")
+            else:
+                vals.append("—")
         lines.append(f"| {run} | {it} | " + " | ".join(vals) + " |")
+
     Path(a.out).write_text("\n".join(lines) + "\n")
-    print(f"[aggregate] {len(rows)} 체크포인트 → {a.out}")
+    print(f"[aggregate] {len(rows)} 체크포인트 × {len(tasks)} 태스크 → {a.out}")
+    return 0
+
 
 if __name__ == "__main__":
-    main()
+    raise SystemExit(main())

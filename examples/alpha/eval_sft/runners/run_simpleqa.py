@@ -12,6 +12,7 @@ import argparse, json, re, sys, time, urllib.request, concurrent.futures as cf
 from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from gemini_judge import load_key, judge_batch  # noqa: E402
+from gen_common import chat, split_think  # noqa: E402
 
 GRADER_TEMPLATE = """Your job is to look at a question, a gold target, and a predicted answer, and then assign a grade of either ["CORRECT", "INCORRECT", "NOT_ATTEMPTED"].
 
@@ -27,20 +28,9 @@ C: NOT_ATTEMPTED — the answer neither confirms nor contradicts the gold target
 Reply with a SINGLE letter: A, B, or C. Nothing else."""
 
 def gen_one(base_url, question, max_tokens, timeout):
-    body=json.dumps({"model":"alpha","messages":[{"role":"user","content":question}],
-                     "temperature":0.6,"top_p":0.95,"max_tokens":max_tokens}).encode()
-    req=urllib.request.Request(base_url+"/chat/completions", data=body, headers={"Content-Type":"application/json"})
-    for a in range(3):
-        try:
-            with urllib.request.urlopen(req, timeout=timeout) as r:
-                d=json.loads(r.read())
-            return d["choices"][0]["message"].get("content") or ""
-        except Exception: time.sleep(2**a)
-    return ""
+    """생성 파라미터는 `gen_common` 정본 (temp 1.0 / top_p 0.95 / skip_special_tokens false)."""
+    return chat(base_url, [{"role": "user", "content": question}], max_tokens, timeout)
 
-def strip_think(t):  # thinking 태그 제거 → 최종 답만 judge 에 전달
-    if "</think>" in t: t=t.split("</think>")[-1]
-    return t.strip()
 
 def main():
     ap=argparse.ArgumentParser()
@@ -66,8 +56,11 @@ def main():
 
     # 2) judge 채점 (병렬)
     print("[simpleqa] judging…", flush=True)
-    prompts=[GRADER_TEMPLATE.format(question=r["problem"], target=r["answer"], predicted=strip_think(p))
-             for r,p in zip(rows,preds)]
+    parts=[split_think(p) for p in preds]
+    answers=[x[0] for x in parts]
+    think_closed=sum(1.0 for x in parts if x[1])/len(parts) if parts else 0.0
+    prompts=[GRADER_TEMPLATE.format(question=r["problem"], target=r["answer"], predicted=ans)
+             for r,ans in zip(rows,answers)]
     grades=judge_batch(prompts, load_key(), workers=16, max_tokens=8)
     def cls(g):
         g=(g or "").strip().upper()
@@ -80,19 +73,24 @@ def main():
              "accuracy":nc/n if n else 0.0,
              "attempted_rate":attempted/n if n else 0.0,
              "correct_given_attempted":nc/attempted if attempted else 0.0,
-             "f1": (2*(nc/n)*(nc/attempted)/((nc/n)+(nc/attempted))) if (n and attempted and nc) else 0.0}
+             "f1": (2*(nc/n)*(nc/attempted)/((nc/n)+(nc/attempted))) if (n and attempted and nc) else 0.0,
+             "think_closed": think_closed,
+             "gen_chars": sum(len(x) for x in answers)/n if n else 0.0}
 
     outd=Path(a.out_dir)/a.run_name; outd.mkdir(parents=True, exist_ok=True)
     # lm_eval 호환 형태로도 저장 (집계기가 읽도록 results.json 안에 results.simpleqa_verified)
     (outd/"results_simpleqa.json").write_text(json.dumps(
         {"results":{"simpleqa_verified":{"accuracy,none":metrics["accuracy"],
                      "correct_given_attempted,none":metrics["correct_given_attempted"],
-                     "f1,none":metrics["f1"]}}, "simpleqa_detail":metrics}, indent=2))
+                     "f1,none":metrics["f1"],
+                     "think_closed,none":metrics["think_closed"],
+                     "gen_chars,none":metrics["gen_chars"]}}, "simpleqa_detail":metrics}, indent=2))
     (outd/"simpleqa_samples.jsonl").write_text("\n".join(
-        json.dumps({"q":r["problem"],"target":r["answer"],"pred":strip_think(p)[:500],"grade":l}, ensure_ascii=False)
-        for r,p,l in zip(rows,preds,labels)))
+        json.dumps({"q":r["problem"],"target":r["answer"],"pred":ans[:500],"grade":l}, ensure_ascii=False)
+        for r,ans,l in zip(rows,answers,labels)))
     print(f"[simpleqa] accuracy={metrics['accuracy']*100:.1f}  attempted={metrics['attempted_rate']*100:.1f}  "
-          f"correct|attempted={metrics['correct_given_attempted']*100:.1f}  F1={metrics['f1']*100:.1f}", flush=True)
+          f"correct|attempted={metrics['correct_given_attempted']*100:.1f}  F1={metrics['f1']*100:.1f}  "
+          f"think_closed={metrics['think_closed']*100:.1f}%", flush=True)
     print(f"[simpleqa] → {outd}", flush=True)
 
 if __name__=="__main__": main()

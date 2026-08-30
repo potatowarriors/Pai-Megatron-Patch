@@ -18,29 +18,11 @@ import argparse
 import json
 from pathlib import Path
 
-# 무효 판정 임계. 프론티어는 부분 표본·고실패 결과를 발표하지 않는다
-# (NVIDIA 재현 문서: "Never report sub-sampled / limited runs").
-NO_ANSWER_MAX = 0.10   # 추출 실패 10% 초과 → 하니스/서빙 결함 의심
-THINK_CLOSED_MIN = 0.50  # 사고 마감 50% 미만 → 예산 부족 또는 종료 결함
-
-# 태스크별 대표 점수 (표 첫 열)
-HEADLINE = {
-    "mmlu_pro_aa": "exact_match",
-    "gpqa_diamond_aa": "exact_match",
-    "aime25_aa": "exact_match",
-    "hmmt_feb_2025_aa": "exact_match",
-    "ifeval_aa": "inst_level_loose_acc",
-}
-
-
-def _get(res: dict, name: str) -> float | None:
-    """`metric,filter` 형태 키에서 metric 이름으로 값을 찾는다."""
-    for k, v in res.items():
-        if not isinstance(v, (int, float)) or "stderr" in k:
-            continue
-        if k == name or k.split(",")[0] == name:
-            return float(v)
-    return None
+import sys
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from bench_registry import (  # noqa: E402
+    NO_ANSWER_MAX, THINK_CLOSED_MIN, display_name, get as _get, headline, invalid_reasons,
+)
 
 
 def load(result_dir: Path) -> dict[str, dict]:
@@ -72,31 +54,20 @@ def main() -> int:
     invalid = []
     for task in sorted(results):
         tr = results[task]
-        head = HEADLINE.get(task)
-        score = _get(tr, head) if head else None
-        if score is None:  # 미지 태스크 — 첫 숫자 메트릭
-            score = next(
-                (v for k, v in tr.items()
-                 if isinstance(v, (int, float)) and "stderr" not in k and k != "alias"),
-                None,
-            )
+        score = headline(task, tr)
         na = _get(tr, "no_answer")
         tc = _get(tr, "think_closed")
         k = _get(tr, "samples_k")
         n = tr.get("sample_len")
 
-        flags = []
-        if na is not None and na > NO_ANSWER_MAX:
-            flags.append(f"추출실패 {na * 100:.0f}%>{NO_ANSWER_MAX * 100:.0f}%")
-        if tc is not None and tc < THINK_CLOSED_MIN:
-            flags.append(f"사고마감 {tc * 100:.0f}%<{THINK_CLOSED_MIN * 100:.0f}%")
+        flags = invalid_reasons(tr)
         if flags:
             invalid.append((task, flags))
 
         rows.append({
-            "task": task,
+            "task": display_name(task),
             "score": f"{score * 100:.1f}" if isinstance(score, float) else "—",
-            "metric": head or "?",
+
             "n": str(n) if n is not None else "—",
             "k": f"{k:.0f}" if k else "—",
             "no_answer": f"{na * 100:.1f}%" if na is not None else "—",
@@ -105,7 +76,7 @@ def main() -> int:
             "verdict": "무효" if flags else "유효",
         })
 
-    cols = ["task", "score", "metric", "n", "k", "no_answer", "think_closed", "gen_chars", "verdict"]
+    cols = ["task", "score", "n", "k", "no_answer", "think_closed", "gen_chars", "verdict"]
     width = {c: max(len(c), *(len(r[c]) for r in rows)) for c in cols}
     print("  ".join(c.ljust(width[c]) for c in cols))
     print("  ".join("-" * width[c] for c in cols))
