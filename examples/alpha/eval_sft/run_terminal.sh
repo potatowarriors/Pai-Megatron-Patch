@@ -7,20 +7,21 @@ RUN_NAME="${1:?run name}"; N="${2:-10}"; W="${3:-4}"
 HERE="$(cd "$(dirname "$0")" && pwd)"; SSHC="/home/work/vidsearch/.ssh-keys/config"
 OUT="$HERE/results/$RUN_NAME"; mkdir -p "$OUT"
 # 터널 확인
-ssh "$SSHC" -o BatchMode=yes alpha-eval "curl -s -o /dev/null -w '%{http_code}' --max-time 6 http://localhost:8199/v1/models" 2>/dev/null | grep -q 200 \
+ssh -F "$SSHC" -o BatchMode=yes alpha-eval "curl -s -o /dev/null -w '%{http_code}' --max-time 6 http://localhost:8199/v1/models" 2>/dev/null | grep -q 200 \
   || { echo "[term] 터널 기동"; bash /home/work/vidsearch/tools/start_swe_tunnel.sh; sleep 8; }
 RID="term_${RUN_NAME}"
 echo "[term] tb run (terminus, N=$N tasks, W=$W)"
-ssh "$SSHC" -o BatchMode=yes alpha-eval "
+ssh -F "$SSHC" -o BatchMode=yes alpha-eval "rm -rf /opt/terminalbench/runs/$RID" 2>/dev/null || true
+ssh -F "$SSHC" -o BatchMode=yes alpha-eval "
   export OPENAI_API_KEY=dummy OPENAI_API_BASE=http://localhost:8199/v1
   cd /opt/terminalbench
   ./venv/bin/tb run --agent terminus --model openai/alpha \
     -k api_base=http://localhost:8199/v1 \
-    --dataset terminal-bench-core --n-tasks $N --n-concurrent $W \
+    --dataset terminal-bench-core==0.1.1 --n-tasks $N --n-concurrent $W \
     --run-id $RID --output-path /opt/terminalbench/runs 2>&1 | tail -12
 "
 # 결과 회수 (accuracy)
-ssh "$SSHC" -o BatchMode=yes alpha-eval "cat /opt/terminalbench/runs/$RID/results.json 2>/dev/null || find /opt/terminalbench/runs/$RID -name 'results.json' -exec cat {} \; 2>/dev/null" > "$OUT/terminal_raw.json" 2>/dev/null || true
+ssh -F "$SSHC" -o BatchMode=yes alpha-eval "cat /opt/terminalbench/runs/$RID/results.json 2>/dev/null || find /opt/terminalbench/runs/$RID -name 'results.json' -exec cat {} \; 2>/dev/null" > "$OUT/terminal_raw.json" 2>/dev/null || true
 python3 - "$OUT" "$N" <<'PY'
 import json, sys, os
 outd, n = sys.argv[1], int(sys.argv[2])

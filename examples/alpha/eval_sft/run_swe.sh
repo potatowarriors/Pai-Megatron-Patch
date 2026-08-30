@@ -11,12 +11,12 @@ OUT="$HERE/results/$RUN_NAME"; mkdir -p "$OUT"
 HFTOK=$(grep -E '^HF_TOKEN=' "$HERE/../.env" 2>/dev/null | cut -d= -f2)
 
 # 터널 살아있는지 확인, 없으면 기동
-ssh "$SSHC" -o BatchMode=yes alpha-eval "curl -s -o /dev/null -w '%{http_code}' --max-time 6 http://localhost:8199/v1/models" 2>/dev/null | grep -q 200 \
+ssh -F "$SSHC" -o BatchMode=yes alpha-eval "curl -s -o /dev/null -w '%{http_code}' --max-time 6 http://localhost:8199/v1/models" 2>/dev/null | grep -q 200 \
   || { echo "[swe] 터널 없음 → 기동"; bash /home/work/vidsearch/tools/start_swe_tunnel.sh; sleep 8; }
 
 echo "[swe] 예측 생성 (mini-swe-agent, N=$N insts, W=$W workers)"
 # 컨테이너에서 배치 예측 생성 → preds.jsonl
-ssh "$SSHC" -o BatchMode=yes alpha-eval "
+ssh -F "$SSHC" -o BatchMode=yes alpha-eval "
   export HF_TOKEN=$HFTOK OPENAI_API_KEY=dummy OPENAI_API_BASE=http://localhost:8199/v1
   cd /opt/swebench
   ./venv/bin/mini-extra swebench --subset SWE-bench/SWE-bench_Verified --split test \
@@ -27,13 +27,13 @@ ssh "$SSHC" -o BatchMode=yes alpha-eval "
     -o /opt/swebench/preds_${RUN_NAME} 2>&1 | tail -5
 "
 echo "[swe] 채점 (swebench eval)"
-ssh "$SSHC" -o BatchMode=yes alpha-eval "
+ssh -F "$SSHC" -o BatchMode=yes alpha-eval "
   export HF_TOKEN=$HFTOK; cd /opt/swebench
   PREDS=\$(ls -t preds_${RUN_NAME}/preds.jsonl preds_${RUN_NAME}*.jsonl 2>/dev/null | head -1)
   ./venv/bin/swebench eval SWE-bench/SWE-bench_Verified -p \"\$PREDS\" --run-id $RID -j $W 2>&1 | tail -8
 "
 # 리포트 회수 → 결과 JSON (집계기 호환)
-ssh "$SSHC" -o BatchMode=yes alpha-eval "cat /opt/swebench/*$RID*.json 2>/dev/null || cat /opt/swebench/logs/run_evaluation/$RID/*/report.json 2>/dev/null" > "$OUT/swe_report_raw.json" 2>/dev/null || true
+ssh -F "$SSHC" -o BatchMode=yes alpha-eval "cat /opt/swebench/*$RID*.json 2>/dev/null || cat /opt/swebench/logs/run_evaluation/$RID/*/report.json 2>/dev/null" > "$OUT/swe_report_raw.json" 2>/dev/null || true
 python3 - "$OUT" "$N" <<'PY'
 import json, sys, glob, os
 outd, n = sys.argv[1], int(sys.argv[2])
