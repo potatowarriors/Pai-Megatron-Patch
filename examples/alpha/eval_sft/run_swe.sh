@@ -24,6 +24,7 @@ ssh -F "$SSHC" -o BatchMode=yes alpha-eval "
     -m openai/alpha -c swebench.yaml \
     -c model.model_kwargs.api_base=http://localhost:8199/v1 \
     -c model.model_kwargs.temperature=0.0 \
+    -c model.model_kwargs.max_tokens=8192 \
     -o /opt/swebench/preds_${RUN_NAME} 2>&1 | tail -5
 "
 echo "[swe] 채점 (swebench eval)"

@@ -28,7 +28,7 @@ Reply with a SINGLE letter: A, B, or C. Nothing else."""
 
 def gen_one(base_url, question, max_tokens, timeout):
     body=json.dumps({"model":"alpha","messages":[{"role":"user","content":question}],
-                     "temperature":0.0,"max_tokens":max_tokens}).encode()
+                     "temperature":0.6,"top_p":0.95,"max_tokens":max_tokens}).encode()
     req=urllib.request.Request(base_url+"/chat/completions", data=body, headers={"Content-Type":"application/json"})
     for a in range(3):
         try:
@@ -46,7 +46,7 @@ def main():
     ap=argparse.ArgumentParser()
     ap.add_argument("--base-url", required=True); ap.add_argument("--run-name", required=True)
     ap.add_argument("--limit", type=int, default=0); ap.add_argument("--workers", type=int, default=48)
-    ap.add_argument("--max-tokens", type=int, default=8192); ap.add_argument("--timeout", type=int, default=900)
+    ap.add_argument("--max-tokens", type=int, default=32768); ap.add_argument("--timeout", type=int, default=900)
     ap.add_argument("--out-dir", default=str(Path(__file__).resolve().parents[1]/"results"))
     a=ap.parse_args()
     import os; os.environ.setdefault("HF_HOME","/home/work/Datasets/benchmarks")

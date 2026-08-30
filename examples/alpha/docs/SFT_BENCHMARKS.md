@@ -67,6 +67,26 @@ main1 SFT save → sub1 감시 → ① run_convert.sh(EP=8, ~30–40분)
 - 러너·오케스트레이터 코드: `examples/alpha/eval_sft/` (이 리포).
 - 베이스라인: 전 스위트를 **LC-B iter320 hfmodel**로 먼저 완주(하니스 검증 겸 기준점).
 
+## 3.4 생성 세팅 — R1 표준 (프론티어 동일 비교, 2026-08-30)
+
+alpha 는 `<think>` 강제 시작 = DeepSeek-R1/Qwen3 계열 **reasoning 모델**. 벤치는 그 공식
+관례를 따라야 프론티어(DSV4·Nemotron·R1)와 동일 조건 비교가 된다 (Nemotron eval 원칙:
+"모든 모델 동일 세팅, 생성 파라미터는 각 모델카드에서"). 사용자 확정 2026-08-30.
+
+| 벤치 | temp | top_p | max_tokens | 샘플 | 근거 |
+|---|---|---|---|---|---|
+| MMLU-Pro, GPQA-D | **0.6** | 0.95 | 32768 | 1, CoT | R1 카드 |
+| AIME25, HMMT25 | **0.6** | 0.95 | 32768 | **avg@16** | R1(64)→실무 16 |
+| IFEval | 0.0 | — | 2048 | 1, greedy | 지시이행 관례 |
+| SimpleQA, LogicKor | 0.6 | 0.95 | 32768 | 1 | R1 |
+| RULER/NIAH | 0.0 | — | 128 | greedy | needle 추출 |
+| SWE, Terminal | **0.0** | 1.0 | per-call 8192 상한 | step_limit 250 | mini-swe/터미널 기본 |
+
+- **서빙 컨텍스트는 벤치 요구만큼만**: 표준 fleet **32768**(T1·T3·SWE·Terminal), 롱 fleet
+  262144(T2 RULER 전용). 262K 로 에이전틱을 돌리면 단일 생성이 느려 step 진행 불가(2026-08-30 SWE 정체 원인).
+- R1 공식: temp 0.6/top_p 0.95/max 32768/system prompt 없음/`<think>\n` 강제/AIME 64샘플. alpha 동일 구조.
+- max_tokens 32768 초과분은 잘려 실패 처리(R1도 동일) — 공정 규칙.
+
 ## 3.5 sub1 서빙 환경 — vllm 0.25.1 + CUDA 13 compat (2026-08-29)
 
 서빙 venv: `/home/work/vidsearch/tools/alpha_serve_venv` (NFS, 재부팅 유지). vllm==0.25.1

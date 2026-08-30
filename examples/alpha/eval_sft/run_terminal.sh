@@ -16,7 +16,7 @@ ssh -F "$SSHC" -o BatchMode=yes alpha-eval "
   export OPENAI_API_KEY=dummy OPENAI_API_BASE=http://localhost:8199/v1
   cd /opt/terminalbench
   ./venv/bin/tb run --agent terminus --model openai/alpha \
-    -k api_base=http://localhost:8199/v1 \
+    -k api_base=http://localhost:8199/v1 -k temperature=0.0 -k max_tokens=8192 \
     --dataset terminal-bench-core==0.1.1 --n-tasks $N --n-concurrent $W \
     --run-id $RID --output-path /opt/terminalbench/runs 2>&1 | tail -12
 "

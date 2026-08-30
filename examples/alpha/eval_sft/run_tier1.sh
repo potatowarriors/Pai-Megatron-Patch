@@ -1,36 +1,31 @@
 #!/bin/bash
-# run_tier1.sh — T1 코어 벤치 (chat/thinking 모드, vLLM OpenAI 엔드포인트 경유)
-# 사용: bash eval_sft/run_tier1.sh <BASE_URL> <RUN_NAME> [TASKS] [LIMIT]
-#   BASE_URL 예: http://localhost:8000/v1  (served-model-name=alpha)
-#   TASKS 기본: mmlu_pro,gpqa_diamond_generative_n_shot,ifeval,aime25,hmmt_feb_2025
-#   LIMIT: 태스크당 샘플 상한(스모크용). 비우면 전량.
+# run_tier1.sh — T1 코어 (R1 표준 세팅). thinking 모델 → temp 0.6/top_p 0.95/max 32K.
+#   IFEval 만 greedy(temp 0). 수학(AIME/HMMT)은 avg@16(별도 태스크에 내장).
+# 사용: bash eval_sft/run_tier1.sh <BASE_URL> <RUN_NAME> [LIMIT]
 set -euo pipefail
-BASE_URL="${1:?base_url required, e.g. http://localhost:8000/v1}"
-RUN_NAME="${2:?run name required}"
-TASKS="${3:-mmlu_pro,gpqa_diamond_generative_n_shot,ifeval,aime25,hmmt_feb_2025}"
-LIMIT="${4:-}"
-HERE="$(cd "$(dirname "$0")" && pwd)"
-LM=/home/work/vidsearch/tools/lmeval0412
-OUT="$HERE/results/$RUN_NAME"
-mkdir -p "$OUT"
-export HF_HOME=/home/work/Datasets/benchmarks
-export HF_DATASETS_CACHE=/home/work/Datasets/benchmarks
-export PYTHONPATH=$LM
-export NUMEXPR_MAX_THREADS=64
-export TOKENIZERS_PARALLELISM=false
-export HF_ALLOW_CODE_EVAL=1
-LIM_ARG=""; [ -n "$LIMIT" ] && LIM_ARG="--limit $LIMIT"
-# 생성 태스크는 thinking 여유로 max_gen_toks 크게 (태스크 yaml 기본 32768).
-# gen_kwargs override 로 서버가 <|im_end|> 에서 멈추도록 stop 명시.
-python3 "$HERE/../scripts/eval_wrapper.py" \
-  --model local-chat-completions \
-  --model_args "base_url=${BASE_URL}/chat/completions,model=alpha,num_concurrent=64,timeout=1800,max_retries=2,tokenized_requests=False,max_length=49152" \
-  --tasks "$TASKS" \
-  --apply_chat_template \
-  --include_path "$HERE/tasks" \
-  --output_path "$OUT" \
-  --log_samples \
-  --seed 1234 \
-  $LIM_ARG \
-  --gen_kwargs "max_gen_toks=24576,temperature=0.0"
+BASE_URL="${1:?base_url}"; RUN_NAME="${2:?run name}"; LIMIT="${3:-}"
+HERE="$(cd "$(dirname "$0")" && pwd)"; LM=/home/work/vidsearch/tools/lmeval0412
+OUT="$HERE/results/$RUN_NAME"; mkdir -p "$OUT"
+export HF_HOME=/home/work/Datasets/benchmarks HF_DATASETS_CACHE=/home/work/Datasets/benchmarks
+export PYTHONPATH=$LM NUMEXPR_MAX_THREADS=64 TOKENIZERS_PARALLELISM=false HF_ALLOW_CODE_EVAL=1
+export HF_TOKEN=$(grep -E '^HF_TOKEN=' "$HERE/../.env" 2>/dev/null | cut -d= -f2)
+LIM=""; [ -n "$LIMIT" ] && LIM="--limit $LIMIT"
+MA="base_url=${BASE_URL}/chat/completions,model=alpha,num_concurrent=64,timeout=2400,max_retries=2,tokenized_requests=False,max_length=32768"
+
+run() { # tasks, gen_kwargs, desc
+  echo "[T1] $3"
+  python3 "$HERE/../scripts/eval_wrapper.py" --model local-chat-completions \
+    --model_args "$MA" --tasks "$1" --apply_chat_template --include_path "$HERE/tasks" \
+    --output_path "$OUT" --log_samples --seed 1234 $LIM --gen_kwargs "$2"
+}
+# 지식·객관식 (R1: temp 0.6, top_p 0.95, max 32K). CoT 필요.
+run "mmlu_pro,gpqa_diamond_generative_n_shot" \
+    "max_gen_toks=32768,temperature=0.6,top_p=0.95,do_sample=true" "지식/추론 (temp 0.6)"
+# IFEval — 지시이행은 greedy 관례
+run "ifeval" "max_gen_toks=2048,temperature=0.0,do_sample=false" "IFEval (greedy)"
+# 수학 avg@16 — 세팅은 태스크 yaml(temp 0.6/top_p 0.95/repeats 16)에 내장. gen_kwargs override 안 함.
+echo "[T1] 수학 avg@16 (AIME25, HMMT25 — temp 0.6, 16 samples)"
+python3 "$HERE/../scripts/eval_wrapper.py" --model local-chat-completions \
+  --model_args "$MA" --tasks "aime25_avg16,hmmt_feb_2025_avg16" --apply_chat_template \
+  --include_path "$HERE/tasks" --output_path "$OUT" --log_samples --seed 1234 $LIM
 echo "== T1 완료: $OUT =="

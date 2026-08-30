@@ -22,7 +22,7 @@ JUDGE_TMPL = """당신은 한국어 언어모델 답변을 평가하는 채점�
 먼저 한 문장으로 평가 근거를 쓰고, 마지막 줄에 반드시 `[[점수]]` 형식으로 정수 점수만 쓰세요. 예: [[7]]"""
 
 def chat(base_url, messages, max_tokens, timeout):
-    body=json.dumps({"model":"alpha","messages":messages,"temperature":0.0,"max_tokens":max_tokens}).encode()
+    body=json.dumps({"model":"alpha","messages":messages,"temperature":0.6,"top_p":0.95,"max_tokens":max_tokens}).encode()
     req=urllib.request.Request(base_url+"/chat/completions", data=body, headers={"Content-Type":"application/json"})
     for a in range(3):
         try:
@@ -56,7 +56,7 @@ def main():
     ap=argparse.ArgumentParser()
     ap.add_argument("--base-url", required=True); ap.add_argument("--run-name", required=True)
     ap.add_argument("--limit", type=int, default=0); ap.add_argument("--workers", type=int, default=24)
-    ap.add_argument("--max-tokens", type=int, default=8192); ap.add_argument("--timeout", type=int, default=900)
+    ap.add_argument("--max-tokens", type=int, default=32768); ap.add_argument("--timeout", type=int, default=900)
     ap.add_argument("--out-dir", default=str(Path(__file__).resolve().parents[1]/"results"))
     a=ap.parse_args()
     import os; os.environ.setdefault("HF_HOME","/home/work/Datasets/benchmarks")
