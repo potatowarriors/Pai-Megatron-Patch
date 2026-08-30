@@ -114,6 +114,17 @@ python3 eval_sft/summarize.py eval_sft/results/<RUN_TAG>            # 유효/무
 python3 eval_sft/aggregate_results.py --results-dir eval_sft/results --out eval_sft/results/TRACKING.md
 ```
 
+### 진행 확인 — 로그를 믿지 말 것
+
+`bash eval_sft/progress.sh <RUN_TAG>`
+
+에이전틱 러너는 ssh 출력을 `tail -N` 으로 파이프한다. `tail` 은 스트림이 끝나야 출력하므로
+**실행 중에는 로그에 아무것도 안 나온다**. 로그 크기가 멈춰 있다고 정체로 판단하면 오판이다
+(2026-08-30: 97바이트에 멈춘 로그를 보고 완료로 착각했으나 실제로는 282/500 진행 중이었다).
+
+진행은 **산출물 개수**로 센다 — 컨테이너의 `preds_<TAG>/<instance>/` 디렉토리 수,
+`runs/<rid>/` 하위 태스크 수, `docker ps` 개수. `progress.sh` 가 이를 한 화면에 모은다.
+
 **불변식 넷**:
 1. 게이트를 통과하기 전에는 어떤 수치도 `TRACKING.md` 에 넣지 않는다.
 2. 생성 파라미터는 **태스크 yaml / `gen_common.py` 가 정본**. 러너가 CLI 로 덮어쓰지 않는다.
