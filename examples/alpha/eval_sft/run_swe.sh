@@ -39,6 +39,10 @@ fi
 echo "[swe] 예측 생성 (mini-swe-agent, W=$W workers, temp 1.0)"
 ssh -F "$SSHC" -o BatchMode=yes alpha-eval "
   export HF_TOKEN=$HFTOK OPENAI_API_KEY=dummy OPENAI_API_BASE=http://localhost:8199/v1
+  # litellm 은 미등록 모델의 비용을 계산하다 RuntimeError 로 죽는다 (2026-08-30 실측:
+  # 3/3 인스턴스가 3초 만에 실패). 로컬 모델은 레지스트리로 등록하는 것이 정식 경로.
+  export LITELLM_MODEL_REGISTRY_PATH=/opt/swebench/alpha_model_registry.json
+  export MSWEA_COST_TRACKING=ignore_errors
   cd /opt/swebench
   ./venv/bin/mini-extra swebench --subset SWE-bench/SWE-bench_Verified --split test \
     $SLICE --workers $W --redo-existing \
@@ -46,13 +50,15 @@ ssh -F "$SSHC" -o BatchMode=yes alpha-eval "
     -c model.model_kwargs.api_base=http://localhost:8199/v1 \
     -c model.model_kwargs.temperature=1.0 \
     -c model.model_kwargs.top_p=0.95 \
-    -c model.model_kwargs.max_tokens=8192 \
+    -c model.model_kwargs.max_tokens=16384 \
     -o /opt/swebench/preds_${RUN_NAME} 2>&1 | tail -8
 "
 echo "[swe] 채점 (swebench eval)"
 ssh -F "$SSHC" -o BatchMode=yes alpha-eval "
   export HF_TOKEN=$HFTOK; cd /opt/swebench
-  PREDS=\$(ls -t preds_${RUN_NAME}/preds.jsonl preds_${RUN_NAME}*.jsonl 2>/dev/null | head -1)
+  # mini-swe-agent 는 preds.json (단수, dict) 을 쓴다 — .jsonl 이 아니다 (2026-08-30 실측).
+  PREDS=\$(ls -t preds_${RUN_NAME}/preds.json preds_${RUN_NAME}/preds.jsonl 2>/dev/null | head -1)
+  [ -z "\$PREDS" ] && { echo "[swe] ❌ 예측 파일 없음 — 채점 생략"; exit 0; }
   ./venv/bin/swebench eval SWE-bench/SWE-bench_Verified -p \"\$PREDS\" --run-id $RID -j $W 2>&1 | tail -10
 "
 ssh -F "$SSHC" -o BatchMode=yes alpha-eval \

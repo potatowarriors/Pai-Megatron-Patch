@@ -7,11 +7,13 @@ T1 의 G1~G3(`check_gates.py`)에 더해, 에이전틱 레인은 전제가 셋 �
 | # | 게이트 | 깨지면 |
 |---|---|---|
 | A1 | 엔드포인트가 `tool_choice=auto` 수용 | mini-swe-agent litellm 요청이 전부 HTTP 400 |
+| A4 | 파서가 모델 형식을 **실제로 파싱** | `tool_calls: null` → 에이전트가 `RepeatedFormatError` 로 즉시 종료 |
 | A2 | 컨테이너→fleet 역터널 생존 | 하니스가 모델에 닿지 못함 |
 | A3 | 디스크 여유 | 태스크 이미지 pull 중 중단 |
 
-A1 은 서빙 시 `TOOLS=1`(=`--enable-auto-tool-choice --tool-call-parser hermes`)로 해결한다.
-T1 용 fleet 는 이 플래그 없이 뜨므로 **에이전틱 전에 fleet 를 재기동**해야 한다.
+A1·A4 는 서빙 시 `TOOLS=1 TOOL_PARSER=qwen3_xml` 로 해결한다. T1 용 fleet 는 이 플래그 없이
+뜨므로 **에이전틱 전에 fleet 를 재기동**해야 한다. 파서는 모델이 배운 형식에 맞춰야 하며
+(alpha 는 XML `<function=…><parameter=…>`), 잘못된 파서는 A1 을 통과하고 A4 에서 걸린다.
 
 사용:
     python3 check_agentic_gates.py --base-url http://localhost:8100/v1 [--min-disk-gb 300]
@@ -65,7 +67,53 @@ def gate_a1(base_url: str) -> tuple[bool, str]:
     if ok:
         return True, "tool_choice=auto 수용"
     return False, (f"{res} — 서빙에 TOOLS=1 이 필요하다: "
-                   f"TOOLS=1 GPUS=... bash eval_sft/serve_fleet.sh <ckpt> 40960 <N> 8100")
+                   f"TOOL_PARSER=qwen3_xml TOOLS=1 GPUS=... bash eval_sft/serve_fleet.sh <ckpt> 106496 <N> 8100")
+
+
+def gate_a4(base_url: str) -> tuple[bool, str]:
+    """파서가 모델 출력을 **실제로 파싱**하는가.
+
+    A1 은 파서가 *등록됐는지*만 본다. 그 파서가 우리 모델이 배운 형식과 *맞는지*는 보지
+    않는다 — 2026-08-30 에 hermes(JSON 본문)로 띄운 채 A1 을 통과했고, 모델이 내는
+    XML(`<function=…><parameter=…>`)이 파싱되지 않아 `tool_calls: null` 이 됐다.
+    에이전트는 "No tool calls found" 를 반복하다 RepeatedFormatError 로 죽는다.
+
+    여기서는 실제로 도구를 쓰게 만들고 `tool_calls` 가 채워지는지 확인한다.
+    """
+    tools = [{
+        "type": "function",
+        "function": {
+            "name": "bash",
+            "description": "Run a bash command.",
+            "parameters": {"type": "object",
+                           "properties": {"command": {"type": "string", "description": "the command"}},
+                           "required": ["command"]},
+        },
+    }]
+    ok, res = _post(base_url, {
+        "model": "alpha",
+        "messages": [{"role": "user",
+                      "content": "List the files in the current directory. Use the bash tool."}],
+        "temperature": 1.0, "top_p": 0.95, "max_tokens": 2048,
+        "seed": None, "skip_special_tokens": False,
+        "tools": tools, "tool_choice": "auto",
+        "chat_template_kwargs": {"enable_thinking": False},
+    }, timeout=600)
+    if not ok:
+        return False, f"요청 실패: {res}"
+
+    ch = res["choices"][0]
+    tc = ch["message"].get("tool_calls")
+    if tc:
+        fn = tc[0].get("function", {})
+        return True, f"tool_calls 파싱 OK — {fn.get('name')}({str(fn.get('arguments'))[:60]})"
+
+    raw = (ch["message"].get("content") or "")[:200]
+    hint = ""
+    if "<function=" in raw or "<parameter=" in raw:
+        hint = ("  ← 모델은 XML 형식을 내고 있다. 파서를 `qwen3_xml` 로 바꿀 것: "
+                "TOOL_PARSER=qwen3_xml TOOLS=1 bash eval_sft/serve_fleet.sh …")
+    return False, f"tool_calls 가 비어 있다. content={raw!r}{hint}"
 
 
 def _ssh(cmd: str, timeout: int = 40) -> tuple[int, str]:
@@ -103,7 +151,7 @@ def gate_a3(min_gb: int) -> tuple[bool, str]:
 
 
 def main() -> int:
-    ap = argparse.ArgumentParser(description="에이전틱 투입 전 게이트 A1~A3")
+    ap = argparse.ArgumentParser(description="에이전틱 투입 전 게이트 A1~A4")
     ap.add_argument("--base-url", required=True)
     ap.add_argument("--min-disk-gb", type=int, default=300)
     a = ap.parse_args()
@@ -124,12 +172,17 @@ def main() -> int:
     print(f"   {msg}\n   → {'PASS' if ok else 'FAIL'}\n")
     results["A3"] = ok
 
+    print("── A4: 파서가 모델 형식을 실제로 파싱 " + "─" * 24)
+    ok, msg = gate_a4(a.base_url)
+    print(f"   {msg}\n   → {'PASS' if ok else 'FAIL'}\n")
+    results["A4"] = ok
+
     bad = [k for k, v in results.items() if not v]
     if bad:
         print(f"❌ 게이트 실패: {', '.join(sorted(bad))} — 에이전틱을 돌리지 말 것. "
               "이 상태의 0점은 모델 실패와 구분되지 않는다.")
         return 1
-    print("✅ 에이전틱 게이트 통과 (A1·A2·A3)")
+    print("✅ 에이전틱 게이트 통과 (A1·A2·A3·A4)")
     return 0
 
 

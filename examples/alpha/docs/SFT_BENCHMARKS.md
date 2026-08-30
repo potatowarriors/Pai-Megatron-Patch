@@ -329,9 +329,12 @@ Terminal 0/10 이 그 상태였다. 실행: `python3 eval_sft/check_agentic_gate
 
 | # | 게이트 | 판정 | 실패 시 |
 |---|---|---|---|
-| A1 | `tool_choice=auto` 수용 | HTTP 200 | fleet 를 **TOOLS=1** 로 재기동 (`--enable-auto-tool-choice --tool-call-parser hermes`). T1 용 fleet 는 이 플래그 없이 뜬다 |
+| A1 | `tool_choice=auto` 수용 | HTTP 200 | fleet 를 **TOOLS=1** 로 재기동. T1 용 fleet 는 이 플래그 없이 뜬다 |
+| A4 | 파서가 모델 형식을 **실제로 파싱** | `tool_calls` 가 채워짐 | **`TOOL_PARSER=qwen3_xml`**. alpha 는 XML `<function=…><parameter=…>` 형식을 배웠다 — hermes(JSON 본문)는 A1 을 통과하고 여기서 걸린다 |
 | A2 | 컨테이너 역터널 | 컨테이너 `:8199` → 200 | `ssh sub1 'bash /home/work/vidsearch/tools/start_swe_tunnel.sh'` |
 | A3 | 컨테이너 디스크 | SWE 300GB / Terminal 150GB 여유 | `docker image prune` |
+
+에이전틱 fleet 는 **`--max-model-len 106496`** 로 띄운다(T1 의 40960 은 좁아 `ContextWindowExceededError` 가 난다). litellm 은 `alpha_model_registry.json` 의 `max_input_tokens` 로 초과를 판정하므로 서빙 창과 함께 올려야 한다. 러너는 `LITELLM_MODEL_REGISTRY_PATH` 를 export 한다 — 미등록 모델은 비용 계산에서 죽는다.
 
 **부분 표본은 무효로 기록한다.** `run_swe.sh`/`run_terminal.sh` 에 N 을 주면 결과 JSON 에
 `subsampled=true` 와 `no_answer=1.0` 이 박혀 집계기가 `무효` 로 표시한다 — NVIDIA 재현

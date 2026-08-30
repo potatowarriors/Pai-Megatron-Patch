@@ -36,9 +36,12 @@ echo "[term] tb run (terminus, W=$W, temp 1.0)"
 ssh -F "$SSHC" -o BatchMode=yes alpha-eval "rm -rf /opt/terminalbench/runs/$RID" 2>/dev/null || true
 ssh -F "$SSHC" -o BatchMode=yes alpha-eval "
   export OPENAI_API_KEY=dummy OPENAI_API_BASE=http://localhost:8199/v1
+  # terminus 도 litellm 을 쓴다 — 미등록 모델 비용 계산 실패 방지 (run_swe.sh 와 동일 사유)
+  export LITELLM_MODEL_REGISTRY_PATH=/opt/terminalbench/alpha_model_registry.json
+  export MSWEA_COST_TRACKING=ignore_errors
   cd /opt/terminalbench
   ./venv/bin/tb run --agent terminus --model openai/alpha \
-    -k api_base=http://localhost:8199/v1 -k temperature=1.0 -k top_p=0.95 -k max_tokens=8192 \
+    -k api_base=http://localhost:8199/v1 -k temperature=1.0 -k top_p=0.95 -k max_tokens=16384 \
     --dataset terminal-bench-core==0.1.1 $NTASKS --n-concurrent $W \
     --run-id $RID --output-path /opt/terminalbench/runs 2>&1 | tail -14
 "

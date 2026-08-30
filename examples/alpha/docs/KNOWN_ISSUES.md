@@ -4,6 +4,50 @@
 CLAUDE.md의 "함정 표"는 이 문서의 한 줄 요약이며, 새 사고는 **여기에 서사를 쓰고 CLAUDE.md 표에는 한 줄만** 추가한다.
 날짜는 절대 표기. 두 스테이지 이상 지난 항목은 스테이지 경계에서 `archive/`로 이동.
 
+## 에이전틱(SWE·Terminal) 0점의 진짜 원인 3중 — 모델이 아니었다 (2026-08-30 ✅)
+
+2026-08-30 SWE 0/20 · Terminal 0/10 은 모델 실패가 아니라 **설정 결함 3건**의 합이었다.
+게이트 A1~A3 를 통과시킨 뒤에도 두 겹이 더 남아 있었다.
+
+- **① litellm 이 미등록 모델의 비용 계산에서 죽는다.** `RuntimeError: Error calculating
+  cost for model openai/alpha: This model isn't mapped yet.` 3/3 인스턴스가 **3초 만에**
+  실패. 로컬 모델은 `LITELLM_MODEL_REGISTRY_PATH` 로 등록하는 것이 정식 경로
+  (mini-swe-agent 로컬 모델 가이드). `MSWEA_COST_TRACKING=ignore_errors` 도 함께.
+  → `/opt/{swebench,terminalbench}/alpha_model_registry.json` 작성, 러너에서 export.
+
+- **② tool-call 파서가 모델이 배운 형식과 달랐다 (핵심).** fleet 를 `--tool-call-parser
+  hermes` 로 띄웠는데 hermes 는 `<tool_call>{"name":…,"arguments":{…}}</tool_call>` 라는
+  **JSON 본문**을 기대한다. 우리 챗 템플릿(Nemotron 3 Ultra + DSV4 분기)이 가르친 형식은
+  XML 이다:
+
+      <tool_call>
+      <function=bash>
+      <parameter=command>
+      ls -la
+      </parameter>
+      </function>
+      </tool_call>
+
+  파서가 파싱에 실패해 `tool_calls: null` 이 되고 원문이 `content` 에 남는다. 에이전트는
+  "No tool calls found in the response" 를 받고 `RepeatedFormatError` 로 종료한다.
+  **모델은 처음부터 정확한 형식을 내고 있었다** — 실측으로 원문을 떠서 확인했다.
+  → vLLM 파서 목록에서 `<function=`/`<parameter=` 를 다루는 것은 `qwen3_xml`(=
+  `qwen3_engine_tool_parser`)과 `step3p5` 둘뿐. `qwen3_xml` 로 교체하니 즉시
+  `finish_reason: tool_calls` + 인자 정상 파싱.
+  → `serve_alpha.sh` 의 파서를 `TOOL_PARSER` 환경변수로 뺐다(기본 `qwen3_xml`).
+
+- **③ 예측 파일 경로가 틀렸다.** mini-swe-agent 는 `preds.json`(단수, dict)을 쓰는데
+  러너는 `preds.jsonl` 만 찾아 채점이 매번 `Invalid value: pass --gold or --predictions`
+  로 실패했다. 예측이 있어도 점수가 0 으로 남는다.
+
+- **부수**: 컨텍스트 40,960 은 에이전틱에 좁다(`ContextWindowExceededError` 발생).
+  에이전틱 fleet 는 **106,496** 로 띄우고 레지스트리 `max_input_tokens` 도 98,304 로 맞춘다
+  (litellm 은 레지스트리 값으로 컨텍스트 초과를 판정하므로 서빙 창과 함께 올려야 한다).
+
+- **교훈**: 에이전틱 0점은 원인이 여러 겹이다. "게이트 통과 = 측정 가능"이 아니었다 —
+  A1(`tool_choice=auto` 수용)은 파서가 **등록됐는지**만 보지 그 파서가 **맞는지**는 보지
+  않는다. 모델이 실제로 내는 원문을 떠서 파서와 대조하는 것이 유일한 확인 방법이다.
+
 ## RULER 를 추론 켠 채 128토큰으로 돌렸다 (2026-08-30 ✅)
 
 - **증상**: RULER-NIAH 65536 구간 6~25%. 같은 모델이 LC-B 자체 NIAH 하니스에서는 4k~131k

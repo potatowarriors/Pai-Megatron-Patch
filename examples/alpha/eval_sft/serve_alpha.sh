@@ -26,7 +26,7 @@ TOOL_FLAGS=""
 if [ "${TOOLS:-0}" = "1" ]; then
   # mini-swe-agent/litellm 이 tool_choice=auto 를 보냄 → vLLM 이 수용하도록.
   # (에이전트는 텍스트 파싱이라 파서 종류 무관; hermes 로 요청만 통과시킴)
-  TOOL_FLAGS="--enable-auto-tool-choice --tool-call-parser hermes"
+  TOOL_FLAGS="--enable-auto-tool-choice --tool-call-parser ${TOOL_PARSER:-qwen3_xml}"
 fi
 echo "[serve] ckpt=$CKPT max_len=$MAX_LEN DP=$DP port=$PORT tools=${TOOLS:-0}"
 exec $VENV/bin/vllm serve "$CKPT" \
