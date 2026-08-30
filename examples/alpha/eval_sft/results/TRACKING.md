@@ -1,11 +1,9 @@
 # 벤치 추이 (eval_ckpt 집계)
 
-각 SFT 체크포인트별 점수. `eval_ckpt.sh`/`eval_watch.sh` 가 갱신. 100분율.
+각 체크포인트별 대표 점수(100분율). 매핑 정본은 `bench_registry.py`.
 
-**현재 유효 수치 없음.** 2026-08-30 이전에 기록된 전 항목은 서빙 종료 결함으로 무효 판정·삭제됐다.
-사고 경위와 재발 방지 조건은 `examples/alpha/docs/KNOWN_ISSUES.md` (2026-08-30 항목) 참조.
-**체크포인트 종료 설정 게이트를 통과하기 전에는 이 표에 수치를 기입하지 않는다.**
+`무효` = 추출 실패율/사고 마감률이 임계를 벗어나 측정이 성립하지 않은 셀 (판정: `summarize.py`).
 
-| run | iter | mmlu_pro | gpqa_diamond_generative_n_shot | aime25 | hmmt_feb_2025 | ifeval | simpleqa_verified | logickor |
-|---|---|---|---|---|---|---|---|---|
-| _(없음)_ | | | | | | | | |
+| run | iter | mmlu_pro | gpqa_diamond | aime25 | hmmt_feb_2025 | ifeval_inst_loose |
+|---|---|---|---|---|---|---|
+| alpha_baseline_48L_sft_128k_full_20260828_081911 | 300 | 47.0 | 32.0 | 무효 | 무효 | 65.6 |
