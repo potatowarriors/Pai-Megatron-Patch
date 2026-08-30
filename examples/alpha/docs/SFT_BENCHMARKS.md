@@ -297,6 +297,23 @@ Google Generative Language API v1beta 엔드포인트
 G3 의 어려운 질문은 **진단**이지 게이트가 아니다. `finish=length` + `content` 없음은
 설정 결함이 아니라 모델 미성숙 신호다 — 그 구분이 2026-08-30 사고의 핵심이었다.
 
+### 에이전틱 게이트 A1~A3 (SWE·Terminal)
+
+T1 의 G1~G3 에 더해 세 전제가 더 있다. 하나라도 깨지면 에이전트가 매 스텝 실패하고
+0점이 나오는데, **그 0점은 "모델이 못 푼다"와 구분되지 않는다** — 2026-08-30 SWE 0/20 ·
+Terminal 0/10 이 그 상태였다. 실행: `python3 eval_sft/check_agentic_gates.py --base-url <URL>`
+
+| # | 게이트 | 판정 | 실패 시 |
+|---|---|---|---|
+| A1 | `tool_choice=auto` 수용 | HTTP 200 | fleet 를 **TOOLS=1** 로 재기동 (`--enable-auto-tool-choice --tool-call-parser hermes`). T1 용 fleet 는 이 플래그 없이 뜬다 |
+| A2 | 컨테이너 역터널 | 컨테이너 `:8199` → 200 | `ssh sub1 'bash /home/work/vidsearch/tools/start_swe_tunnel.sh'` |
+| A3 | 컨테이너 디스크 | SWE 300GB / Terminal 150GB 여유 | `docker image prune` |
+
+**부분 표본은 무효로 기록한다.** `run_swe.sh`/`run_terminal.sh` 에 N 을 주면 결과 JSON 에
+`subsampled=true` 와 `no_answer=1.0` 이 박혀 집계기가 `무효` 로 표시한다 — NVIDIA 재현
+문서의 *"Never report sub-sampled / limited runs"* 를 코드로 강제한 것이다. 기본은 전량
+(SWE Verified 500 / terminal-bench-core 80).
+
 부수 불변량:
 - `--max-model-len` ≥ `max_gen_toks` + 프롬프트 최대치. 32768 모델길이에 32768 생성예산은 성립 불가.
 - 장시간 러너·프로브는 `setsid` + NFS 로그로 분리 실행 (세션 종료에 죽지 않도록).
