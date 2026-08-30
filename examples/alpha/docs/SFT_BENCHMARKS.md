@@ -237,7 +237,10 @@ GPUS=0,1,2,3,4,5,6,7 bash eval_sft/eval_ckpt.sh outputs/<sft_run> 300 t1
 - lm_eval 0.4.12 고정, 태스크·few-shot·seed·gen 파라미터 러너에 하드코딩(`run_tier1.sh`).
 - 서버 `max-model-len 49152`·`max_gen_toks 24576`(prompt 여유 확보, 400 방지). thinking 기본.
 - **GPU 정리 규율**: 교체 시 `stop_fleet.sh`로 SIGTERM→회수확인. hard-kill 반복이 GPU 좀비
-  누수를 만든다(2026-08-29 GPU0 사고). fleet 기본 GPU = 1~7 (GPU0 회수 전까지 제외).
+  누수를 만든다(2026-08-29 GPU0 사고). **GPU0 은 2026-08-30 회수 확인 후 복귀** — 실측
+  78.6GiB 여유, bf16 matmul 222 TFLOP/s 정상. fleet 기본 GPU = **0~7 전부**.
+  다만 GPU0 만 `nvidia-smi` 의 `utilization.gpu` 가 `[Not Found]` 로 나온다(컨테이너
+  패스스루 계측 한계, 연산은 정상). GPU0 사용률로 fleet 건강을 판단하지 말 것.
 - 변환은 `evaluate.sh`(forward_sanity ppl 게이트 포함) 재사용 — 잘못 변환된 ckpt는 게이트가 막음.
 
 ## 3.8 베이스라인 — 무효, 재측정 대기 (2026-08-30)
