@@ -1,0 +1,46 @@
+# AIME 2025 avg@16 — R1/Qwen3 수학 규약: "put your final answer within \boxed{}".
+# 반복 16: R1 은 64, Nemotron Super 는 16. 30 문항뿐이라 반복이 점수를 지배한다.
+# (구 *_avg16 태스크는 filter 미지정 → lm_eval 기본 take_first 가 16개 중 1개만
+#  채점해 실질 avg@1 이었다. take_first_k 로 k개를 모두 넘긴다.)
+task: aime25_aa
+dataset_path: math-ai/aime25
+training_split: test
+fewshot_split: test
+test_split: test
+output_type: generate_until
+num_fewshot: 0
+doc_to_text: !function aa_utils.doc_to_text_math
+doc_to_target: "{{answer}}"
+process_results: !function aa_utils.process_results_math
+filter_list:
+  - name: avg
+    filter:
+      - function: take_first_k
+        k: 16
+generation_kwargs:
+  until: []
+  do_sample: true
+  temperature: 1.0
+  top_p: 0.95
+  max_gen_toks: 32768
+  seed: null
+  skip_special_tokens: false
+repeats: 16
+metric_list:
+  - metric: exact_match
+    aggregation: mean
+    higher_is_better: true
+  - metric: no_answer
+    aggregation: mean
+    higher_is_better: false
+  - metric: think_closed
+    aggregation: mean
+    higher_is_better: true
+  - metric: gen_chars
+    aggregation: mean
+    higher_is_better: false
+  - metric: samples_k
+    aggregation: mean
+    higher_is_better: true
+metadata:
+  version: 1.0

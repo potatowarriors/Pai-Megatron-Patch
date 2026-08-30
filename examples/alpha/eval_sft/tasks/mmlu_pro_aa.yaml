@@ -1,0 +1,43 @@
+# MMLU-Pro — AA/Nemotron 규약 (0-shot CoT, 답 형식 지시, 8단 폴백 추출)
+# 내장 `mmlu_pro` 를 쓰지 않는 이유: 5-shot + 단일 정규식 `answer is (A)` = base 모델용.
+# 반복: Nemotron 3 Ultra `ns_mmlu_pro` num_repeats=1 (12,032 문항이라 표본이 이미 큼).
+task: mmlu_pro_aa
+dataset_path: TIGER-Lab/MMLU-Pro
+test_split: test
+output_type: generate_until
+num_fewshot: 0
+doc_to_text: !function aa_utils.doc_to_text_mmlu_pro
+doc_to_target: !function aa_utils.doc_to_target_mmlu_pro
+process_results: !function aa_utils.process_results_mmlu_pro
+filter_list:
+  - name: avg
+    filter:
+      - function: take_first_k
+        k: 1
+generation_kwargs:
+  until: []
+  do_sample: true
+  temperature: 1.0
+  top_p: 0.95
+  max_gen_toks: 32768
+  seed: null                # 고정 시드는 repeats 를 동일 표본으로 만든다
+  skip_special_tokens: false  # </think> 가 출력에 살아남아야 답변부를 가를 수 있다
+repeats: 1
+metric_list:
+  - metric: exact_match
+    aggregation: mean
+    higher_is_better: true
+  - metric: no_answer
+    aggregation: mean
+    higher_is_better: false
+  - metric: think_closed
+    aggregation: mean
+    higher_is_better: true
+  - metric: gen_chars
+    aggregation: mean
+    higher_is_better: false
+  - metric: samples_k
+    aggregation: mean
+    higher_is_better: true
+metadata:
+  version: 1.0

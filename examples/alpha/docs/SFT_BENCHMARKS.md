@@ -5,12 +5,9 @@ SFT 본 런(`sft_128k_full`, 2,448 iters, save 300)의 체크포인트별 평가
 instruct 능력을 측정한다. 참조 좌표는 DSV4 post-training 표 + Nemotron 3 Ultra Table 10
 (SFT 데이터가 Ultra 레시피이므로 후자가 1차 준거). 진행 상태는 [STATUS.md](STATUS.md).
 
-> **⚠️ 2026-08-30 — 이 스위트로 산출한 수치는 전량 무효 판정·삭제됐다.**
-> HF 변환 체크포인트에 `generation_config.json`이 없어 eos가 `<|endoftext|>`(0)뿐이었고
-> (SFT 턴 종료는 `<|im_end|>` id 3), `</think>`가 `special=True`라 출력에서 삭제됐다.
-> 모델이 아니라 서빙 설정을 측정한 것이다. 경위·증거는 [KNOWN_ISSUES.md](KNOWN_ISSUES.md) 2026-08-30 항목.
-> **아래 §7 게이트 3종을 통과하기 전에는 어떤 수치도 기록하지 않는다.**
-> 설계(§1 판정, §2 티어, §3 인프라)와 러너 코드 자체는 유효하며 재사용한다.
+> **2026-08-30 — T1 을 프론티어 규약으로 재작성했다.** 이전 수치는 전량 무효 판정·삭제
+> (원인·증거: [KNOWN_ISSUES.md](KNOWN_ISSUES.md) 2026-08-30). 새 T1 은 §3.6, 게이트는 §7.
+> 게이트 G1~G3 를 통과하기 전에는 어떤 수치도 `results/TRACKING.md` 에 기록하지 않는다.
 
 ## 0. 결정 로그 (사용자, 2026-08-29)
 
@@ -74,25 +71,58 @@ main1 SFT save → sub1 감시 → ① run_convert.sh(EP=8, ~30–40분)
 - 러너·오케스트레이터 코드: `examples/alpha/eval_sft/` (이 리포).
 - 베이스라인: 전 스위트를 **LC-B iter320 hfmodel**로 먼저 완주(하니스 검증 겸 기준점).
 
-## 3.4 생성 세팅 — R1 표준 (프론티어 동일 비교, 2026-08-30)
+## 3.4 생성 세팅 — AA / Nemotron 3 Ultra 규약 (2026-08-30 재작성)
 
-alpha 는 `<think>` 강제 시작 = DeepSeek-R1/Qwen3 계열 **reasoning 모델**. 벤치는 그 공식
-관례를 따라야 프론티어(DSV4·Nemotron·R1)와 동일 조건 비교가 된다 (Nemotron eval 원칙:
-"모든 모델 동일 세팅, 생성 파라미터는 각 모델카드에서"). 사용자 확정 2026-08-30.
+조사 근거는 프론티어 1차 자료: DeepSeek-R1·Qwen3·Nemotron 모델 카드, NVIDIA
+[Nemotron 3 Ultra 재현 설정](https://github.com/NVIDIA-NeMo/Evaluator/tree/main/examples/nemotron/nemotron-3-ultra),
+OpenAI simple-evals, Artificial Analysis 방법론.
 
-| 벤치 | temp | top_p | max_tokens | 샘플 | 근거 |
-|---|---|---|---|---|---|
-| MMLU-Pro, GPQA-D | **0.6** | 0.95 | 32768 | 1, CoT | R1 카드 |
-| AIME25, HMMT25 | **0.6** | 0.95 | 32768 | **avg@16** | R1(64)→실무 16 |
-| IFEval | 0.0 | — | 2048 | 1, greedy | 지시이행 관례 |
-| SimpleQA, LogicKor | 0.6 | 0.95 | 32768 | 1 | R1 |
-| RULER/NIAH | 0.0 | — | ~~128~~ **재설계 필요** | greedy | needle 추출. **128토큰은 reasoning 모델에 무효** — 서두 설명에 전부 소진해 needle 미도달(2026-08-30). 같은 모델이 LC-B 자체 NIAH는 4k~131k 200/200 |
-| SWE, Terminal | **0.0** | 1.0 | per-call 8192 상한 | step_limit 250 | mini-swe/터미널 기본 |
+**온도 1.0 확정 (사용자, 2026-08-30)** — Nemotron 3 Ultra 와 동일. 우리 SFT 데이터가
+Ultra 레시피이므로 그 쪽을 준거로 삼는다. (R1·Qwen3 계열은 0.6 을 권고하며, AA 규약은
+"모델 랩 권고를 따른다"이다 — 즉 우리가 우리 기준을 정하는 셈.)
 
-- **서빙 컨텍스트는 벤치 요구만큼만**: 표준 fleet **32768**(T1·T3·SWE·Terminal), 롱 fleet
-  262144(T2 RULER 전용). 262K 로 에이전틱을 돌리면 단일 생성이 느려 step 진행 불가(2026-08-30 SWE 정체 원인).
-- R1 공식: temp 0.6/top_p 0.95/max 32768/system prompt 없음/`<think>\n` 강제/AIME 64샘플. alpha 동일 구조.
-- max_tokens 32768 초과분은 잘려 실패 처리(R1도 동일) — 공정 규칙.
+| 항목 | 값 | 근거 |
+|---|---|---|
+| temperature / top_p | **1.0 / 0.95** | Nemotron 3 Ultra eval yaml `params` |
+| max_tokens | **32768** | R1 카드. Ultra 는 상한 자체를 제거(`params_to_remove`)하나 우리는 창 한계로 고정 |
+| few-shot | **0-shot CoT** | simple-evals: few-shot 은 base 모델 유물 |
+| 시스템 프롬프트 | **없음** | R1 카드 / Ultra `use_system_prompt: false` |
+| `skip_special_tokens` | **false** | Ultra `params_to_add` — `</think>` 가 출력에 살아남아야 한다 |
+| `seed` | **null** | 시드를 고정하면 반복 k개가 동일 표본이 된다 |
+| 반복 (avg@k) | MMLU-Pro 1 · GPQA 8 · IFEval 8 · AIME/HMMT 16 | Ultra `num_repeats`; 수학은 R1 64→실무 16 |
+
+`pass@1` 은 greedy 1회가 아니라 **k회 평균**이다 (R1 카드: "generate 64 responses per
+query to estimate pass@1"). 문항 수가 적을수록 k 를 키운다 — GPQA 198 문항에 1회 측정은
+분산이 크다.
+
+## 3.6 T1 커스텀 태스크 (`eval_sft/tasks/*_aa.yaml`)
+
+lm_eval 내장 태스크를 쓰지 않는다. 내장은 base 모델용이라 채팅·추론 모델에서 추출이
+대량 실패한다 — GPQA `strict-match` 정규식이 `(?<=The answer is )` 라 채팅 모델은 원리적으로
+맞출 수 없고(실측 0.0), MMLU-Pro 는 5-shot 에 `answer is (A)` 단일 패턴이다.
+
+| 태스크 | 문항 | 반복 | 내장 대비 바뀐 점 |
+|---|---:|---:|---|
+| `mmlu_pro_aa` | 12,032 | 1 | 0-shot, AA 프롬프트(보기 개수 가변 — 3~10), 8단 폴백 추출 |
+| `gpqa_diamond_aa` | 198 | 8 | 0-shot, AA 프롬프트, **보기 순열 결정론적**(내장은 시드 없는 shuffle → 재현 불가) |
+| `ifeval_aa` | 541 | 8 | 사고 구간 제거 후 채점, 예산 1280→32768. 지시 검사기는 내장 그대로 |
+| `aime25_aa` | 30 | 16 | boxed 프롬프트, **avg@16 실제 작동** |
+| `hmmt_feb_2025_aa` | 30 | 16 | 동일 |
+
+**공통 규약 세 가지**:
+
+1. **생성 파라미터는 태스크 yaml 이 단일 정본.** 러너가 `--gen_kwargs` 로 덮어쓰지 않는다.
+   덮어쓰면 사후에 어느 설정이 적용됐는지 알 수 없다.
+2. **추출은 사고 이후 구간에서.** `</think>` 뒤를 잘라 쓴다. 사고 구간에는 보기 나열·중간
+   후보·자기부정이 가득해 전문에 정규식을 걸면 잘못된 후보를 집는다.
+3. **`no_answer`·`think_closed` 를 함께 보고.** 점수만 보면 측정 실패가 오답으로 위장된다
+   (NeMo-Skills 규약). 판정은 `eval_sft/summarize.py` — `no_answer>10%` 또는
+   `think_closed<50%` 면 **무효**로 판정하고 기록을 막는다.
+
+**구 avg@16 버그 (2026-08-30 발견·수정)**: `repeats: k` 는 동일 Instance 를 k번 복제해
+`resps` 에 k개를 쌓는데, `filter_list` 를 지정하지 않으면 lm_eval 이 기본 `take_first` 를
+꽂아 1개만 남긴다. 구 `aime25_avg16`·`hmmt_feb_2025_avg16` 은 16배 연산을 쓰고 avg@1 을
+계산하고 있었다. 새 태스크는 `take_first_k` 로 k개를 모두 넘긴다.
 
 ## 3.5 sub1 서빙 환경 — vllm 0.25.1 + CUDA 13 compat (2026-08-29)
 
@@ -226,15 +256,20 @@ Google Generative Language API v1beta 엔드포인트
 
 ## 7. 투입 전 게이트 (2026-08-30 신설, 필수)
 
-2026-08-30 사고의 재발 방지. **셋 다 통과해야 수치를 `results/TRACKING.md`에 기입한다.**
+2026-08-30 사고의 재발 방지. **셋 다 통과해야 수치를 `results/TRACKING.md` 에 기입한다.**
+실행: `python3 eval_sft/check_gates.py --hf-dir <HF_CKPT> --base-url <URL>`
 
-| # | 게이트 | 판정 기준 | 실패 시 |
+| # | 게이트 | 판정 기준 | 자동화 |
 |---|---|---|---|
-| G1 | **변환 산출물 eos 정합** | HF ckpt에 `generation_config.json` 존재 + `eos_token_id`가 챗 템플릿 턴 종료 토큰(`<\|im_end\|>` id 3)을 포함 | 변환기 수정. 수동 패치본으로 벤치 돌리지 않는다 |
-| G2 | **태그 관측 가능성** | 하니스가 파싱하는 태그(`</think>`, `<tool_call>`)가 `special=False`라 vLLM 출력에 살아남음 | tokenizer_config 수정 후 재변환 |
-| G3 | **서빙 1건 스모크** | 쉬운 질문 1건에 `finish_reason=stop`, `</think>` 관측, `content` 비어있지 않음. 어려운 질문 1건에 `finish_reason=stop` | 원인 규명 전 배치 실행 금지 |
+| G1 | **변환 산출물 eos 정합** | `generation_config.json` 존재 + `eos_token_id` 가 챗 종료 토큰(`<\|im_end\|>`)을 포함 | `tools/emit_generation_config.py` — `run_convert.sh` 가 MG→HF 마다 자동 실행, 실패 시 exit 1 |
+| G2 | **태그 관측 가능성** | 서빙 응답에 `</think>` 가 살아있음 | 요청에 `skip_special_tokens: false` (NVIDIA Ultra 설정과 동일). **체크포인트 tokenizer 를 고치지 않는다** |
+| G3 | **서빙 스모크** | 쉬운 질문 1건이 `finish_reason=stop` + `content` 비어있지 않음 | `check_gates.py` |
+
+G3 의 어려운 질문은 **진단**이지 게이트가 아니다. `finish=length` + `content` 없음은
+설정 결함이 아니라 모델 미성숙 신호다 — 그 구분이 2026-08-30 사고의 핵심이었다.
 
 부수 불변량:
 - `--max-model-len` ≥ `max_gen_toks` + 프롬프트 최대치. 32768 모델길이에 32768 생성예산은 성립 불가.
 - 장시간 러너·프로브는 `setsid` + NFS 로그로 분리 실행 (세션 종료에 죽지 않도록).
 - 한 번에 한 변수만 바꾼다. 길이·온도·파서·모델 디렉토리를 동시에 바꾸면 원인 분리가 불가능하다.
+- 부분 표본 결과는 기록하지 않는다 (NVIDIA 재현 문서: "Never report sub-sampled / limited runs").

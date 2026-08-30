@@ -1,0 +1,49 @@
+# IFEval — AA/Nemotron 규약. 반복 8 (Nemotron 3 Ultra `ns_ifbench` num_repeats=8).
+# 내장 `ifeval` 을 쓰지 않는 이유 둘:
+#   1. 사고 구간을 그대로 채점한다 — "전부 소문자로"/"불릿 3개" 검사가 <think> 텍스트까지 본다.
+#   2. max_gen_toks 1280 — 추론 모델은 사고에만 그 이상을 쓴다.
+# 지시 검사기(strict/loose)는 벤치마크의 정의이므로 내장 구현을 그대로 호출한다.
+task: ifeval_aa
+dataset_path: google/IFEval
+dataset_name: null
+test_split: train
+output_type: generate_until
+num_fewshot: 0
+doc_to_text: prompt
+doc_to_target: 0
+process_results: !function aa_utils.process_results_ifeval
+filter_list:
+  - name: avg
+    filter:
+      - function: take_first_k
+        k: 8
+generation_kwargs:
+  until: []
+  do_sample: true
+  temperature: 1.0
+  top_p: 0.95
+  max_gen_toks: 32768
+  seed: null
+  skip_special_tokens: false
+repeats: 8
+metric_list:
+  - metric: prompt_level_strict_acc
+    aggregation: mean
+    higher_is_better: true
+  - metric: inst_level_strict_acc
+    aggregation: !function aa_utils.agg_inst_level_acc
+    higher_is_better: true
+  - metric: prompt_level_loose_acc
+    aggregation: mean
+    higher_is_better: true
+  - metric: inst_level_loose_acc
+    aggregation: !function aa_utils.agg_inst_level_acc
+    higher_is_better: true
+  - metric: think_closed
+    aggregation: mean
+    higher_is_better: true
+  - metric: samples_k
+    aggregation: mean
+    higher_is_better: true
+metadata:
+  version: 1.0

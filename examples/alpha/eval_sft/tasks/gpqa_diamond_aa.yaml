@@ -1,0 +1,47 @@
+# GPQA Diamond — AA/Nemotron 규약. 반복 8 (Nemotron 3 Ultra `ns_gpqa` num_repeats=8;
+# AA 는 5). 198 문항뿐이라 반복이 필수 — 1회 측정은 분산이 크다.
+# 보기 순열은 문항별 결정론적(내장 태스크는 시드 없는 shuffle 이라 실행마다 바뀜).
+task: gpqa_diamond_aa
+dataset_path: Idavidrein/gpqa
+dataset_name: gpqa_diamond
+training_split: train
+validation_split: train
+test_split: null
+output_type: generate_until
+num_fewshot: 0
+process_docs: !function aa_utils.process_docs_gpqa
+doc_to_text: !function aa_utils.doc_to_text_gpqa
+doc_to_target: gpqa_answer
+process_results: !function aa_utils.process_results_gpqa
+filter_list:
+  - name: avg
+    filter:
+      - function: take_first_k
+        k: 8
+generation_kwargs:
+  until: []
+  do_sample: true
+  temperature: 1.0
+  top_p: 0.95
+  max_gen_toks: 32768
+  seed: null
+  skip_special_tokens: false
+repeats: 8
+metric_list:
+  - metric: exact_match
+    aggregation: mean
+    higher_is_better: true
+  - metric: no_answer
+    aggregation: mean
+    higher_is_better: false
+  - metric: think_closed
+    aggregation: mean
+    higher_is_better: true
+  - metric: gen_chars
+    aggregation: mean
+    higher_is_better: false
+  - metric: samples_k
+    aggregation: mean
+    higher_is_better: true
+metadata:
+  version: 1.0

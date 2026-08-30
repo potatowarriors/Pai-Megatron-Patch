@@ -198,6 +198,17 @@ if [ "${MG2HF}" = true ]; then
         find -L ${HF_DIR} -maxdepth 1 -type f -name "merges.txt" -print0 2>/dev/null | xargs -0 -r cp -t ${SAVE_DIR} || true
     fi
 
+    # ------------------------------------------------------------------ G1 게이트
+    # generation_config.json 을 쓰고, eos 가 챗 종료 토큰(<|im_end|>)을 담는지 검사한다.
+    # 이것이 없으면 서버가 턴 종료를 인식하지 못해 max_tokens 까지 생성하고, 벤치가
+    # 모델이 아니라 서빙 설정을 측정하게 된다 — 2026-08-30 전량 무효 사고의 원인.
+    # 판정 기준·나머지 게이트: examples/alpha/docs/SFT_BENCHMARKS.md §7.
+    echo "🔒 G1: generation_config.json 생성·eos 정합성 검사..."
+    if ! python3 "${ALPHA_DIR}/tools/emit_generation_config.py" "${SAVE_DIR}"; then
+        echo "❌ G1 실패 — 이 체크포인트로 벤치를 돌리지 말 것."
+        exit 1
+    fi
+
     OTHER_ARGS+=(
         --hf-dir ${HF_DIR}
         --mcore2hf

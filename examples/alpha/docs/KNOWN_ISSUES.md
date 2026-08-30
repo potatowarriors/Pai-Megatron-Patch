@@ -4,6 +4,37 @@
 CLAUDE.md의 "함정 표"는 이 문서의 한 줄 요약이며, 새 사고는 **여기에 서사를 쓰고 CLAUDE.md 표에는 한 줄만** 추가한다.
 날짜는 절대 표기. 두 스테이지 이상 지난 항목은 스테이지 경계에서 `archive/`로 이동.
 
+## T1 벤치 태스크가 base 모델용이었다 — 추출 실패·avg@k 무효화 (2026-08-30 ✅)
+
+체크포인트 종료 토큰 사고(아래 항목)를 고치는 과정에서 발견한 **별개 결함 3건**. 셋 다
+lm_eval 내장 태스크를 채팅·추론 모델에 그대로 쓴 데서 나왔다.
+
+- **① GPQA `strict-match` 는 원리적으로 0점이 나온다.** 내장 정규식이
+  `(?<=The answer is )(.*)` 인데 채팅 모델은 그 문구로 답하지 않는다. 실측 0.0(iter300)·
+  0.0101(baseline). `flexible-extract` 23.2% 도 4지선다 무작위(25%) 수준이라 사실상 미측정.
+- **② MMLU-Pro 가 5-shot 이었다.** 내장 `_default_template_yaml` 은 `num_fewshot: 5` +
+  단일 패턴 `answer is \(?([ABCDEFGHIJ])\)?`. 프론티어는 0-shot CoT + 답 형식 지시가
+  표준이다(OpenAI simple-evals: few-shot 은 base 모델 유물). 흥미롭게도 그 파일에는
+  프론티어 형식 정규식이 **주석 처리된 채** 남아 있다.
+- **③ `avg@16` 이 실제로는 avg@1 이었다.** `repeats: k` 는 동일 Instance 를 k번 복제해
+  `resps` 에 k개를 쌓는다(`evaluator.py`: `cloned_reqs.extend([req] * req.repeats)`).
+  그런데 `filter_list` 를 지정하지 않으면 lm_eval 이 기본 `take_first` 를 꽂아
+  **1개만 남긴다**(`api/task.py:771` 의 TODO 주석이 이 동작을 인정한다). 구
+  `aime25_avg16`·`hmmt_feb_2025_avg16` 은 16배 연산을 쓰고 첫 샘플만 채점했다.
+  덤으로 요청 바디의 `seed` 가 1234 로 고정돼 있어, 필터를 고쳐도 k개가 동일 표본이 될
+  뻔했다 — 태스크 yaml 에 `seed: null` 을 넣어 해소.
+
+- **수정 (2026-08-30)**: `eval_sft/tasks/*_aa.yaml` 5종 + `aa_utils.py` 로 재작성.
+  0-shot, AA 표준 프롬프트(보기 개수 가변 대응), 8단 폴백 추출(마지막 매치),
+  `take_first_k` 로 avg@k 실제 작동, `seed: null`. 상세는
+  `docs/SFT_BENCHMARKS.md` §3.6.
+- **부수 발견**: 추출은 반드시 `</think>` **이후 구간**에서 해야 한다. 사고 구간에는 보기
+  나열·중간 후보·자기부정이 가득해 전문에 정규식을 걸면 사고 중의 잘못된 후보를 집는다.
+  `aa_utils.split_think` 가 처리하고, 사고를 닫았는지를 `think_closed` 지표로 함께 보고한다.
+- **교훈**: 하니스의 기본 태스크는 그 하니스가 만들어진 시점의 모델을 가정한다. 채팅·추론
+  모델을 base 모델용 태스크로 재면 "모델이 약하다"로 읽히는 측정 실패가 나온다. 점수 옆에
+  `no_answer` 를 항상 함께 낸다(NeMo-Skills 규약) — 그 열이 있었다면 34% 를 보고 즉시 멈췄다.
+
 ## SFT 체크포인트에 종료 토큰이 없어 벤치 전량 무효 (2026-08-30 ✅ 원인규명 / 재측정 대기)
 
 - **증상**: iter300 SFT ckpt와 LC-B iter320 베이스라인의 T1~T4 벤치 전 항목이 비정상.
