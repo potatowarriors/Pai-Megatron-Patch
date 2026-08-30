@@ -9,7 +9,7 @@ OUT="$HERE/results/$RUN_NAME"; mkdir -p "$OUT"
 # 터널 확인
 ssh -F "$SSHC" -o BatchMode=yes alpha-eval "curl -s -o /dev/null -w '%{http_code}' --max-time 6 http://localhost:8199/v1/models" 2>/dev/null | grep -q 200 \
   || { echo "[term] 터널 기동"; bash /home/work/vidsearch/tools/start_swe_tunnel.sh; sleep 8; }
-RID="term_${RUN_NAME}"
+RID="tb$(echo "$RUN_NAME" | md5sum | cut -c1-8)"
 echo "[term] tb run (terminus, N=$N tasks, W=$W)"
 ssh -F "$SSHC" -o BatchMode=yes alpha-eval "rm -rf /opt/terminalbench/runs/$RID" 2>/dev/null || true
 ssh -F "$SSHC" -o BatchMode=yes alpha-eval "
