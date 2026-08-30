@@ -19,6 +19,9 @@
 #              2026-08-30 회수 확인 후 복귀 (78.6GiB 여유, bf16 matmul 222 TFLOP/s).
 #   SWE_N      SWE 부분 표본 수 (0=전량, 기본 0)
 #   TERM_N     Terminal 부분 표본 수 (0=전량, 기본 0)
+#   SWE_W      SWE 동시 워커 (기본 12). TERM_W  Terminal 동시 워커 (기본 8).
+#              2026-08-31 상향(6/4→12/8): iter300 실측에서 GPU 절반 유휴 + vLLM 대기열 0,
+#              컨테이너 호스트 64 CPU 에 load 1.2. 병목은 연산이 아니라 동시성이었다.
 set -uo pipefail
 CKPT="${1:?HF checkpoint dir}"; RUN_TAG="${2:?run tag}"; STAGES="${3:-t1,t3,agentic,t2}"
 HERE="$(cd "$(dirname "$0")" && pwd)"
@@ -76,9 +79,9 @@ if has agentic; then
   python3 "$HERE/check_agentic_gates.py" --base-url "$BURL" || { echo "[suite] ❌ A1~A3 실패 — 에이전틱 건너뜀"; rc=1; }
   if [ "$rc" -eq 0 ] || [ "${FORCE_AGENTIC:-0}" = "1" ]; then
     echo "[suite] === SWE-bench ==="
-    SKIP_GATES=1 BASE_URL="$BURL" bash "$HERE/run_swe.sh" "$RUN_TAG" "${SWE_N:-0}" "${SWE_W:-6}" || rc=1
+    SKIP_GATES=1 BASE_URL="$BURL" bash "$HERE/run_swe.sh" "$RUN_TAG" "${SWE_N:-0}" "${SWE_W:-12}" || rc=1
     echo "[suite] === Terminal-Bench ==="
-    SKIP_GATES=1 BASE_URL="$BURL" bash "$HERE/run_terminal.sh" "$RUN_TAG" "${TERM_N:-0}" "${TERM_W:-4}" || rc=1
+    SKIP_GATES=1 BASE_URL="$BURL" bash "$HERE/run_terminal.sh" "$RUN_TAG" "${TERM_N:-0}" "${TERM_W:-8}" || rc=1
   fi
 fi
 

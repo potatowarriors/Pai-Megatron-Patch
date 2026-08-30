@@ -14,7 +14,7 @@
 # 사용: bash eval_sft/run_swe.sh <RUN_NAME> [N_INSTANCES] [WORKERS]
 #   N_INSTANCES: 0 또는 미지정 = 전량(500). 양수면 부분 표본(무효 표시).
 set -uo pipefail
-RUN_NAME="${1:?run name}"; N="${2:-0}"; W="${3:-6}"
+RUN_NAME="${1:?run name}"; N="${2:-0}"; W="${3:-12}"
 HERE="$(cd "$(dirname "$0")" && pwd)"
 SSHC="/home/work/vidsearch/.ssh-keys/config"
 BASE_URL="${BASE_URL:-http://localhost:8100/v1}"
