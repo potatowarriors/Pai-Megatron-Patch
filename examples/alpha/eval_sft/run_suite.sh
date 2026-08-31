@@ -9,7 +9,7 @@
 # |---|---|---|
 # | T1 코어 | 표준 fleet 40960 | G1·G2·G3 |
 # | T3 판정 | 표준 fleet (동일) | G1·G2·G3 |
-# | 에이전틱 | **TOOLS=1** fleet 40960 + 역터널 | A1·A2·A3 |
+# | 에이전틱 | **TOOLS=1** fleet **106496** + 역터널 | A1·A2·A3·A4 |
 # | T2 롱 | **롱 fleet 139264** | G1·G2·G3 |
 #
 # 사용: bash eval_sft/run_suite.sh <HF_CKPT> <RUN_TAG> [STAGES]
@@ -73,7 +73,10 @@ fi
 
 # ── 에이전틱 : TOOLS=1 fleet + 역터널 ─────────────────────────────────
 if has agentic; then
-  fleet_up 40960 1 || exit 1
+  # 에이전틱은 **넓은 창**이 필요하다. 40960 으로 돌리면 컨텍스트 초과가 지배한다 —
+  # 2026-08-31 실측: 40960 에서 ContextWindowExceededError 94%(411/437), 턴 46;
+  # 106496 에서는 31%, 턴 119. 창이 결과를 지배한다.
+  fleet_up "${AGENTIC_MAX_LEN:-106496}" 1 || exit 1
   echo "[suite] 역터널 기동"
   bash /home/work/vidsearch/tools/start_swe_tunnel.sh; sleep 10
   python3 "$HERE/check_agentic_gates.py" --base-url "$BURL" || { echo "[suite] ❌ A1~A3 실패 — 에이전틱 건너뜀"; rc=1; }

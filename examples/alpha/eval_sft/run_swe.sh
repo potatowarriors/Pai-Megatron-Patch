@@ -3,6 +3,12 @@
 #
 # 규약 (docs/SFT_BENCHMARKS.md §3.4·§7):
 #   - 생성 temp 1.0 / top_p 0.95 (Nemotron 3 Ultra 동일). skip_special_tokens false.
+#   - **반복 1회 (pass@1 단일 시도)** — SWE-bench 리더보드 규약이다:
+#     "Your system submits 1 prediction per task instance" (submission checklist).
+#     여러 번 시도해 고르려면 SWE-bench 테스트를 쓰지 않는 **독립 선택기**가 있어야 하고
+#     best@k 로 따로 표기해야 한다. 우리는 그런 선택기가 없으므로 1회가 맞다.
+#     Nemotron 3 Ultra 의 num_repeats=3 은 분산 추정을 위한 **런 평균**이지 리더보드
+#     제출 형식이 아니다. 분산이 필요하면 RUN_TAG 를 바꿔 전체를 다시 돌린다.
 #   - **전량 실행이 기본** — 부분 표본 결과는 프론티어 규약상 보고 대상이 아니다
 #     (NVIDIA 재현 문서: "Never report sub-sampled / limited runs").
 #     N 을 지정해 줄이면 결과 JSON 에 subsampled=true 가 박혀 집계에서 무효 처리된다.

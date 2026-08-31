@@ -224,22 +224,39 @@ main1 SFT save → sub1 감시 → ① run_convert.sh(EP=8, ~30–40분)
 - **RULER**: 131072 한 구간만 대표로 잡아 65536 신호를 버리고 있었다. Qwen3 카드처럼
   구간 평균을 쓴다.
 
-### 남은 관행 이탈 — 반복 횟수
+### 반복 횟수 — 프론티어 관행 조사·확정 (2026-08-31)
 
-| 벤치 | 우리 | Nemotron 3 Ultra | 비고 |
+**원칙 (DeepSeek-R1 논문 §평가 설정)**: *"we use a sampling temperature of 0.6 and a
+top-p value of 0.95 to generate k responses (**typically between 4 and 64, depending on
+the test set size**)"* — **k 는 데이터셋 크기에 반비례한다.** 작은 셋일수록 크게.
+
+**1차 출처**
+
+| 출처 | 확인한 값 |
+|---|---|
+| DeepSeek-R1 (arXiv 2501.12948) | k = 4~64, 셋 크기에 따라. AIME 는 추가로 `cons@64` |
+| Nemotron 3 Ultra (공식 eval yaml) | GPQA 8 · SciCode 8 · IFBench 8 · Multi-Challenge 8 · AA-LCR 16 · Omniscience 10 · CritPt 5 · IMO-AnswerBench 5 · MMLU-Pro 1 · MMLU-ProX 1 · HLE 1 |
+| Nemotron 3 Ultra (에이전틱) | SWE-bench 3 · Terminal-bench 8 |
+| Qwen3 | RULER 길이당 20 샘플 (13 서브태스크 × 20 = 260) |
+| Artificial Analysis | GPQA 5 · Terminal-Bench 3 · SciCode 3 · AA-LCR 3 · τ³ 5 · CritPt 5 · HLE 1 |
+| **SWE-bench 리더보드 규약** | **pass@1 = 인스턴스당 1 예측.** best@k 는 SWE-bench 테스트를 쓰지 않는 **독립 선택기**가 있어야 하고 별도 표기 |
+
+**확정 (우리 스위트)**
+
+| 벤치 | 문항 | k | 근거 |
 |---|---:|---:|---|
-| MMLU-Pro | 1 | 1 | ✅ |
-| GPQA-D | 8 | 8 | ✅ |
-| IFEval | 8 | 8 (IFBench) | ✅ |
-| AIME · HMMT | 16 | — (R1 은 64) | ⚠️ 문항 30개라 분산 큼 |
-| **RULER** | **1** | base 스위트 1 | ✅ |
-| **SimpleQA** | **1** | Omniscience 10 | ⚠️ 1000 문항이라 표본은 큼 |
-| **LogicKor** | **1** | Multi-Challenge 8 | ⚠️ **42 문항 × 1회 — 분산 최대** |
-| **SWE-bench** | **1** | **3** | ⚠️ |
-| **Terminal-Bench** | **1** | **8** | ⚠️ |
+| MMLU-Pro | 12,032 | 1 | Nemotron 1. 표본이 이미 크다 |
+| SimpleQA-Verified | 1,000 | 1 | 표본이 크다. Nemotron Omniscience 10 은 더 작은 셋 |
+| IFEval | 541 | 8 | Nemotron IFBench 8 |
+| **SWE-bench Verified** | 500 | **1** | **리더보드 규약(pass@1 단일 시도)**. Nemotron 의 3 은 런 평균이지 제출 형식이 아니다 |
+| GPQA-Diamond | 198 | 8 | Nemotron 8 (AA 는 5) |
+| **Terminal-Bench** | 80 | **8** | Nemotron 8 (AA 3). `tb --n-attempts` |
+| **LogicKor** | **42** | **8** | 우리 스위트에서 **가장 작다**. Nemotron Multi-Challenge 8 |
+| **AIME25 · HMMT** | 30 | **32** | R1 은 최대 64. 30문항이라 분산이 가장 크다. 32 는 비용 절충 |
+| RULER (구간당) | 20 | 1 | Qwen3 가 길이당 20 샘플을 쓰는 것이 곧 반복이다 |
 
-에이전틱 반복은 비용이 지배적이라(SWE 1회 = 약 59,500 LLM 호출) 당장 올리기 어렵다.
-**LogicKor 는 42문항 × 1회로 가장 취약하다** — 반복을 올리는 비용이 작으므로 우선 대상.
+**변경 이력**: AIME·HMMT 16→32, LogicKor 1→8, Terminal-Bench 1→8 (2026-08-31).
+SWE-bench 는 1 을 **유지**한다 — 리더보드 규약이 그렇다.
 
 ## 3.4 생성 세팅 — AA / Nemotron 3 Ultra 규약 (2026-08-30 재작성)
 

@@ -5,6 +5,8 @@
 #   - 생성 temp 1.0 / top_p 0.95 (Nemotron 3 Ultra 동일).
 #   - **전량 실행이 기본** (terminal-bench-core 0.1.1 = 80 tasks). N 을 주면 부분 표본이
 #     되고 결과에 subsampled=true 가 박혀 집계에서 무효 처리된다.
+#   - **반복 8회** (TERM_REPEATS). 80 태스크뿐이라 단일 실행은 분산이 크다.
+#     Nemotron 3 Ultra 도 Terminal-bench num_repeats=8, AA 는 3.
 #   - 투입 전 A1~A4 게이트 통과 필수.
 #   - **max_tokens 는 넉넉해야 한다** (기본 32768, TERM_MAX_TOKENS 로 조절).
 #     terminus 는 finish_reason == "length" 를 받으면 OutputLengthExceededError 를 던지고
@@ -50,6 +52,7 @@ ssh -F "$SSHC" -o BatchMode=yes alpha-eval "
     -k api_base=http://localhost:8199/v1 -k temperature=1.0 -k top_p=0.95 \
     -k max_tokens=${TERM_MAX_TOKENS:-32768} \
     --dataset terminal-bench-core==0.1.1 $NTASKS --n-concurrent $W \
+    --n-attempts ${TERM_REPEATS:-8} \
     --run-id $RID --output-path /opt/terminalbench/runs 2>&1 | tail -14
 "
 ssh -F "$SSHC" -o BatchMode=yes alpha-eval \
