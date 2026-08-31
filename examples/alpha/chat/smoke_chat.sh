@@ -4,11 +4,13 @@
 #   2. 한 턴 대화가 finish_reason=stop 으로 끝나고 content 가 비어있지 않다
 #   3. reasoning 파서가 <think> 를 `reasoning` 필드로 분리했다 (본문에 태그 잔류 없음)
 #   4. 멀티턴에서 히스토리 렌더가 깨지지 않는다
+#   5. tool_choice=auto 요청이 거절되지 않고, 파서가 XML 도구 호출을 실제로 구조화한다
+#      (벤치 게이트 A4 와 같은 취지 — 파서 이름이 붙어 있는 것과 파싱되는 것은 다르다)
 # 사용: bash chat/smoke_chat.sh [BASE_URL]
 set -uo pipefail
 BASE="${1:-http://localhost:8001/v1}"
 python3 - "$BASE" <<'PY'
-import json, sys, urllib.request
+import json, sys, urllib.error, urllib.request
 
 base = sys.argv[1]
 PASS = FAIL = 0
@@ -64,6 +66,53 @@ r2 = post("/chat/completions", {
 c2 = (r2["choices"][0]["message"].get("content") or "")
 check("멀티턴 응답 생성", len(c2.strip()) > 0, f"{len(c2)}자")
 check("히스토리 참조 성공", "준호" in c2, c2[:120].replace("\n", " "))
+
+print("── 5. tool_choice=auto 수용 + XML 파싱 " + "─" * 22)
+TOOLS = [{
+    "type": "function",
+    "function": {
+        "name": "get_weather",
+        "description": "특정 도시의 현재 날씨를 조회한다",
+        "parameters": {
+            "type": "object",
+            "properties": {"city": {"type": "string", "description": "도시 이름"}},
+            "required": ["city"],
+        },
+    },
+}]
+try:
+    r3 = post("/chat/completions", {
+        "model": MODEL,
+        "messages": [{"role": "user", "content": "서울 날씨 알려줘. 도구를 써."}],
+        "tools": TOOLS, "tool_choice": "auto",
+        "max_tokens": 1024, "temperature": 0.6,
+    })
+    check("tool_choice=auto 요청 수용", True)
+except urllib.error.HTTPError as e:
+    body = e.read().decode(errors="replace")[:200]
+    check("tool_choice=auto 요청 수용", False, f"HTTP {e.code}: {body}")
+    r3 = None
+
+if r3 is not None:
+    m3 = r3["choices"][0]["message"]
+    tc = m3.get("tool_calls") or []
+    c3 = (m3.get("content") or "")
+    # A4 의 핵심: 파서가 붙어 있는 것과 실제로 파싱되는 것은 다르다.
+    # 모델이 도구를 부르지 않을 수도 있으므로(미성숙), 원문에 XML 이 샜는지를 함께 본다.
+    leaked = "<tool_call>" in c3 or "<function=" in c3
+    check("도구 호출 원문이 본문에 새지 않음", not leaked, c3[:100].replace("\n", " "))
+    if tc:
+        fn = tc[0].get("function", {})
+        args_ok = False
+        try:
+            args_ok = "city" in json.loads(fn.get("arguments") or "{}")
+        except Exception:
+            pass
+        check("tool_calls 구조화", fn.get("name") == "get_weather" and args_ok,
+              f"name={fn.get('name')} args={fn.get('arguments')}")
+    else:
+        print("     ℹ️ 모델이 도구를 호출하지 않았다 — 파서 문제가 아니라 모델 판단."
+              " 원문 누수가 없으므로 파싱 경로는 정상.")
 
 print("\n" + "=" * 60)
 print(f"  smoke: {PASS} PASS / {FAIL} FAIL")

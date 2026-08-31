@@ -2,8 +2,14 @@
 # serve_chat.sh — alpha SFT 체크포인트를 사람이 대화할 수 있게 띄운다 (OpenWebUI 백엔드).
 #
 # eval_sft/serve_alpha.sh 와의 차이 — 목적이 다르므로 설정도 다르다:
-#   1. --reasoning-parser nemotron_v3  : <think> 를 reasoning_content 로 분리해 UI 가 접어서 표시.
+#   1. --reasoning-parser nemotron_v3  : <think> 를 reasoning 필드로 분리해 UI 가 접어서 표시.
 #      (벤치는 파서 off 로 텍스트를 통째로 파싱한다. 그래서 G2 게이트는 여기서 의도적으로 FAIL 한다.)
+#   1b. --enable-auto-tool-choice --tool-call-parser qwen3_xml
+#      OpenWebUI 는 tool_choice="auto" 를 보낸다. 파서가 없으면 vLLM 이 요청을 거절한다:
+#        '"auto" tool choice requires --enable-auto-tool-choice and --tool-call-parser to be set'
+#      파서는 반드시 **XML** 계열이어야 한다 — 우리 chat template 은 도구 호출을
+#      <tool_call><function=NAME><parameter=K>V</parameter></function></tool_call> 로 지시한다.
+#      hermes 계열은 <tool_call>{"name":...} JSON 을 기대해 어긋난다 (KNOWN_ISSUES 2026-08-30).
 #   2. 단일 GPU · DP=1               : 1인 사용. 벤치의 8-레플리카 fleet 불필요.
 #   3. 보수적 메모리 예산            : 40GB A100 슬라이스에 30GB 가중치가 들어간다.
 #
@@ -34,6 +40,8 @@ exec $VENV/bin/vllm serve "$CKPT" \
   --served-model-name "$NAME" alpha \
   --trust-remote-code \
   --reasoning-parser nemotron_v3 \
+  --enable-auto-tool-choice \
+  --tool-call-parser "${TOOL_PARSER:-qwen3_xml}" \
   --tensor-parallel-size 1 \
   --data-parallel-size 1 \
   --max-model-len "$MAX_LEN" \

@@ -29,7 +29,8 @@ ssh -N -L 8080:localhost:8080 main1     # ~/.ssh/config 의 Host main* (포트 2
 
 | 항목 | 벤치 (`eval_sft/serve_alpha.sh`) | 채팅 (`chat/serve_chat.sh`) | 이유 |
 |---|---|---|---|
-| reasoning 파서 | off | **`nemotron_v3`** | UI 가 사고 과정을 접어서 보여주려면 `reasoning_content` 로 분리돼야 한다 |
+| reasoning 파서 | off | **`nemotron_v3`** | UI 가 사고 과정을 접어서 보여주려면 별도 필드로 분리돼야 한다 |
+| tool 파서 | `qwen3_xml` (TOOLS=1 일 때만) | **`qwen3_xml` 상시** | OpenWebUI 가 `tool_choice="auto"` 를 항상 보낸다 |
 | 레플리카 | DP 8 (H100 fleet) | 단일 GPU | 1인 사용 |
 | GPU | sub1 H100 | main1 GPU3 (40GB A100 슬라이스) | 벤치와 자원 분리 |
 | `--max-num-seqs` | 기본 | 8 | 1인 사용. KV 여유는 충분하다(창의 10배) |
@@ -55,7 +56,7 @@ bash chat/smoke_chat.sh                                                 # 7항�
 python3 eval_sft/check_gates.py --base-url http://localhost:8001/v1     # G3 (G2 는 위 사유로 FAIL 정상)
 ```
 
-2026-08-31 iter600 실측: G1 PASS, smoke **7/7 PASS**.
+2026-08-31 iter600 실측: G1 PASS, smoke **9/9 PASS**, G3 PASS.
 
 ## 6. 종료
 
@@ -73,4 +74,17 @@ pkill -TERM -f "alpha_serve_venv/bin/vllm"      # GPU 메모리 회수 확인은
 | `.webui_secret_key` 가 리포에 생성 | 키를 안 주면 **현재 작업 디렉토리**에 떨군다 | 런처가 `DATA_DIR/secret_key` 를 만들어 `WEBUI_SECRET_KEY` 로 주입 |
 | `/api/models` 가 빈 배열 | 인증 세션 없이 호출 | 브라우저는 자동 로그인. CLI 확인은 `/api/v1/auths/signin` 토큰으로 |
 | 게이트가 404 | `check_gates.py` 가 모델명 `alpha` 를 하드코딩 | `--served-model-name` 에 별칭 `alpha` 추가 |
+| `"auto" tool choice requires --enable-auto-tool-choice and --tool-call-parser to be set` | OpenWebUI 는 도구를 안 쓰는 대화에도 `tool_choice="auto"` 를 보낸다. 파서가 없으면 vLLM 이 요청 자체를 거절한다 | `--enable-auto-tool-choice --tool-call-parser qwen3_xml` 상시 부착. **XML 계열이어야 한다** — 템플릿이 `<function=…>` XML 을 지시하는데 hermes 계열은 JSON 을 기대한다 |
 | `Using default MoE config ... E=192,N=512` | 192-expert 튜닝 설정 부재 + Backend.AI 가 GPU 이름을 `CUDA_GPU` 로 마스킹 | 정확성 무관, MoE 처리량만 손해. 1인 채팅에서는 무시 |
+
+## 8. 도구 호출 — 인프라는 정상, 모델은 아직 (iter600)
+
+파서 검증(벤치 게이트 A4 와 같은 취지)은 통과했다. `tool_choice="required"` 로 강제하면
+`name=get_weather, arguments={"city": "서울"}` 로 정확히 구조화된다.
+
+다만 **모델이 스스로 도구를 부르지는 않는다**. `tool_choice="auto"` 에서 서울 날씨를
+물으면 도구를 호출하는 대신 날씨를 **지어낸다**. `required` 로 강제하면 같은 호출을
+42번 반복하다 토큰 한도에 걸린다. 둘 다 SFT 24% 지점의 미성숙 신호이지 설정 문제가 아니다.
+
+판별법: 본문에 `<tool_call>`·`<function=` 원문이 새어 나오면 **파서 문제**,
+호출이 아예 없거나 반복되면 **모델 문제**다.
