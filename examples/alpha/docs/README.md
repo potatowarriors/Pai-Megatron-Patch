@@ -70,6 +70,12 @@
 | [../sdg/ko_chat/README.md](../sdg/ko_chat/README.md) | 한국어 SFT chat 합성 — 트랙A 번역+재생성 / 트랙B 네이티브, 교사 Gemma-4-31B + OxAlpha(무료), 무인 체인·게이트·GPU 창구·함정 (2026-08-23~) |
 | [../sdg/identity/README.md](../sdg/identity/README.md) | 정체성 SFT/RL 데이터 생성 (DataDesigner, identity_card 단일 진실 원천) (2026-08-07~10) |
 
+## chat/ (사람이 직접 대화 — docs 밖, 코드와 동거)
+
+| 문서 | 한 줄 |
+|---|---|
+| [../chat/README.md](../chat/README.md) | SFT ckpt 채팅 서빙 (vLLM :8001 + OpenWebUI :8080, main1 GPU3) — 벤치 fleet 과의 설정 차이·G2 의도적 FAIL 사유·접속 경로 (2026-08-31~) |
+
 ## 리포 루트 docs/
 
 | 문서 | 한 줄 |

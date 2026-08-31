@@ -3,7 +3,7 @@
 **규칙**: 세션 종료 시 자기 트랙의 행을 갱신하고 **커밋·push**한다. 상태는 여기에만 쓴다 — Claude auto-memory에 쓰지 않는다
 (메모리는 컨테이너·노드별이라 다른 세션이 못 본다). 날짜는 절대 표기. 끝난 트랙은 "완료" 절로 내리고 정본 링크만 남긴다.
 
-_마지막 갱신: 2026-08-30 21:50 (iter300 T1 첫 유효 측정 완료 — MMLU-Pro 47.0 / GPQA-D 32.0 / IFEval 65.6)_
+_마지막 갱신: 2026-08-31 20:05 (채팅 서빙 가동 — iter600, vLLM :8001 + OpenWebUI :8080)_
 
 ## 진행 중
 
@@ -12,6 +12,8 @@ _마지막 갱신: 2026-08-30 21:50 (iter300 T1 첫 유효 측정 완료 — MML
 | **SFT 준비** | 64k 21종 + 128k 6종 변환·`verify_sft_bins` 전 PASS. `sft_40b_blend.yaml`(SWE 1-pass 앵커 40B) + `sft_128k_blend.yaml`(5.54B). preset `sft_64k.yaml`(CP4+offload, DP2) / `sft_128k.yaml`(CP8). interleaved-thinking 규약 정비 완결(a2f8894), agentic_v2 미편입 확정. **effort/budget NVIDIA 레시피 재현 확정(사용자, 08-25)**: 변환기 `--medium-effort`·`--truncate-reasoning-budget` 구현, 테스트 34/34·34/34, 스모크 bins 게이트 PASS (`SFT_RL_DATASETS.md` §2.6) | ① LongBlocks 변환기(1.5% 슬롯) ② RULER ③ 본 런 — LC 완료 후 ckpt 경로만 채움. ④ ~~effort 재변환~~ 완료(08-25): 3종 변환·게이트 PASS·블렌드 반영(chat 21→20+budget 1, ep 2.67/1.19). **GBS 192/96 확정(사용자, 2026-08-28)** — 12.58M tok/iter 전 스테이지 상수 관례 복원(초기 GBS 64는 Ultra 샘플 수만 미러한 오류; Ultra SFT 실제 18.9M). ETA 불변: **64k 3,179 iters ≈ 9.7일 + 128k 441 iters ≈ 1.7일**. `sft_64k.yaml` load = LC-B iter320 정본 기입 완료. **단일 128k 혼합 버킷으로 확정(사용자, 2026-08-28)** — 투버킷(64k 40B + 128k 꼬리) 폐기. 실측: 128k·CP8+offload·GBS 96 실블렌드 200.1s/iter = 62.9k tok/s·260 TFLOP/s(64k·CP4 GBS64 실측 47.5k 대비 1.32× — 12.58M 배치에서 iter 고정비 희석), 혼합 패킹 fill 98.7~100%, max-alloc 55~59GB. 본 런 = `sft_128k_full.yaml` × `sft_128k_mixed_blend.yaml`(26멤버, 51.34B = **2,448 iters @ GBS 160 = 20.97M tok/iter**(사용자, Ultra 18.9M 스케일), SWE 9.61B 정확 1ep, 전 꼬리 epoch 비례 편입) ≈ **9.3일**(실측 329.7s/iter·63.6k tok/s; GBS 96 대비 +1% — 처리량 동일, 근거는 최적화 설계). 64k·CP4·GBS192 비교 실측 65.4k tok/s = CP8 과 동률(1.53× 는 GBS64 착시). LR = Ultra 비율 이식 2.5e-5→1.5e-6 cosine(warmup 115). load = LC-B iter320. **본 런 개시 2026-08-28 08:19 KST** (`outputs/alpha_baseline_48L_sft_128k_full_20260828_081911`, wandb online, save/eval 300 iters = 8회+종료). KoChat 2차 트랜치 반영 검증 완료(v2 MANIFEST cut=tranche2 누적, `_t2` 3종만 편입). ETA 2,448 iters × 329.7s ≈ 9.3일 → **~09-06**. 조기중단 가드: valid loss 300 iters 마다. 구 sft_64k/sft_128k 프리셋은 superseded 표기 보존. **1노드 학습 확정(사용자, 2026-08-25)** — 2-node 단축안 기각. 유휴 노드는 SFT 후 RL 환경 검증용(별도 워크스페이스, 아래 보류 표) | `INTERLEAVED_THINKING.md`, `SFT_RL_DATASETS.md`, `DATA_PREP_LOG.md` |
 
 | **SFT 벤치마크 (sub1)** | **첫 유효 측정 완료 (2026-08-30).** iter300 T1: MMLU-Pro **47.0**, GPQA-D **32.0**, IFEval **65.6** (전부 유효 — 추출실패 1.4~1.7%, 사고마감 57~91%). AIME 0.6 / HMMT 0.2 는 **무효** — 사고마감 16%/11% 로 32K 예산 안에 답에 도달 못함(모델 미성숙, 12% 지점). 구 하니스 대비 MMLU-Pro +10.1 / GPQA +8.8 — 구 수치는 하니스 결함을 재고 있었다(추출실패 34%→1.7%). 인프라: T1·T2 재작성 + 게이트 G1~G3·A1~A3 + `run_suite.sh` 오케스트레이터 + `bench_registry.py` 매핑 정본. GPU0 복귀(레플리카 8). **진행 중**: T3 SimpleQA·LogicKor. **대기**: 에이전틱(TOOLS=1 fleet 필요), T2 RULER(롱 fleet) | ① T3 완료 ② 에이전틱 ③ T2 RULER ④ iter600 재측정 | `SFT_BENCHMARKS.md` §3.6·§3.8·§3.9·§7, `results/TRACKING.md` |
+
+| **채팅 서빙 (main1 GPU3)** | **가동 중 (2026-08-31).** iter600 을 vLLM :8001(128K 창, KV 1.29M 토큰) + OpenWebUI :8080 으로 서빙. 검증: G1 PASS, `chat/smoke_chat.sh` 7/7 PASS, UI 경유 대화 확인. G2 는 reasoning 파서 때문에 설계상 FAIL(사유는 `chat/README.md` §3). 함정 6건 기록 (CUDA13 compat, open-webui 순환 import 로 마이그레이션 침묵 실패 등) | 새 ckpt 나오면 `chat/serve_chat.sh <ckpt>` 로 교체 | `examples/alpha/chat/README.md` |
 
 ## 보류·재평가 대기
 
