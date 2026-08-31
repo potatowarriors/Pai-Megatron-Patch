@@ -198,6 +198,49 @@ main1 SFT save → sub1 감시 → ① run_convert.sh(EP=8, ~30–40분)
 - 러너·오케스트레이터 코드: `examples/alpha/eval_sft/` (이 리포).
 - 베이스라인: 전 스위트를 **LC-B iter320 hfmodel**로 먼저 완주(하니스 검증 겸 기준점).
 
+## 3.3 대표 지표 — 프론티어 보고 관행 대조 (감사 2026-08-31)
+
+벤치마다 여러 지표가 나온다. **어느 것을 대표로 쓰느냐가 점수를 10~15pp 움직인다.**
+정본은 `eval_sft/bench_registry.py` 의 `HEADLINE`.
+
+| 벤치 | 대표 지표 | 프론티어 관행 | 판정 |
+|---|---|---|---|
+| MMLU-Pro | `exact_match` | accuracy / EM | ✅ 일치 |
+| GPQA-Diamond | `exact_match` (avg@8) | pass@1 평균 | ✅ 일치 |
+| AIME25 · HMMT | `exact_match` (avg@16) | pass@1[avg-of-k] | ✅ 일치 |
+| **IFEval** | **`prompt_level_strict_acc`** | prompt-level strict | ✅ **2026-08-31 교정** |
+| **RULER** | **구간 평균(64K·128K)** | 구간별 + Avg (Qwen3 카드) | ✅ **2026-08-31 교정** |
+| SimpleQA | `accuracy` (= correct/n) | % correct | ✅ 일치 (F-score 는 JSON 에 동봉) |
+| LogicKor | `overall/10` → 100분율 | 원래 /10 표기 | ⚠️ 표 통일 위한 환산 |
+| SWE-bench Verified | `% resolved` | % resolved | ✅ 일치 |
+| Terminal-Bench | `% resolved` | accuracy | ✅ 일치 |
+
+**교정 2건의 근거**:
+
+- **IFEval**: 4지표 중 `inst_level_loose_acc` 를 쓰고 있었다 — 가장 관대한 값이다.
+  iter600 기준 `inst_level_loose` 70.3 vs `prompt_level_strict` **55.6**, 차이 14.7pp.
+  프론티어 카드는 prompt-level strict 를 쓴다. 4지표 모두 결과 JSON 에 남으므로 정보
+  손실은 없다.
+- **RULER**: 131072 한 구간만 대표로 잡아 65536 신호를 버리고 있었다. Qwen3 카드처럼
+  구간 평균을 쓴다.
+
+### 남은 관행 이탈 — 반복 횟수
+
+| 벤치 | 우리 | Nemotron 3 Ultra | 비고 |
+|---|---:|---:|---|
+| MMLU-Pro | 1 | 1 | ✅ |
+| GPQA-D | 8 | 8 | ✅ |
+| IFEval | 8 | 8 (IFBench) | ✅ |
+| AIME · HMMT | 16 | — (R1 은 64) | ⚠️ 문항 30개라 분산 큼 |
+| **RULER** | **1** | base 스위트 1 | ✅ |
+| **SimpleQA** | **1** | Omniscience 10 | ⚠️ 1000 문항이라 표본은 큼 |
+| **LogicKor** | **1** | Multi-Challenge 8 | ⚠️ **42 문항 × 1회 — 분산 최대** |
+| **SWE-bench** | **1** | **3** | ⚠️ |
+| **Terminal-Bench** | **1** | **8** | ⚠️ |
+
+에이전틱 반복은 비용이 지배적이라(SWE 1회 = 약 59,500 LLM 호출) 당장 올리기 어렵다.
+**LogicKor 는 42문항 × 1회로 가장 취약하다** — 반복을 올리는 비용이 작으므로 우선 대상.
+
 ## 3.4 생성 세팅 — AA / Nemotron 3 Ultra 규약 (2026-08-30 재작성)
 
 조사 근거는 프론티어 1차 자료: DeepSeek-R1·Qwen3·Nemotron 모델 카드, NVIDIA

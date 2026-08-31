@@ -11,18 +11,25 @@ from __future__ import annotations
 
 # task -> (대표 지표명, 표시 이름)
 #   지표명은 `metric` 또는 `metric,filter` 중 metric 부분만 적는다 — 조회는 앞부분 일치.
-HEADLINE: dict[str, tuple[str, str]] = {
+#   여러 지표를 `("a","b")` 튜플로 주면 **평균**을 쓴다 (RULER 구간 평균 등).
+#
+# 대표 지표는 **프론티어 보고 관행**에 맞춘다 (2026-08-31 감사):
+#   - IFEval: `prompt_level_strict_acc` — 4지표 중 가장 엄격. 구 `inst_level_loose_acc`
+#     는 가장 관대해 점수를 10~15pp 높게 보이게 했다.
+#   - RULER: 구간 평균 (Qwen3 카드의 "Avg" 열과 같은 방식). 구 구현은 131072 한 구간만
+#     보아 65536 신호를 버렸다.
+HEADLINE: dict[str, tuple[str | tuple[str, ...], str]] = {
     # ── T1 코어 (AA/Nemotron 규약, 2026-08-30 재작성)
     "mmlu_pro_aa":            ("exact_match",          "mmlu_pro"),
     "gpqa_diamond_aa":        ("exact_match",          "gpqa_diamond"),
     "aime25_aa":              ("exact_match",          "aime25"),
     "hmmt_feb_2025_aa":       ("exact_match",          "hmmt_feb_2025"),
-    "ifeval_aa":              ("inst_level_loose_acc", "ifeval_inst_loose"),
+    "ifeval_aa":              ("prompt_level_strict_acc", "ifeval_prompt_strict"),
     # ── T2 롱컨텍스트 (Reasoning-Off)
-    "ruler_niah_single_1_aa":   ("131072", "ruler_single_1_128k"),
-    "ruler_niah_single_2_aa":   ("131072", "ruler_single_2_128k"),
-    "ruler_niah_multikey_1_aa": ("131072", "ruler_multikey_128k"),
-    "ruler_niah_multivalue_aa": ("131072", "ruler_multivalue_128k"),
+    "ruler_niah_single_1_aa":   (("65536", "131072"), "ruler_single_1_avg"),
+    "ruler_niah_single_2_aa":   (("65536", "131072"), "ruler_single_2_avg"),
+    "ruler_niah_multikey_1_aa": (("65536", "131072"), "ruler_multikey_avg"),
+    "ruler_niah_multivalue_aa": (("65536", "131072"), "ruler_multivalue_avg"),
     # ── T3 판정 (심판 러너가 직접 JSON 을 쓴다)
     "simpleqa_verified":      ("accuracy",     "simpleqa_verified"),
     "logickor":               ("score",        "logickor"),
@@ -59,12 +66,13 @@ def get(task_res: dict, metric: str) -> float | None:
 
 
 def headline(task: str, task_res: dict) -> float | None:
-    """대표 점수. 미등록 태스크는 첫 숫자 지표(진단 지표 제외)로 대체."""
+    """대표 점수. 튜플이면 지표들의 평균. 미등록 태스크는 첫 숫자 지표로 대체."""
     spec = HEADLINE.get(task)
     if spec:
-        v = get(task_res, spec[0])
-        if v is not None:
-            return v
+        want = spec[0] if isinstance(spec[0], tuple) else (spec[0],)
+        vals = [v for v in (get(task_res, m) for m in want) if v is not None and v >= 0]
+        if vals:
+            return sum(vals) / len(vals)
     for k, v in task_res.items():
         if (isinstance(v, (int, float)) and "stderr" not in k and k != "alias"
                 and k.split(",")[0] not in DIAGNOSTIC):

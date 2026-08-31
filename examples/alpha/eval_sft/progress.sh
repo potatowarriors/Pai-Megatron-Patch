@@ -23,9 +23,11 @@ echo "  백엔드 $c/8   프록시 $(curl -s -o /dev/null -w %{http_code} --max-
 
 echo "── lm_eval (T1/T2) ──────────────────────────"
 for L in /home/work/vidsearch/tools/bench_logs/t1_*.log /home/work/vidsearch/tools/bench_logs/t2_*.log \
-         /home/work/vidsearch/tools/bench_logs/iter*_full.log; do
+         /home/work/vidsearch/tools/bench_logs/iter*_full.log /home/work/vidsearch/tools/bench_logs/*_suite.log /home/work/vidsearch/tools/bench_logs/ruler_v3_*.log; do
   [ -f "$L" ] || continue
-  p=$(tr '\r' '\n' < "$L" 2>/dev/null | grep -oE "Requesting API: *[0-9]+%[^|]*\| *[0-9]+/[0-9]+" | tail -1)
+  # tqdm 진행바는 두 개의 '|' 사이에 블록 문자가 들어간다 — 단순 정규식은 걸린다.
+  # 카운터("13111/18904 [2:52:07<2:55:58")만 뽑는다.
+  p=$(tr '\r' '\n' < "$L" 2>/dev/null | grep -oE "[0-9]+/[0-9]+ \[[0-9:]+<[0-9:?]+" | tail -1)
   [ -n "$p" ] && echo "  $(basename "$L"): $p"
 done
 
