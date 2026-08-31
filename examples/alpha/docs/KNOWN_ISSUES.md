@@ -4,6 +4,26 @@
 CLAUDE.md의 "함정 표"는 이 문서의 한 줄 요약이며, 새 사고는 **여기에 서사를 쓰고 CLAUDE.md 표에는 한 줄만** 추가한다.
 날짜는 절대 표기. 두 스테이지 이상 지난 항목은 스테이지 경계에서 `archive/`로 이동.
 
+## Terminal-Bench 0/80 — terminus 는 잘린 응답에서 태스크를 버린다 (2026-08-31 ✅)
+
+- **증상**: iter300 Terminal-Bench 80/80 미해결. 실패 원인 `unknown_agent_error` 44건(55%),
+  `agent_timeout` 14건, `unset` 20건.
+- **원인**: `max_tokens=16384` 로 돌렸는데 추론 모델의 한 턴이 그것을 넘었다. terminus 는
+  `finish_reason == "length"` 를 받으면 `OutputLengthExceededError` 를 던지고 **태스크를
+  즉시 중단한다 — 재시도가 없다** (`terminal_bench/llms/lite_llm.py:175`).
+  mini-swe-agent 가 `RepeatedFormatError` 로 몇 번 더 시도하는 것과 다르다.
+  실제 로그: `Error running agent for task openssl-selfsigned-cert: Model openai/alpha hit
+  max_tokens limit.` 44건의 출력 토큰 중앙값이 **0** 이다 — 첫 턴에서 죽었다는 뜻.
+- **수정**: `max_tokens` 16384 → **32768** (`TERM_MAX_TOKENS` 로 조절). 컨테이너
+  `alpha_model_registry.json` 의 `max_output_tokens` 도 함께 올렸다 — litellm 이 이 값으로
+  판정한다.
+- **동반 결함**: 결과 파서가 `n_tasks`/`total` 을 찾았는데 terminal-bench 0.2.x 스키마는
+  최상위에 `n_resolved`/`n_unresolved`/`accuracy` 를 둔다. `total=0` 이 되어 정상 결과도
+  무효로 찍혔다. → `n_resolved + n_unresolved` 로 계산하고, `failure_mode` 분포를 결과 JSON 에
+  함께 남긴다(0점이 모델 실패인지 하니스 실패인지 가르는 신호).
+- **교훈**: 에이전틱 하니스마다 **잘린 응답의 처리 방식이 다르다.** SWE(mini-swe-agent)는
+  재시도하고 Terminal(terminus)은 버린다. 같은 `max_tokens` 로 둘을 돌리면 한쪽만 죽는다.
+
 ## 에이전틱(SWE·Terminal) 0점의 진짜 원인 3중 — 모델이 아니었다 (2026-08-30 ✅)
 
 2026-08-30 SWE 0/20 · Terminal 0/10 은 모델 실패가 아니라 **설정 결함 3건**의 합이었다.
