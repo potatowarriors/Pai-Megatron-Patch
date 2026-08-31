@@ -23,6 +23,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import re
 import subprocess
 import urllib.error
 import urllib.request
@@ -137,7 +138,13 @@ def gate_a2() -> tuple[bool, str]:
 
 
 def gate_a3(min_gb: int) -> tuple[bool, str]:
-    """태스크 이미지 pull 여유. swebench 5.x 는 인스턴스당 1~4GB 를 Docker Hub 에서 받는다."""
+    """태스크 이미지 pull 여유.
+
+    **회수 가능량을 함께 본다.** `df` 의 여유만 보면 실제보다 적게 보인다 — build cache 가
+    수십 GB 를 쥐고 있고 `docker builder prune` 으로 즉시 돌려받을 수 있기 때문이다
+    (2026-08-31 실측: 여유 589GB + 회수 가능 31.8GB).
+    sweb.eval 이미지(498개 479.7GB)는 회수 대상이 아니다 — 다음 실행에서 재사용된다.
+    """
     rc, out = _ssh("df -BG --output=avail /var/lib/docker | tail -1")
     if rc != 0:
         return False, f"디스크 조회 실패: {out[:160]}"
@@ -145,9 +152,26 @@ def gate_a3(min_gb: int) -> tuple[bool, str]:
         avail = int(out.strip().rstrip("G"))
     except ValueError:
         return False, f"디스크 파싱 실패: {out[:80]}"
-    if avail < min_gb:
-        return False, f"여유 {avail}GB < 요구 {min_gb}GB — 이미지 정리 필요 (docker image prune)"
-    return True, f"여유 {avail}GB (요구 {min_gb}GB)"
+
+    # 회수 가능량 (build cache) — 실패해도 게이트를 막지 않는다
+    rec = 0
+    rc2, out2 = _ssh("docker system df --format '{{.Type}}|{{.Reclaimable}}' 2>/dev/null")
+    if rc2 == 0:
+        for line in out2.splitlines():
+            if line.startswith("Build Cache"):
+                m = re.search(r"([\d.]+)\s*(GB|MB)", line)
+                if m:
+                    rec = int(float(m.group(1)) * (1 if m.group(2) == "GB" else 0.001))
+
+    total = avail + rec
+    extra = f" + 회수가능 {rec}GB" if rec else ""
+    if total < min_gb:
+        return False, (f"여유 {avail}GB{extra} < 요구 {min_gb}GB — "
+                       "정리: bash eval_sft/docker_gc.sh")
+    if avail < min_gb <= total:
+        return True, (f"여유 {avail}GB{extra} = {total}GB (요구 {min_gb}GB) — "
+                      "여유가 빠듯하다. bash eval_sft/docker_gc.sh 권장")
+    return True, f"여유 {avail}GB{extra} (요구 {min_gb}GB)"
 
 
 def main() -> int:

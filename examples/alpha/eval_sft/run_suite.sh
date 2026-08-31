@@ -85,6 +85,9 @@ if has agentic; then
     SKIP_GATES=1 BASE_URL="$BURL" bash "$HERE/run_swe.sh" "$RUN_TAG" "${SWE_N:-0}" "${SWE_W:-12}" || rc=1
     echo "[suite] === Terminal-Bench ==="
     SKIP_GATES=1 BASE_URL="$BURL" bash "$HERE/run_terminal.sh" "$RUN_TAG" "${TERM_N:-0}" "${TERM_W:-8}" || rc=1
+    # 에이전틱은 컨테이너 호스트에 build cache 를 수십 GB 남긴다. 매번 회수한다.
+    # (sweb.eval 태스크 이미지는 남긴다 — 다음 체크포인트에서 재사용)
+    bash "$HERE/docker_gc.sh" || echo "[suite] ⚠️ docker gc 실패 (비치명)"
   fi
 fi
 

@@ -537,6 +537,25 @@ Terminal 0/10 이 그 상태였다. 실행: `python3 eval_sft/check_agentic_gate
 
 에이전틱 fleet 는 **`--max-model-len 106496`** 로 띄운다(T1 의 40960 은 좁아 `ContextWindowExceededError` 가 난다). litellm 은 `alpha_model_registry.json` 의 `max_input_tokens` 로 초과를 판정하므로 서빙 창과 함께 올려야 한다. 러너는 `LITELLM_MODEL_REGISTRY_PATH` 를 export 한다 — 미등록 모델은 비용 계산에서 죽는다.
 
+### 컨테이너 디스크 — 무엇이 쌓이고 무엇을 지우나 (2026-08-31 실측)
+
+에이전틱을 돌리면 컨테이너 호스트 디스크가 준다. **누수는 아니다** — 실측에서 정지
+컨테이너 0개였고 mini-swe-agent 가 매 인스턴스 후 정리한다.
+
+| 항목 | 크기 | 처리 |
+|---|---:|---|
+| `sweb.eval` 태스크 이미지 498개 | **479.7 GB** | **남긴다.** SWE-bench Verified 인스턴스별 전용 이미지로 다음 체크포인트에서 재사용된다. 지우면 500 × 4.77GB 를 Docker Hub 에서 다시 받아야 하고 그 시간이 디스크보다 비싸다 |
+| build cache | 48 GB (회수가능 31.8) | **매 실행 후 회수** |
+| 미사용 볼륨 · 정지 컨테이너 · dangling 이미지 | 소량 | 회수 |
+| Terminal-Bench 태스크 이미지 | 0개 | 누적하지 않는다 — 태스크마다 빌드하고 정리한다 |
+
+**`bash eval_sft/docker_gc.sh`** 가 회수를 담당하고 `run_suite.sh` 의 에이전틱 단계가
+끝날 때 자동 호출된다. `--images` 를 주면 `sweb.eval` 까지 지우지만 재다운로드 비용을
+감수할 때만 쓴다.
+
+게이트 A3 은 `df` 여유에 **build cache 회수 가능량을 더해** 판정한다 — 여유만 보면
+실제보다 적게 보인다(실측: 여유 589GB + 회수가능 31.8GB).
+
 **부분 표본은 무효로 기록한다.** `run_swe.sh`/`run_terminal.sh` 에 N 을 주면 결과 JSON 에
 `subsampled=true` 와 `no_answer=1.0` 이 박혀 집계기가 `무효` 로 표시한다 — NVIDIA 재현
 문서의 *"Never report sub-sampled / limited runs"* 를 코드로 강제한 것이다. 기본은 전량
