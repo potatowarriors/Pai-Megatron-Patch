@@ -4,6 +4,50 @@
 CLAUDE.md의 "함정 표"는 이 문서의 한 줄 요약이며, 새 사고는 **여기에 서사를 쓰고 CLAUDE.md 표에는 한 줄만** 추가한다.
 날짜는 절대 표기. 두 스테이지 이상 지난 항목은 스테이지 경계에서 `archive/`로 이동.
 
+## 판정기·프롬프트가 침묵을 점수로 위장한 사고 2건 (2026-08-31 ✅)
+
+RULER 저점(35/10/5/0)과 SimpleQA 저점(1.2%)을 조사하다 찾았다. **둘 다 "작은 토큰 예산을
+받은 추론 모델은 침묵한다"는 같은 뿌리**다 — 우리 모델이 128토큰 RULER 에서 겪은 것과 같다.
+
+### ① RULER — `gen_prefix` 가 완결 메시지로 전송돼 생성이 0토큰
+
+- **증상**: single_1 35% / single_2 10% / multikey 5% / multivalue 0%.
+  **64K 점수가 128K 보다 낮은 역전** — 진짜 롱컨텍스트 열화면 반대여야 한다.
+- **원인**: lm_eval 의 `gen_prefix` 가 chat 경로에서
+  `{"role": "assistant", "content": "The special magic number ... is"}` 라는 **완결된
+  assistant 메시지**로 나간다. 완결된 턴이므로 모델은 이어쓰지 않고, 서버는 prefix 를
+  그대로 돌려준다. vLLM 에서 이어쓰려면 `continue_final_message` 가 필요한데 lm_eval 은
+  보내지 않는다.
+- **증거**: 160 샘플 중 **131건(82%)** 의 `resps` 가 `gen_prefix` 와 글자 그대로 동일.
+  35/10/5/0 은 측정이 아니라 나머지 18% 의 잡음이었다 (구간당 n=20).
+- **수정 (하니스 v3.0)**: `gen_prefix` 제거, T1 방식대로 프롬프트에 답 형식을 지시
+  ("Answer with only the special magic number(s), separated by commas. Do not explain.").
+  `no_answer` 게이트 추가 — 응답이 비었거나 프롬프트 꼬리를 반향하면 무효.
+- **LC-B 는 무관**: LC-B 자체 NIAH(4k~131k 200/200, 256K 95%)는 별개 하니스 측정이고
+  이 버그의 영향을 받지 않는다. 이 수치로 LC-B 실패를 주장할 수 없다.
+
+### ② SimpleQA — judge 가 8토큰을 받고 침묵, 그 침묵이 NOT_ATTEMPTED 로 흡수
+
+- **증상**: accuracy 1.2%, **not_attempted 761/1000 (76%)**.
+- **원인**: `run_simpleqa.py` 가 `judge_batch(..., max_tokens=8)` 을 넘겼다.
+  judge(`gemini-3.7-flash`)도 **추론 모델**이라 8토큰을 내부 사고에 다 쓰고 텍스트를
+  내놓지 않는다. 실측: **8토큰 → `''`, 64토큰 → `'A'`**.
+  그리고 `cls()` 가 빈 응답을 조용히 `NOT_ATTEMPTED` 로 매핑했다.
+- **재채점 (132건 표본, judge 정상화 후)**: 판정 실패 0건.
+  기존 NOT_ATTEMPTED 80건 → INCORRECT 64 / NOT_ATTEMPTED 16 / **CORRECT 0**.
+  → **accuracy 1.2% 는 유효**(정답 누락 없음). `attempted_rate` 23.9%→~85%,
+  `correct_given_attempted` 5.0%→~1.4% 로 왜곡돼 있었다.
+- **모델의 실제 행동은 회피가 아니라 환각**이다. 예: "1971년까지 승무원으로 일한
+  아이슬란드 前 총리" 에 실존하지 않는 "Einar Kárason (1910–1971), 1967~71 총리" 를
+  상세히 지어낸다.
+- **수정**: judge `max_tokens` 8→256. 빈 응답을 `JUDGE_FAIL` 로 분리해 등급으로 위장하지
+  않고, 그 비율을 `no_answer` 로 노출해 임계 초과 시 집계기가 자동 무효 처리.
+  `gemini_judge.MIN_OUTPUT_TOKENS=64` 하한을 강제 — 호출부가 작은 값을 넘겨도 막는다.
+
+- **교훈**: **침묵을 등급으로 매핑하지 말 것.** 측정 실패와 "모델이 못했다"는 다른 사건이다.
+  기본값(`.get(..., "NOT_ATTEMPTED")`, `empty=0`)이 실패를 정상으로 흡수하면 게이트가
+  통과시킨다 — 실제로 `summarize.py` 가 두 벤치 모두 "유효"로 찍었다.
+
 ## Terminal-Bench 0/80 — terminus 는 잘린 응답에서 태스크를 버린다 (2026-08-31 ✅)
 
 - **증상**: iter300 Terminal-Bench 80/80 미해결. 실패 원인 `unknown_agent_error` 44건(55%),

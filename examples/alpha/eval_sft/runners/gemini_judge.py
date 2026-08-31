@@ -24,9 +24,18 @@ def load_key(env_path: str | None = None) -> str:
     raise RuntimeError("GEMINI_API_KEY not found (env or examples/alpha/.env)")
 
 
+# judge 는 **추론 모델**이다(gemini-3.7-flash). 토큰 예산이 작으면 내부 사고에 전부
+# 소모하고 텍스트를 하나도 내놓지 않는다 — 2026-08-31 실측: 8토큰 → '', 64토큰 → 'A'.
+# 그 빈 응답이 호출부에서 등급으로 흡수되어 SimpleQA 1000건 중 761건이 NOT_ATTEMPTED 로
+# 잘못 찍혔다. 호출부가 작은 값을 넘겨도 여기서 바닥을 강제한다.
+MIN_OUTPUT_TOKENS = 64
+
+
 def judge_one(prompt: str, key: str, model: str = DEFAULT_MODEL,
               temperature: float = 0.0, max_tokens: int = 4000,
               retries: int = 4) -> str:
+    if max_tokens < MIN_OUTPUT_TOKENS:
+        max_tokens = MIN_OUTPUT_TOKENS
     body = json.dumps({
         "contents": [{"parts": [{"text": prompt}]}],
         "generationConfig": {"temperature": temperature, "maxOutputTokens": max_tokens},

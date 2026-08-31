@@ -112,6 +112,32 @@ def niah_multivalue(**k):
                   num_needle_v=4)
 
 
+# ---------------------------------------------------------------- 프롬프트
+
+ANSWER_INSTRUCTION = (
+    "\n\nAnswer with only the special magic number(s), separated by commas. "
+    "Do not explain."
+)
+
+
+def doc_to_text(doc: dict) -> str:
+    """RULER 질문 + 답 형식 지시.
+
+    **`gen_prefix` 를 쓰지 않는다.** lm_eval 의 `gen_prefix` 는 chat 경로에서
+    `{"role": "assistant", "content": "...is"}` 라는 **완결된 assistant 메시지**로
+    전송된다. 완결된 턴이므로 모델은 이어쓰지 않고, 서버는 그 prefix 를 그대로
+    돌려준다 — 생성 0토큰이다. vLLM 에서 이어쓰게 하려면 `continue_final_message`
+    가 필요한데 lm_eval 은 그것을 보내지 않는다.
+
+    2026-08-31 실측: RULER 160 샘플 중 **131건(82%)** 의 응답이 `gen_prefix` 와
+    글자 그대로 같았다. 35/10/5/0 점수는 측정이 아니라 잡음이었다.
+    (증상: 64K 점수가 128K 보다 낮은 역전 — 진짜 열화면 반대여야 한다.)
+
+    대신 T1 에서 검증된 방식을 쓴다 — 프롬프트로 답 형식을 지시한다.
+    """
+    return str(doc["input"]).rstrip() + ANSWER_INSTRUCTION
+
+
 # ---------------------------------------------------------------- 채점
 
 def _clean(text: str) -> str:
@@ -131,13 +157,20 @@ def process_results(doc: dict, results: list[str]) -> dict[str, float]:
     """
     metrics: dict[str, float] = {str(v): -1.0 for v in SEQ_LENGTHS}
 
-    pred = _clean(results[0] if results else "")
+    raw = results[0] if results else ""
+    pred = _clean(raw)
     refs = doc["outputs"]
     score = sum(1.0 for r in refs if str(r).lower() in pred.lower()) / max(len(refs), 1)
 
-    metrics[str(doc["max_length"])] = score
+    # 생성이 실제로 일어났는가. 응답이 비었거나 프롬프트 꼬리를 그대로 되돌려준 경우
+    # (구 gen_prefix 사고) 는 **측정 실패**이지 오답이 아니다. `no_answer` 로 보고해
+    # 집계기가 무효 판정하게 한다 (임계 10%).
+    tail = str(doc.get("gen_prefix") or "").strip()
+    no_gen = (not pred) or (tail and pred.strip() == tail)
+
+    metrics[str(doc["max_length"])] = 0.0 if no_gen else score
     metrics["gen_chars"] = float(len(pred))
-    metrics["empty"] = 1.0 if not pred else 0.0
+    metrics["no_answer"] = 1.0 if no_gen else 0.0
     return metrics
 
 
