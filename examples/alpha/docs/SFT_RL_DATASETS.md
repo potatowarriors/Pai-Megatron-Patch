@@ -164,6 +164,37 @@ alpha 는 NVIDIA 레시피를 재현한다 (사용자 결정 2026-08-25).
   전부 64k 수용, 128k 는 long-tail 6종 전용. `sft_smoke_64k.yaml` 이 구 `chat_v3_if` 를 가리키는 것도
   무해 (preset 스모크 전용 단일셋, 학습 블렌드 아님).
 
+### 2.7 128k 혼합 블렌드 실측 검증 (2026-09-01, phase-1 iter 1,045 시점)
+
+본 런 `data_path` = `sft_128k_mixed_blend.yaml` **26/26 일치**. 예산 2,448 iter × GBS 160 = 391,680 샘플 = 51.34B bin-tok.
+epoch = w × 51.34B / real_tokens(`data.stats.json`). 설계값(SWE 1-pass·chat 공통·budget 1%·대형 코퍼스 sub-1ep) 그대로 실현.
+
+| 멤버 | w | ep | trainable/real | 비고 |
+|---|---|---|---|---|
+| cp_v2 | 0.2367 | 0.45 | 97% | |
+| swe_v3_keepthink | 0.1873 | **1.00** | 29% | 앵커 |
+| science_v2 | 0.1159 | 0.40 | 96% | |
+| math_v4 | 0.1117 | 0.86 | 97% | |
+| chat_v3_chat | 0.0830 | 1.89 | 59% | 복원 잔여 11.8% (KNOWN_ISSUES 09-01 ③) |
+| opencode_v1 | 0.0427 | 0.31 | 17% | tool 결과 Python repr · reasoning 0% (〃 ①) |
+| chat_v3_if_fanout_me | 0.0385 | 1.89 | 66% | fan-out + effort |
+| arc_agi_v1_keepthink | 0.0340 | 0.20 | 59% | |
+| kochat_chat_t2 / kochat_if_fanout_me_t2 / kochat_b_fanout_t2 | 0.0247 / 0.0238 / 0.0012 | 1.89 | 37 / 70 / 62% | chat 공통 epoch |
+| math_proofs_v2 | 0.0216 | 0.28 | 95% | |
+| ml_* 9종 | 합 0.0575 | 1.00 | 86~99% | |
+| safety_v2 | 0.0085 | 4.31 | 81% | E_max 4~5 상단 |
+| budget_trunc_v1_if / _math | 0.0045 / 0.0042 | 1.19 | 59 / 95% | |
+| identity_v1 | 0.0043 | 15.4(×12 파일) = **원본 ≈180회** | 61% | 〃 ② |
+| cuda_v1 | 0.0001 | 0.31 | 57% | |
+
+드롭은 전부 설계된 사유: too_long(>128k: proofs 6,563·arc 1,555·swe 1,193), injection(chat 97·science 68),
+trunc_none(budget_if 8,987), null_content(chat 75,287). 게이트 `verify_sft_bins` PASS·fill 98.7~100%(커밋 4e12f2d).
+loss: train 1.051 → 0.716(iter 1,045), valid 0.657 → 0.617 → 0.599(300/600/900) 단조 감소.
+
+에이전틱 셋 형식 대조(표본 300행/파일): swe_v3 tool content **str 100%**·reasoning 66%(9,287/14,117) · arc_agi str 100%·
+reasoning 65% · **opencode list 100%·reasoning 0%**. 결함 3건의 서사는 `KNOWN_ISSUES.md`(2026-09-01), 수정 계획은
+`SFT_PHASE2_PLAN.md`.
+
 ## 3. RL 자산
 
 ### 3.1 훈련 블렌드 3종 (즉시 실행 가능한 레시피 — NeMo Gym 소비 포맷)

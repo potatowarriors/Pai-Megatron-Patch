@@ -4,6 +4,50 @@
 CLAUDE.md의 "함정 표"는 이 문서의 한 줄 요약이며, 새 사고는 **여기에 서사를 쓰고 CLAUDE.md 표에는 한 줄만** 추가한다.
 날짜는 절대 표기. 두 스테이지 이상 지난 항목은 스테이지 경계에서 `archive/`로 이동.
 
+## SFT 블렌드 실측 검증에서 나온 데이터 결함 3건 (2026-09-01 🔶 phase-2에서 수정)
+
+phase-1 본 런(`alpha_baseline_48L_sft_128k_full_20260828_081911`, iter 1,045/2,448 시점)의 블렌드를
+"본 런 인자 = yaml → 멤버별 epoch → 렌더 플래그 → 게이트 → loss" 순으로 검증하다 찾았다. 비율·epoch·플래그·
+게이트는 전부 설계대로였다(수치는 `SFT_RL_DATASETS.md` §2.7). 결함 셋은 **"렌더된 토큰열이 배포와 같은가"를 셋
+단위로 눈으로 본 적이 없다**는 한 뿌리에서 나왔다. 진행 중 런은 건드리지 않고 phase-2(`SFT_PHASE2_PLAN.md`)에서 고친다.
+
+### ① opencode_v1 의 tool 결과가 Python repr 로 렌더된다
+
+- **증상**: `Nemotron-SFT-OpenCode-v1` 6 서브셋 전부, tool 메시지 `content` 가 문자열이 아닌 **list**
+  (`[{'type':'tool-result','toolCallId':…,'toolName':…,'output':{'type':'text','value':'…'}}]`; 표본 12,359건 100%,
+  12,358건 1-item·1건 3-item, `output.value` 전부 str). 템플릿 `{{ message.content }}` 가 list 를 그대로 str() 하므로
+  `<tool_response>` 안에 Python repr 이 들어가고 값 안의 줄바꿈은 리터럴 `\n` 두 글자가 된다 — 파일 목록·diff·코드가
+  한 줄로 뭉개진다.
+- **대조**: swe_v3(앵커 18.7%)·arc_agi 는 tool content 100% str 평문. 배포 하네스(mini-swe-agent·terminus)도 평문.
+- **영향**: tool_response 는 비학습 스팬이라 틀린 정답은 아니지만, 블렌드 4.27%(0.31ep, 문맥 7.15B tok)가 배포에서
+  절대 안 나오는 봉투 형식으로 "tool 출력 읽기"를 가르친다. 덧붙여 이 셋은 assistant 16,270턴 표본 중 reasoning **0** —
+  전 스텝 `<think></think>` no-think 에이전틱인데, 에이전틱 벤치 러너(`run_swe.sh`/`run_terminal.sh`)는 thinking ON.
+- **왜 못 잡았나**: `verify_sft_bins` 는 EOD 오염·%16·리터럴 special-token 만 본다. 변환기 `normalize_row` 는 tool
+  content 타입을 검사하지 않는다(str 가정).
+- **대응(phase-2)**: `normalize_row` 에서 list → `"\n".join(item.output.value)` 평문화(미지 형식은 `bad_row` 드롭, 조용한
+  str() 금지) + 유닛 4종 + 렌더 육안 1건. 규칙 9 신설(`INTERLEAVED_THINKING.md` §7): 새 셋은 tool_response 렌더 1건을 본다.
+
+### ② identity_v1 실효 반복 ≈180회
+
+- **사실**: 원본 7,315행 ≈ 1.18M tok. bins≥100 확보용 ×12 복제 파일(87,780행·14.2M tok·114 bins) 사용. 가중치 0.4271%
+  → 소비 219M tok = ×12 파일 15.4ep = **원본 기준 ≈180회**. per-seq 평균(짧은 샘플 = 1표)이라 토큰당 가중도 크다.
+- **규칙 대조**: `DATA_PREP_LOG.md` 결정 #9 "비중 0.3~1.0% 상한"(0.43% ✔)·"identity 단독 반복 에폭 금지"(혼합 ✔)는
+  문자 그대로 충족. 그러나 비중 상한을 1.2M tok 셋에 적용하면 180회가 따라오고, 결정 #9 의 동기("무엇을 물어도
+  자기소개하는 과적합")가 바로 이것이다. 반복 횟수는 어디에도 계산돼 있지 않았다.
+- **징후 기록**: 없음(TRACKING·chat README 검색 0건). 채팅 fleet 프로브(정체성 무관 20문항 자기소개 혼입률)는 09-01 시점
+  fleet 다운으로 **미실행** — phase-2 게이트 G-P6 에 편입.
+- **대응(phase-2)**: 비중이 아니라 **반복 상한**으로 통제. 원본 기준 20회(≈23.6M tok, 0.046%) 제안, 프로브로 확정.
+
+### ③ chat_v3_chat 프롬프트 복원 잔여 11.8%
+
+- **사실**: `chat.with_prompts.jsonl` 637,663행 중 첫 user 가 null 인 75,287행(11.8%)이 `null_content` 드롭, 562,376행 사용.
+  출처별 미복원: WildChat-1M 58,977/221,621(26.6%) · lmsys-chat-1m 16,310/134,161(12.2%). lmarena·HelpSteer2 출처는 0.
+- **원인(가설)**: 복원은 `seed_prompt_sha256` 정확 일치. 공개 `allenai/WildChat-1M` 은 toxic 제외판(전량은 gated
+  `WildChat-1M-Full`), lmsys 도 일부 리댁션 → 해시 미매칭. 로컬 `prepare_chat_prompts_partial.py` 는 미매칭을 null 로 남기고
+  진행하는 변형이다.
+- **영향**: epoch 는 남은 행 기준이라 블렌드 비율 왜곡 없음. 드롭이 두 출처에 몰려 chat 다양성이 줄었고 문서 기록이 없었다.
+- **대응(phase-2)**: gated 원천 접근 시도 → 복원율 재측정 → 불가 시 88.2% 를 정본 수치로 기록하고 종결.
+
 ## 판정기·프롬프트가 침묵을 점수로 위장한 사고 2건 (2026-08-31 ✅)
 
 RULER 저점(35/10/5/0)과 SimpleQA 저점(1.2%)을 조사하다 찾았다. **둘 다 "작은 토큰 예산을

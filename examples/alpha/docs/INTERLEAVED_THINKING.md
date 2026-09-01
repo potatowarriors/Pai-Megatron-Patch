@@ -148,6 +148,10 @@ keepthink 렌더 + agentic 카테고리 5% 내부 재비례가 경로).
    생성분)은 항상 `--medium-effort` 로 변환. 같은 원본을 번역한 셋(ko_chat IF 트랙)도
    동일 적용. 절단-예산 셋은 `--truncate-reasoning-budget` 전용(두 플래그 배타).
    근거·RL 측 요건은 `SFT_RL_DATASETS.md` §2.6.
+9. **새 셋은 렌더 1건을 눈으로 본다 — 특히 `<tool_response>`.** 비율·epoch·게이트가 맞아도 토큰열이 배포와 다를 수
+   있다. tool content 가 str 이 아니면(list/dict) 템플릿이 str() 로 뭉개므로 `normalize_row` 에서 평문화하고,
+   `apply_chat_template` 출력에서 tool_response 한 건을 육안 확인해 stats 옆에 기록한다. 선례: opencode_v1 Python repr
+   렌더(`KNOWN_ISSUES.md` 2026-09-01 ①).
 
 ## 8. 검증 명령
 

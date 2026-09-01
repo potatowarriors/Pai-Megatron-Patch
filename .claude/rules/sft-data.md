@@ -7,7 +7,7 @@ paths:
 
 # SFT 데이터 작업 규칙 (Alpha)
 
-- **새 SFT 셋을 추가하기 전에 `examples/alpha/docs/INTERLEAVED_THINKING.md` §"새 SFT 셋 추가 시 규칙 8건"을 읽는다.**
+- **새 SFT 셋을 추가하기 전에 `examples/alpha/docs/INTERLEAVED_THINKING.md` §"새 SFT 셋 추가 시 규칙 9건"을 읽는다.**
   think-히스토리 규약(DSV4식 tool-시나리오 분기, IF fan-out, keepthink)은 거기가 정본이다.
 - 변환기는 `toolkits/sft_data_preprocessing/build_alpha_sft_idxmap.py`. 마스킹 규약의 정본은
   `examples/alpha/tools/verify_chat_template.py`(34 tests) — 둘이 어긋나면 verify 쪽이 맞다.
