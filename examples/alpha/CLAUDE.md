@@ -166,7 +166,7 @@ submodule `tests/unit_tests/test_step_batch_size_schedule.py`, `test_muon_optimi
 | 날짜 | 증상 | 원인 → 대응 |
 |---|---|---|
 | 09-01 | opencode_v1 tool 결과가 `<tool_response>` 안에 Python repr(`[{'type':'tool-result',…}]`, 줄바꿈 리터럴 `\n`)로 렌더 — 블렌드 4.3%, reasoning 0% | tool content 가 list 인데 템플릿이 str() → phase-2 에서 `normalize_row` 평문화 + 규칙 9(렌더 육안). `KNOWN_ISSUES` 09-01 ① |
-| 09-01 | identity_v1 원본 기준 ≈180회 반복 (0.43% 비중 × 1.2M tok 셋) | 결정 #9 는 비중 상한만 규정 → phase-2 에서 반복 상한(≈20회)으로 통제 + 자기소개 혼입 프로브. 〃 ② |
+| 09-01 | identity_v1 원본 기준 ≈180회 반복 (0.43% 비중 × 1.2M tok 셋) | 결정 #9 는 비중 상한만 규정. 집계는 bin 1표(`calculate_per_token_loss=False`)라 gradient 0.43% — 증폭 없음. phase-2: 카드 v1.2(제작자 개인 우선) 슬라이스 재생성 + identity_v2 0.6% 연속학습 + 프로브 2종. 〃 ② |
 | 09-01 | chat_v3_chat 75,287행(11.8%) null_content 드롭 — WildChat 26.6%·lmsys 12.2% 미복원 | 공개판 해시 미매칭(toxic 제외판 추정) → gated 원천 접근 시도, 불가 시 88.2% 정본 기록. 〃 ③ |
 | 08-30 | 에이전틱 SWE/Terminal 0점 — 모델 아님 | ① litellm 미등록 모델 비용계산 RuntimeError ② **tool-call 파서 불일치**(hermes=JSON vs 우리 모델=XML `<function=…>`) ③ preds.json↔.jsonl 경로. → `TOOL_PARSER=qwen3_xml`, 레지스트리 등록, 게이트 A4(파서가 실제로 파싱하는지) |
 | 08-30 | 벤치 태스크가 base 모델용 (GPQA strict 원리적 0점, MMLU-Pro 5-shot, avg@16이 실질 avg@1) | 내장 lm_eval 태스크를 채팅·추론 모델에 그대로 사용. → `tasks/*_aa.yaml` 재작성(0-shot·8단 폴백·take_first_k·사고 분리) |
