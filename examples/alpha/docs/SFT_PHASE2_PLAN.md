@@ -163,7 +163,12 @@ uv run merge_probe_slice.py --probe creator_individual --new-dir out_creator_v12
 uv run merge_probe_slice.py --probe creator_org        --new-dir out_creator_v12 --dataset-dir "$V2"
 ```
 
-## 10. iter 1200 데이터 교체 재개 (2026-09-01 사용자 결정 — phase-2 연속형 대체)
+## 10. iter 900 데이터 교체 재개 (2026-09-01 사용자 결정 — phase-2 연속형 대체; 처음 1200 안을 900 즉시 교체로 변경)
+
+> **2026-09-01 09:45 변경(사용자)**: iter_0001200 저장(20:14)을 기다리지 않고 **이미 저장된 iter_0000900 에서 즉시 교체**. 진행 중이던
+> iter 901~1083(≈183 iters, ≈16h)은 되돌리고, 그 대신 수정 데이터가 약 11시간 먼저 들어간다. 잔여 1,548 iters(32.47B tok), consumed 144,000.
+> 노출 재산: identity v1 ≈68회에서 중단 → identity_v2 0.43%×32.47B ≈ 140M tok ≈ 121회 · opencode repr 0.11ep + 정상 0.20ep = 0.31(원설계).
+> 아래 본문의 1200 수치는 최초 안의 기록이며, 실행은 900 기준이다.
 
 ### 10.1 왜 가능한가·왜 나은가
 

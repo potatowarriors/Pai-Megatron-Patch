@@ -1,4 +1,4 @@
-# SFT phase-1 **iter 1200 데이터 교체 재개** — 같은 런을 수정 블렌드로 속행 (docs/SFT_PHASE2_PLAN.md §10)
+# SFT phase-1 **데이터 교체 재개** — 같은 런을 수정 블렌드로 속행 (docs/SFT_PHASE2_PLAN.md §10). 실행: iter 900 ckpt (2026-09-01 사용자 결정, 처음 안 1200)
 #   bash train.sh baseline_48L sft_128k_full_swap sft_128k_mixed_blend_swap
 #
 # sft_128k_full.yaml(phase-1)과의 차이 — 이 2개만 다르다:
