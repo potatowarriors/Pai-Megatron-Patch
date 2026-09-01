@@ -106,5 +106,5 @@ wandb-project: alpha-posttraining
 # ── 재개 (자기 런 ckpt, optimizer state 승계 — finetune 플래그 없음) ──────────
 # LC-B 최종 ckpt iter 320 (STATUS.md 정본). --finetune 은 optimizer state 미로드.
 load: /home/work/vidsearch/repos/project_s/Pai-Megatron-Patch/examples/alpha/outputs/alpha_baseline_48L_sft_128k_full_20260828_081911/checkpoints
-# finetune 없음 — 재개(optimizer state·consumed_train_samples·LR 스케줄러 승계). LC-B resume 과 동일 (lc_b_resume.yaml)
-no-load-optim: true
+# finetune 없음 · no-load-optim/no-load-rng 없음 — 재개(optimizer state·LR 스케줄러·RNG·consumed 승계). LC-B resume 과 동일.
+#   [사고 2026-09-01] phase-1 preset 의 no-load-optim: true 가 남아 첫 기동에서 스케줄러가 0부터 재시작(LR 2.17e-7 = warmup 1스텝) → 제거 후 재기동.
