@@ -97,7 +97,9 @@ fi
 
 # ── T2 : 롱 fleet ─────────────────────────────────────────────────────
 if has t2; then
-  fleet_up 139264 0 || exit 1
+  # RULER 최장 구간 258048 → 서빙은 262144 (= max_position_embeddings, 초과 불가).
+  # 139264 로 두면 258K 프롬프트가 창을 넘어 전량 실패한다 (2026-09-01).
+  fleet_up "${T2_MAX_LEN:-262144}" 0 || exit 1
   gate_core || exit 1
   echo "[suite] === T2 RULER (Reasoning-Off) ==="
   bash "$HERE/run_tier2.sh" "$BURL" "$RUN_TAG" || rc=1
