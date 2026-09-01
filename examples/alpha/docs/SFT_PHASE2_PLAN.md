@@ -180,7 +180,7 @@ uv run merge_probe_slice.py --probe creator_org        --new-dir out_creator_v12
 | 파일 | 내용 | 상태 |
 |---|---|---|
 | `configs/training/sft_128k_full_swap.yaml` | phase-1 preset + `load`=자기 ckpt, **finetune 제거** | 커밋 cd4afda |
-| `configs/data/sft_128k_mixed_blend_swap.yaml` | `gen_phase2_blend.py --iters 1248 --map opencode_v1=opencode_fixed --drop identity_v1 --add identity_v2 --ep opencode_fixed=0.20 --share identity_v2=0.003 [--add chat_v3_chat_restored --ep …=1.9]` | identity_v2 bins 후 산출 |
+| `configs/data/sft_128k_mixed_blend_swap.yaml` | **phase-1 yaml 과 가중치 비트 동일, 경로 2개만 치환**(opencode_v1→opencode_fixed, identity_v1→identity_v2) — §10.4 순서 보존. 잔여 노출 opencode_fixed 0.16ep(누적 0.31 = 원설계)·identity_v2 0.43%(≈97회) | **커밋 f46b361** (재정규화 판 517ca30 은 §10.4 사유로 폐기) |
 | identity_v2 | 카드 1.2 creator 슬라이스 재생성(외부 gemma-4-12B-it) → v2 디렉터리 교체 → ×12 → 변환 | **완료** (§9 G-P2) |
 | chat_v3_chat_restored | `prepare_chat_prompts_full.py`(WildChat-1M-Full) 재복원 시도 | **제외 — 회수 불가**: lmsys 5,110 해시 공개판 부재, WildChat-Full 은 토큰 계정 미승인(403). 88.2% 정본 (`KNOWN_ISSUES` ③). 승인 후 후속 스테이지에서 편입 가능 |
 | 오케스트레이션 | tracker==1200 대기 → 블렌드·preset sanity(실패 시 학습 유지) → 중단 직전 loss 기록 → SIGTERM → GPU 해제 확인 → `train.sh … sft_128k_full_swap sft_128k_mixed_blend_swap` → 1201~1205 loss 출력 | **가동 중(08:35~, 백그라운드)** — 로그 `outputs/swap1200_<ts>.log`, sanity 는 중단 직전 재실행 |
@@ -194,3 +194,17 @@ uv run merge_probe_slice.py --probe creator_org        --new-dir out_creator_v12
 | 종료(2448) | `identity_probe.py` 제작자 ≥95%·누출 0, T1 ±1pp, 에이전틱 ≥ iter1200 기준선. 미달 시 §1~§2 보정 스테이지 |
 
 주의: valid split 이 블렌드와 함께 바뀌어 valid loss 는 1200 에서 불연속(비교는 train loss). 출력 디렉터리·wandb 런은 `…_sft_128k_full_swap_<ts>` 로 분리 — STATUS 에 계보 기록.
+
+### 10.4 순서 보존 원칙 — 가중치를 바꾸지 않는다 (2026-09-01, 사용자 질문으로 발견)
+
+| 사실 (Megatron-LM-251125) | 근거 |
+|---|---|
+| 재개 시 샘플러는 `range(consumed_samples, total)` 로 **인덱스만** 이어 간다 (`dataloader_type=single`, 무작위 없음) | `legacy/data/data_samplers.py:119` |
+| 블렌드 인덱스(어느 샘플이 어느 셋인가)는 **가중치·총량만**의 함수 | `helpers.build_blending_indices(…, weights, num_datasets, size)` |
+| 각 셋의 셔플 순열은 (요청 샘플 수 = 가중치×총량, seed 1234)의 함수 | `gpt_dataset.py:420 RandomState(random_seed)` |
+
+따라서 **가중치가 phase-1 과 비트 단위로 같으면** 24 미변경 셋의 순열이 그대로 재생성되고, 192,000번부터 읽는 것이 진짜 연속이다
+(경계 중복·누락 0). 반대로 재정규화한 첫 swap yaml(517ca30)은 새 순열을 만들어 앞 1200 iters 와 무관한 샘플을 뽑는다 — 예컨대
+SWE 1.00ep 앵커는 첫 0.49ep(무작위 49%)와 새 순열의 0.51ep 가 독립이라 기대상 **≈25% 문서가 2회, ≈25% 가 0회**로 깨진다.
+교체 멤버 2개는 전임자의 가중치(자리)를 승계하고 내부 순열만 새로 만든다(내용이 새것이라 무해). 대가: opencode 부스트(0.20→0.16ep)와
+identity 감량(0.3%→0.43%) 포기 — 순서 보존이 우선. 캐시는 `.cache/sft_128k_mixed_blend` 를 `_swap` 으로 복사해 미변경 셋 해시 재사용.

@@ -5,8 +5,8 @@
 #   - load: phase-1 자기 런의 ckpt(iter 1200, optimizer state 동봉). **finetune 없음** → Muon momentum·
 #     consumed_train_samples(192,000)·LR 스케줄러 전부 승계, 남은 1,248 iters 를 cosine 그대로 이어감
 #     (Megatron 251125 check_checkpoint_args 는 data_path 를 비교하지 않는다 — 블렌드 교체 허용, LC-B resume 선례).
-#   - 데이터: sft_128k_mixed_blend_swap.yaml — phase-1 블렌드에서 opencode_v1→opencode_fixed(정상 형식, 잔여 0.20ep),
-#     identity_v1→identity_v2(카드 1.2, 0.3%), (+chat_v3_chat_restored 복원분 조건부). 나머지 24셋 가중치 동일 → 누적 epoch 설계값 유지.
+#   - 데이터: sft_128k_mixed_blend_swap.yaml — phase-1 yaml 과 **가중치 비트 동일**, 경로 2개만 치환(opencode_v1→opencode_fixed,
+#     identity_v1→identity_v2). 가중치가 같아야 24 미변경 셋의 셔플 순열이 재생성돼 192,000번부터가 진짜 연속(중복·누락 0) — 계획서 §10.4.
 # 예산·LR·CP·GBS·save/eval(300) 등 나머지 키는 phase-1 과 동일(변인 통제). valid split 은 블렌드와 함께 바뀌므로
 #   valid loss 는 1200 에서 불연속 — 비교는 train loss. 재개 게이트: 첫 5 iters train loss 가 1200 시점 ±0.05, traceback 0.
 # 근거: KNOWN_ISSUES.md 2026-09-01(결함 3건·심각성), 사용자 결정 2026-09-01(1200 교체).
