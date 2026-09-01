@@ -8,7 +8,11 @@
 #   - **반복 8회** (TERM_REPEATS). 80 태스크뿐이라 단일 실행은 분산이 크다.
 #     Nemotron 3 Ultra 도 Terminal-bench num_repeats=8, AA 는 3.
 #   - 투입 전 A1~A4 게이트 통과 필수.
-#   - **max_tokens 는 넉넉해야 한다** (기본 32768, TERM_MAX_TOKENS 로 조절).
+#   - **max_tokens 는 넉넉해야 한다** (기본 65536, TERM_MAX_TOKENS 로 조절).
+#     terminus 는 응답을 4필드 JSON(CommandBatchResponse: state_analysis / explanation /
+#     commands / is_task_complete)으로 요구한다. 장문 사고 뒤에 그 JSON 을 내야 하는데
+#     32768 로도 부족했다 — 2026-09-01 실측: iter600 unknown_agent_error 291/640(45%),
+#     그 중 181건의 출력 토큰 중앙값이 0(첫 턴에서 사망). iter300 도 동일(180회).
 #     terminus 는 finish_reason == "length" 를 받으면 OutputLengthExceededError 를 던지고
 #     **태스크를 즉시 중단한다** — 재시도가 없다 (lite_llm.py:175). mini-swe-agent 가
 #     RepeatedFormatError 로 몇 번 더 시도하는 것과 다르다.
@@ -50,7 +54,7 @@ ssh -F "$SSHC" -o BatchMode=yes alpha-eval "
   cd /opt/terminalbench
   ./venv/bin/tb run --agent terminus --model openai/alpha \
     -k api_base=http://localhost:8199/v1 -k temperature=1.0 -k top_p=0.95 \
-    -k max_tokens=${TERM_MAX_TOKENS:-32768} \
+    -k max_tokens=${TERM_MAX_TOKENS:-65536} \
     --dataset terminal-bench-core==0.1.1 $NTASKS --n-concurrent $W \
     --n-attempts ${TERM_REPEATS:-8} \
     --run-id $RID --output-path /opt/terminalbench/runs 2>&1 | tail -14

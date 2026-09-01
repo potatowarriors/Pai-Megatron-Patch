@@ -26,10 +26,10 @@ HEADLINE: dict[str, tuple[str | tuple[str, ...], str]] = {
     "hmmt_feb_2025_aa":       ("exact_match",          "hmmt_feb_2025"),
     "ifeval_aa":              ("prompt_level_strict_acc", "ifeval_prompt_strict"),
     # ── T2 롱컨텍스트 (Reasoning-Off)
-    "ruler_niah_single_1_aa":   (("65536", "131072"), "ruler_single_1_avg"),
-    "ruler_niah_single_2_aa":   (("65536", "131072"), "ruler_single_2_avg"),
-    "ruler_niah_multikey_1_aa": (("65536", "131072"), "ruler_multikey_avg"),
-    "ruler_niah_multivalue_aa": (("65536", "131072"), "ruler_multivalue_avg"),
+    "ruler_niah_single_1_aa":   (("65536", "131072", "262144"), "ruler_single_1_avg"),
+    "ruler_niah_single_2_aa":   (("65536", "131072", "262144"), "ruler_single_2_avg"),
+    "ruler_niah_multikey_1_aa": (("65536", "131072", "262144"), "ruler_multikey_avg"),
+    "ruler_niah_multivalue_aa": (("65536", "131072", "262144"), "ruler_multivalue_avg"),
     # ── T3 판정 (심판 러너가 직접 JSON 을 쓴다)
     "simpleqa_verified":      ("accuracy",     "simpleqa_verified"),
     "logickor":               ("score",        "logickor"),

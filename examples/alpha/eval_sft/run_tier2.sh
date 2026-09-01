@@ -5,8 +5,8 @@
 # 설정은 태스크 yaml 이 정본(`tasks/ruler_niah_*_aa.yaml`): temp 0.00001 / top_p 0.99 /
 # max_gen 512 / chat_template_kwargs.enable_thinking=false. 러너는 덮어쓰지 않는다.
 #
-# **롱 fleet 전제**: 131072 구간 프롬프트가 들어가므로 서빙 --max-model-len ≥ 131072+여유.
-#   bash eval_sft/serve_fleet.sh <ckpt> 139264 <N> <PROXY_PORT>
+# **롱 fleet 전제**: 131072 구간 프롬프트가 들어가므로 서빙 --max-model-len ≥ 262144+여유 (270336).
+#   bash eval_sft/serve_fleet.sh <ckpt> 270336 <N> <PROXY_PORT>
 # 표준 fleet(40960)로 돌리면 프롬프트가 창을 넘어 전량 실패한다.
 #
 # 사용: bash eval_sft/run_tier2.sh <BASE_URL> <RUN_NAME> [LIMIT]
@@ -20,7 +20,7 @@ export HF_TOKEN=$(grep -E '^HF_TOKEN=' "$HERE/../.env" 2>/dev/null | cut -d= -f2
 
 TASKS="${TASKS:-ruler_niah_single_1_aa,ruler_niah_single_2_aa,ruler_niah_multikey_1_aa,ruler_niah_multivalue_aa}"
 CONC="${CONC:-8}"          # 요청당 131K prefill — 동시성을 낮게
-MAXLEN="${MAXLEN:-139264}"
+MAXLEN="${MAXLEN:-270336}"
 LIM=""; [ -n "$LIMIT" ] && LIM="--limit $LIMIT"
 
 echo "[T2] tasks=$TASKS (Reasoning-Off)"

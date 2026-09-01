@@ -56,7 +56,7 @@ ssh -F "$SSHC" -o BatchMode=yes alpha-eval "
     -c model.model_kwargs.api_base=http://localhost:8199/v1 \
     -c model.model_kwargs.temperature=1.0 \
     -c model.model_kwargs.top_p=0.95 \
-    -c model.model_kwargs.max_tokens=16384 \
+    -c model.model_kwargs.max_tokens=${SWE_MAX_TOKENS:-32768} \
     -o /opt/swebench/preds_${RUN_NAME} 2>&1 | tail -8
 "
 echo "[swe] 채점 (swebench eval)"

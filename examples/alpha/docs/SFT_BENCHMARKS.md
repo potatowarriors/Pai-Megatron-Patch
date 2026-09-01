@@ -258,6 +258,49 @@ the test set size**)"* — **k 는 데이터셋 크기에 반비례한다.** 작
 **변경 이력**: AIME·HMMT 16→32, LogicKor 1→8, Terminal-Bench 1→8 (2026-08-31).
 SWE-bench 는 1 을 **유지**한다 — 리더보드 규약이 그렇다.
 
+## 3.35 추론 길이 — 구조적 상한과 실측 창 (2026-09-01)
+
+세 축을 구분한다. 흔히 혼동된다.
+
+| 축 | 값 | 성격 |
+|---|---|---|
+| 학습 시퀀스 길이 | 128K | LC-B CPT · SFT 가 지불한 비용 |
+| `max_position_embeddings` | **262,144** | 구조적 상한 (RoPE θ=10M, partial 0.25) |
+| **실측 유효 창** | **~256K** | `study/lc_b_final_eval.md` §2 |
+
+**128K 로 학습해 256K 를 쓸 수 있다.** LC-B iter320 실측: 196,608 에서 100%,
+**262,144 에서 95%**, 393,216 에서 0%. 같은 RoPE 설정의 LC-A(32K 학습)는 262,144 에서
+42.5% 로 붕괴했다 — **학습 길이를 늘린 것이 외삽 여유를 만들었다.**
+
+### KV 캐시가 싸다 — 하이브리드 구조의 직접 이득
+
+`full_attention_interval: 4` → 24층 중 **6층만 full attention**. 나머지 18층은
+GatedDeltaNet 으로 KV 를 쓰지 않는다(고정 크기 state).
+
+토큰당 KV = 6층 × 2(K,V) × 2 kv-head × 256 dim × 2B = **12 KB**
+(같은 크기 순수 attention 모델이면 48 KB — 4배)
+
+| model_len | KV/시퀀스 | fleet(8 레플리카) 동시 시퀀스 |
+|---:|---:|---:|
+| 131,072 | 1.50 GB | 232 |
+| **262,144** | **3.00 GB** | **112** |
+
+**즉 256K 서빙은 메모리 문제가 아니다.** 에이전틱의 병목은 창이 아니라 **턴당 출력 예산**이었다.
+
+### 서빙 설정 (2026-09-01 갱신)
+
+| 단계 | `--max-model-len` | 턴당 `max_tokens` |
+|---|---:|---:|
+| T1 · T3 | 40,960 | 32,768 |
+| **에이전틱** | **262,144** | SWE 32,768 · **Terminal 65,536** |
+| **T2 RULER** | **270,336** | 512 (Reasoning-Off) |
+
+Terminal 이 65,536 인 이유: terminus 는 응답을 4필드 JSON
+(`CommandBatchResponse`: state_analysis / explanation / commands / is_task_complete)으로
+요구하고, **잘린 응답에서 재시도 없이 태스크를 버린다**. 장문 사고 뒤에 그 JSON 을 내야
+하는데 32,768 로도 부족했다 — 2026-09-01 실측: `unknown_agent_error` 291/640(45%),
+그 중 181건의 출력 토큰 중앙값이 **0**(첫 턴 사망). iter300 도 동일(180회).
+
 ## 3.4 생성 세팅 — AA / Nemotron 3 Ultra 규약 (2026-08-30 재작성)
 
 조사 근거는 프론티어 1차 자료: DeepSeek-R1·Qwen3·Nemotron 모델 카드, NVIDIA

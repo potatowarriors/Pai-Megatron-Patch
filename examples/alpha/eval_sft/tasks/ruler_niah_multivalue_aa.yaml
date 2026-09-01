@@ -21,6 +21,9 @@ metric_list:
   - metric: "131072"
     aggregation: !function ruler_utils.aggregate_metrics
     higher_is_better: true
+  - metric: "262144"
+    aggregation: !function ruler_utils.aggregate_metrics
+    higher_is_better: true
   - metric: gen_chars
     aggregation: mean
     higher_is_better: false
@@ -39,7 +42,7 @@ generation_kwargs:
     enable_thinking: false   # ← RULER 재설계의 핵심
 repeats: 1
 metadata:
-  version: 3.0
-  max_seq_lengths: [65536, 131072]
+  version: 4.0
+  max_seq_lengths: [65536, 131072, 262144]
   tokenizer: "/home/work/vidsearch/repos/project_s/Pai-Megatron-Patch/examples/alpha/tokenizer_v5"
   num_samples: 20
