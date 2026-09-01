@@ -307,13 +307,21 @@ GatedDeltaNet 으로 KV 를 쓰지 않는다(고정 크기 state).
 
 **즉 256K 서빙은 메모리 문제가 아니다.** 에이전틱의 병목은 창이 아니라 **턴당 출력 예산**이었다.
 
+**262,144 를 초과할 수 없다.** vLLM 은 `max_model_len > max_position_embeddings` 를
+거부한다 — 2026-09-01 실측 오류: *"User-specified max_model_len (270336) is greater than
+the derived max_model_len (max_position_embeddings=262144)"*. 따라서 프롬프트 + 생성이
+262,144 안에 들어가야 하고, RULER 최장 구간은 **258,048** (= 262,144 − 4,096)으로 잡는다.
+
+실측 KV 용량 (262,144 서빙, H100 80GB 1장): **GPU KV cache 3,200,318 토큰**,
+262,144 토큰 요청 기준 **동시 12.21 시퀀스** — 계산치(14)와 일치한다.
+
 ### 서빙 설정 (2026-09-01 갱신)
 
 | 단계 | `--max-model-len` | 턴당 `max_tokens` |
 |---|---:|---:|
 | T1 · T3 | 40,960 | 32,768 |
 | **에이전틱** | **262,144** | SWE 32,768 · **Terminal 65,536** |
-| **T2 RULER** | **270,336** | 512 (Reasoning-Off) |
+| **T2 RULER** | **262,144** | 512 (Reasoning-Off) |
 
 Terminal 이 65,536 인 이유: terminus 는 응답을 4필드 JSON
 (`CommandBatchResponse`: state_analysis / explanation / commands / is_task_complete)으로
