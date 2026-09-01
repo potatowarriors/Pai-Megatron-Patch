@@ -1,4 +1,4 @@
-# SFT phase-2 계획 — 연속 학습으로 데이터 결함 3건 수정 + 제작자 귀속 정책 변경
+# SFT phase-2 계획 — 데이터 결함 3건 수정 + 제작자 귀속 정책 변경 (→ §10 iter 1200 교체 재개로 전환)
 
 **작성 2026-09-01, 연속형 확정 2026-09-01(사용자).** phase-1(`alpha_baseline_48L_sft_128k_full_20260828_081911`,
 2,448 iters, ~09-06 종료)의 최종 체크포인트에서 **500~600 iters 연속 학습**한다. 결함 3건(`KNOWN_ISSUES.md` 2026-09-01)의
@@ -6,6 +6,9 @@
 검증 수치는 `SFT_RL_DATASETS.md` §2.7, 여기는 **설계·스펙·게이트·일정**만 쓴다.
 
 ## 0. 결론
+
+> **2026-09-01 전환(사용자)**: phase-1 종료 후 연속 학습(§1~§2) 대신 **phase-1 iter 1200 에서 수정 블렌드로 재개**한다(§10).
+> 추가 GPU 시간 0, 미변경 셋 누적 epoch 설계값 유지, identity 덮어쓰기 신호 ≈3배. §1~§2 는 프로브 미달 시의 보정 스테이지 안으로 남긴다.
 
 - **방식**: phase-1 블렌드를 그대로 리플레이(≈80%)하고, 그 위에 수정분 3종(opencode 정상 형식 · 복원 chat · identity v2)을
   **별도 멤버로 얹은 단일 블렌드**. Megatron BlendedDataset 이 매 배치를 가중치대로 뽑으므로 모든 스텝이 리플레이+수정분을
@@ -159,3 +162,35 @@ cp -r /home/work/Datasets/LL_datasets/posttraining/SFT/alpha-SFT-Identity-v1 "$V
 uv run merge_probe_slice.py --probe creator_individual --new-dir out_creator_v12 --dataset-dir "$V2"
 uv run merge_probe_slice.py --probe creator_org        --new-dir out_creator_v12 --dataset-dir "$V2"
 ```
+
+## 10. iter 1200 데이터 교체 재개 (2026-09-01 사용자 결정 — phase-2 연속형 대체)
+
+### 10.1 왜 가능한가·왜 나은가
+
+| 항목 | 사실 |
+|---|---|
+| 재개 시 블렌드 교체 | Megatron 251125 `check_checkpoint_args` 는 num_layers·hidden·heads·TP/PP·tokenizer 만 비교 — **data_path 미비교**. `consumed_train_samples`(192,000) 복원 → 새 블렌드 인덱스 192,000번부터 소비, 샘플 기반 LR 스케줄 승계(1200 시점 ≈1.6e-5 → 1.5e-6) |
+| 선례 | LC-B resume(`lc_b_resume.yaml`): 자기 ckpt optimizer state 로드, finetune 없음 |
+| 체크포인트 | optimizer 동봉 save 300 iters 마다. **iter_0001200 ≈ 09-01 20:14**(로그 시계) |
+| 효과 | 추가 GPU 0(총 2,448 iters 그대로, ~09-06 종료). opencode repr 노출 0.31→0.15ep + 정상 0.20ep. identity v1 180→91회에서 중단, v2 0.3%×26.2B ≈ 66회를 **1,248 iters × LR 1.6e-5→1.5e-6** 에 — phase-2(550 iters ≤1e-5)의 ≈3배 신호 |
+| 누적 epoch | 미변경 24셋은 phase-1 가중치 유지 → SWE 1.00·chat 1.88·cp 0.45·math 0.86·safety 4.29 = 설계값 |
+
+### 10.2 산출물
+
+| 파일 | 내용 | 상태 |
+|---|---|---|
+| `configs/training/sft_128k_full_swap.yaml` | phase-1 preset + `load`=자기 ckpt, **finetune 제거** | 커밋 cd4afda |
+| `configs/data/sft_128k_mixed_blend_swap.yaml` | `gen_phase2_blend.py --iters 1248 --map opencode_v1=opencode_fixed --drop identity_v1 --add identity_v2 --ep opencode_fixed=0.20 --share identity_v2=0.003 [--add chat_v3_chat_restored --ep …=1.9]` | identity_v2 bins 후 산출 |
+| identity_v2 | 카드 1.2 creator 슬라이스 재생성(외부 gemma-4-12B-it) → v2 디렉터리 교체 → ×12 → 변환 | 체인 진행 중 |
+| chat_v3_chat_restored | `prepare_chat_prompts_full.py`(WildChat-1M-Full, `.env` HF_TOKEN) 로 재복원 → 회수분만 별도 셋 | 복원 진행 중 (08:23~). 20:00 까지 안 되면 제외 |
+| 오케스트레이션 | tracker==1200 대기 → 블렌드·preset sanity(실패 시 학습 유지) → 중단 직전 loss 기록 → SIGTERM → GPU 해제 확인 → `train.sh … sft_128k_full_swap sft_128k_mixed_blend_swap` → 1201~1205 loss 출력 | 스크립트 준비, 가동은 블렌드 확정 후 |
+
+### 10.3 게이트
+
+| 게이트 | 기준 |
+|---|---|
+| 데이터 | identity_v2·(chat_restored) `verify_sft_bins` PASS, 렌더 육안(규칙 9), 블렌드 합 1.0·전 경로 idx 존재 |
+| 재개 | 1201~1205 train loss ∈ 1200 시점 ±0.05, LR 연속(≈1.6e-5), traceback 0. 실패 시 구블렌드로 재개(손실 수 분) |
+| 종료(2448) | `identity_probe.py` 제작자 ≥95%·누출 0, T1 ±1pp, 에이전틱 ≥ iter1200 기준선. 미달 시 §1~§2 보정 스테이지 |
+
+주의: valid split 이 블렌드와 함께 바뀌어 valid loss 는 1200 에서 불연속(비교는 train loss). 출력 디렉터리·wandb 런은 `…_sft_128k_full_swap_<ts>` 로 분리 — STATUS 에 계보 기록.
