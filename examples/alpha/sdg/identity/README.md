@@ -143,15 +143,15 @@ uv run merge_probe_slice.py --probe creator_individual --new-dir out_slice
 
 #### 2026-09-01 카드 1.2 — 제작자 개인 우선 (SFT phase-2)
 
-사용자 결정: "누가 만들었어" → **이동호 명시**, 조직명은 뒤에, 회피 금지. 카드 1.1 의 조직 우선·모호 질문 조직만 정책은
+사용자 결정: "누가 만들었어" → 한 문장으로 조직·팀 소속을 앞세워 **이동호 명시**("저를 만든 사람은 CJ주식회사 AI/DT추진실 영상콘텐츠담당 이동호입니다."), 회피 금지. 카드 1.1 의 조직 우선·모호 질문 조직만 정책은
 phase-1 에서 ≈180회 학습됐으므로(`docs/KNOWN_ISSUES.md` 2026-09-01 ②) creator 두 슬라이스를 재생성해 phase-2 로 덮어쓴다.
 
 | 변경 | 내용 |
 |---|---|
-| `creator.tiers` | tier-2 = `individual_then_organization`, "누가 만들었어/개발했어"류 전부 tier-2 |
-| `organization_precedes_individual` | false |
+| `creator.tiers` | tier-2 = `affiliation_then_person`, "누가 만들었어/개발했어"류 전부 tier-2 |
+| `organization_precedes_individual` | true — 소속 → 이름 한 문장 (`affiliation_precedes_name`, ko/ja/zh 어순 게이트) |
 | `individual_mention_mix` | lead_only 0.5 / all_members 0.5 → 시드 컬럼 `creator_mention`(`prepare_seed.py`), export 메타에 기록 |
-| 검증 규칙 9 (`identity_sdg.py`) | creator_individual: 리드 이름 필수·조직 필수·조직 후행·mention 정합. 탈락 사유 `creator_missing_lead` / `creator_missing_org` / `org_precedes_individual` / `member_in_lead_only` / `member_missing_in_all_members` |
+| 검증 규칙 9 (`identity_sdg.py`) | creator_individual: 리드 이름 필수·조직 필수·(ko/ja/zh) 소속 → 이름 어순·mention 정합. 탈락 사유 `creator_missing_lead` / `creator_missing_org` / `name_precedes_affiliation` / `member_in_lead_only` / `member_missing_in_all_members` |
 | `share_of_identity_rows` | 0.20 (phase-2 한정, 상시 0.08) |
 
 ```bash

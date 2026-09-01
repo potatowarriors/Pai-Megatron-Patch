@@ -97,8 +97,9 @@ def audit(rows: list[dict], card: dict) -> Counter:
                 problems["creator_missing_lead"] += 1
             if org_pos < 0:
                 problems["creator_missing_org"] += 1
-            if lead_pos >= 0 and org_pos >= 0 and org_pos < lead_pos:
-                problems["org_precedes_individual"] += 1
+            lang = meta.get("language")
+            if lang in ("ko", "ja", "zh") and lead_pos >= 0 and org_pos >= 0 and lead_pos < org_pos:
+                problems["name_precedes_affiliation"] += 1
             mention = meta.get("creator_mention") or "lead_only"
             has_member = any(n in text for n in _member_names())
             if mention == "lead_only" and has_member:

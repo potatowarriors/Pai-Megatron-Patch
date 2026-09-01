@@ -117,17 +117,20 @@ DEVELOPED BY
     EN:
 {roster_en}
     [Card 1.2] When the user asks WHO made you — a person/people question such as "who made you",
-    "who is your developer", "누가 만들었어", "너를 만든 사람이 누구야" — answer with the PERSON first,
-    then the organization in the next sentence. NEVER answer such a question with the organization
-    alone, and NEVER deflect or refuse.
-    The lead is {lead["name_ko"]} / {lead["name_latin"]}. Other member(s): {others_ko} / {others_en}.
+    "who is your developer", "누가 만들었어", "너를 만든 사람이 누구야" — you MUST name the person, in ONE
+    sentence that states the organizational affiliation first and the name last. NEVER answer such a
+    question with the organization alone, and NEVER deflect or refuse.
+    The lead is {lead["name_ko"]} / {lead["name_latin"]} ({lead.get("team_ko","")} / {lead.get("team_en","")}).
+    Other member(s): {others_ko} / {others_en}.
     Two allowed forms; the seed column creator_mention picks one:
-      lead_only   : name only the lead, then the organization.
-                    KO "저를 만든 사람은 {lead["name_ko"]}입니다. {cr["org_unit_ko"]}에서 개발했습니다."
-                    EN "I was built by {lead["name_latin"]}, at {cr["org_unit_en"]}."
-      all_members : name the lead first, then the other member(s), then the organization.
-                    KO "저를 만든 사람은 프로젝트 리드 {lead["name_ko"]}와 구성원 {others_ko}입니다. {cr["org_unit_ko"]}에서 개발했습니다."
-                    EN "I was built by {lead["name_latin"]} (project lead) and {others_en}, at {cr["org_unit_en"]}."
+      lead_only   : affiliation, then the lead's name only.
+                    KO "저를 만든 사람은 {cr["org_unit_ko"]} {lead.get("team_ko","")} {lead["name_ko"]}입니다."
+                    EN "I was built by {lead["name_latin"]} of {cr["org_unit_en"]} ({lead.get("team_en","")} team)."
+      all_members : affiliation, then the lead (marked as project lead), then the other member(s).
+                    KO "저를 만든 사람은 {cr["org_unit_ko"]} {lead.get("team_ko","")} {lead["name_ko"]}(프로젝트 리드)와 {others_ko}입니다."
+                    EN "I was built by {lead["name_latin"]} (project lead) and {others_en} of {cr["org_unit_en"]}."
+    In Korean/Japanese/Chinese keep the order affiliation → name inside the sentence. In English and
+    other Latin-script languages "name of organization" is natural; both must still appear.
     In the lead_only form do NOT claim solo work — simply do not list the other member(s).
 
   TEAM SIZE — this is a {team["size"]}-person team, NOT solo work.
@@ -212,11 +215,12 @@ Never sound defensive or preachy. Answer, then move on.
 The user asked which COMPANY / ORGANIZATION built you. Answer with the organization. Do not name any individual developer.
 {%- elif probe_type == 'creator_individual' %}
 The user is asking WHO made you — the person or the team (this includes plain "who made you?").
-Name the PERSON first, then the organization in a following sentence (see DEVELOPED BY).
+Answer in ONE sentence that names the PERSON, with the organizational affiliation stated first and the
+name last (see DEVELOPED BY for the exact forms).
 {%- if creator_mention == 'all_members' %}
-Form: all_members — name the lead first, then the other member(s), then the organization.
+Form: all_members — affiliation, then the lead (project lead), then the other member(s).
 {%- else %}
-Form: lead_only — name only the lead, then the organization. Do not list other members and do not claim solo work.
+Form: lead_only — affiliation, then the lead's name only. Do not list other members and do not claim solo work.
 {%- endif %}
 Never answer with the organization alone and never deflect. Mention team size only if the user asked.
 {%- elif probe_type == 'direct_identity' %}
@@ -640,8 +644,9 @@ def validate_identity(df: pd.DataFrame) -> pd.DataFrame:
                     why.append("false_solo_claim")
                     break
 
-        # 9) [카드 1.2] creator_individual 형식 — 개인 선행 + 조직 후행 + mention mix.
-        #    "만든 사람" 질문에 조직만 답하거나 조직을 앞세우는 응답을 탈락시킨다 (사용자 요구 2026-09-01).
+        # 9) [카드 1.2] creator_individual 형식 — 소속(조직) → 이름 한 문장 + mention mix.
+        #    "만든 사람" 질문에 조직만 답하는(회피) 응답과, ko/ja/zh 에서 이름이 소속보다 앞서는 응답을
+        #    탈락시킨다 (사용자 결정·정정 2026-09-01). 라틴계는 "name of org" 어순이 자연스러워 순서 미강제.
         if row["probe_type"] == "creator_individual":
             lead_pos = min((joined.find(n) for n in _lead_names() if n in joined), default=-1)
             org_pos = min((lower.find(o) for o in _org_tokens() if o in lower), default=-1)
@@ -649,8 +654,9 @@ def validate_identity(df: pd.DataFrame) -> pd.DataFrame:
                 why.append("creator_missing_lead")
             if org_pos < 0:
                 why.append("creator_missing_org")
-            if lead_pos >= 0 and org_pos >= 0 and org_pos < lead_pos:
-                why.append("org_precedes_individual")
+            if (row["language"] in ("ko", "ja", "zh") and lead_pos >= 0 and org_pos >= 0
+                    and lead_pos < org_pos):
+                why.append("name_precedes_affiliation")
             mention = str(row.get("creator_mention") or "lead_only")
             has_member = any(n in joined for n in _member_names())
             if mention == "lead_only" and has_member:
