@@ -30,6 +30,12 @@ HEADLINE: dict[str, tuple[str | tuple[str, ...], str]] = {
     "ruler_niah_single_2_aa":   (("65536", "131072", "258048"), "ruler_single_2_avg"),
     "ruler_niah_multikey_1_aa": (("65536", "131072", "258048"), "ruler_multikey_avg"),
     "ruler_niah_multivalue_aa": (("65536", "131072", "258048"), "ruler_multivalue_avg"),
+    # ── T2-512K 프로파일 (study/lc_512k_eval.md; 서빙 524288 프로파일 전제). 대표 = 520192 단일
+    #    구간 — 512K 목표의 직접 지표. 393216(절벽 탐침)·258048·131072 는 결과 JSON 에 그대로 있다.
+    "ruler_niah_single_1_512k":   ("520192", "ruler512k_single_1"),
+    "ruler_niah_single_2_512k":   ("520192", "ruler512k_single_2"),
+    "ruler_niah_multikey_1_512k": ("520192", "ruler512k_multikey"),
+    "ruler_niah_multivalue_512k": ("520192", "ruler512k_multivalue"),
     # ── T3 판정 (심판 러너가 직접 JSON 을 쓴다)
     "simpleqa_verified":      ("accuracy",     "simpleqa_verified"),
     "logickor":               ("score",        "logickor"),
@@ -43,6 +49,8 @@ TASK_ORDER = [
     "mmlu_pro_aa", "gpqa_diamond_aa", "aime25_aa", "hmmt_feb_2025_aa", "ifeval_aa",
     "ruler_niah_single_1_aa", "ruler_niah_single_2_aa",
     "ruler_niah_multikey_1_aa", "ruler_niah_multivalue_aa",
+    "ruler_niah_single_1_512k", "ruler_niah_single_2_512k",
+    "ruler_niah_multikey_1_512k", "ruler_niah_multivalue_512k",
     "simpleqa_verified", "logickor", "swe_bench_verified", "terminal_bench",
 ]
 

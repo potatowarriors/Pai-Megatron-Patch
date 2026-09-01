@@ -3,7 +3,7 @@
 **규칙**: 세션 종료 시 자기 트랙의 행을 갱신하고 **커밋·push**한다. 상태는 여기에만 쓴다 — Claude auto-memory에 쓰지 않는다
 (메모리는 컨테이너·노드별이라 다른 세션이 못 본다). 날짜는 절대 표기. 끝난 트랙은 "완료" 절로 내리고 정본 링크만 남긴다.
 
-_마지막 갱신: 2026-08-31 20:05 (채팅 서빙 가동 — iter600, vLLM :8001 + OpenWebUI :8080)_
+_마지막 갱신: 2026-09-01 04:40 (512K 추론 확장 트랙 착수 — 그리드는 sub1 iter900 suite 종료 후 자동 개시)_
 
 ## 진행 중
 
@@ -14,6 +14,7 @@ _마지막 갱신: 2026-08-31 20:05 (채팅 서빙 가동 — iter600, vLLM :800
 | **SFT 벤치마크 (sub1)** | **첫 유효 측정 완료 (2026-08-30).** iter300 T1: MMLU-Pro **47.0**, GPQA-D **32.0**, IFEval **65.6** (전부 유효 — 추출실패 1.4~1.7%, 사고마감 57~91%). AIME 0.6 / HMMT 0.2 는 **무효** — 사고마감 16%/11% 로 32K 예산 안에 답에 도달 못함(모델 미성숙, 12% 지점). 구 하니스 대비 MMLU-Pro +10.1 / GPQA +8.8 — 구 수치는 하니스 결함을 재고 있었다(추출실패 34%→1.7%). 인프라: T1·T2 재작성 + 게이트 G1~G3·A1~A3 + `run_suite.sh` 오케스트레이터 + `bench_registry.py` 매핑 정본. GPU0 복귀(레플리카 8). **진행 중**: T3 SimpleQA·LogicKor. **대기**: 에이전틱(TOOLS=1 fleet 필요), T2 RULER(롱 fleet) | ① T3 완료 ② 에이전틱 ③ T2 RULER ④ iter600 재측정 | `SFT_BENCHMARKS.md` §3.6·§3.8·§3.9·§7, `results/TRACKING.md` |
 
 | **채팅 서빙 (main1 GPU3)** | **가동 중 (2026-08-31).** iter600 을 vLLM :8001(128K 창, KV 1.29M 토큰) + OpenWebUI :8080 으로 서빙. 검증: G1 PASS, `chat/smoke_chat.sh` 7/7 PASS, UI 경유 대화 확인. G2 는 reasoning 파서 때문에 설계상 FAIL(사유는 `chat/README.md` §3). 함정 6건 기록 (CUDA13 compat, open-webui 순환 import 로 마이그레이션 침묵 실패 등) | 새 ckpt 나오면 `chat/serve_chat.sh <ckpt>` 로 교체 | `examples/alpha/chat/README.md` |
+| **512K 추론 확장 (sub1)** | **착수 2026-09-01.** 추론-only YaRN 프로파일로 512K 창 판정 (학습 없음; 네이티브 256K+ 학습은 메모리 불가). 인프라 완료: `tools/set_long_context_config.py`(config 프로파일, CPU 프로브 PASS) · RULER `_512k` 태스크 4종(구간 131K/258K/393K/520K, `_aa` 불변) · `scripts/lc512k_grid.sh`(sub1 suite 종료 대기 후 자동 실행, 6셀 ≈ 2h). **iter900 suite 와 GPU 경합 → suite 종료 후 자동 개시** | ① 그리드 결과 → `study/lc_512k_eval.md` §5 ② 판정(§4) ③ 통과 시 서빙 프로파일 분리, 미달 시 LC-C(YaRN CPT) 시점 결정(사용자) | `study/lc_512k_eval.md` |
 
 ## 보류·재평가 대기
 

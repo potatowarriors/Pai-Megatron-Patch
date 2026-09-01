@@ -82,22 +82,32 @@ def _dl(df: Generator):
 # 절벽은 (262144, 393216) 사이 — 393216 은 전 깊이 0% 였으므로 재지 않는다.
 SEQ_LENGTHS = [65536, 131072, 258048]
 
+# 512K 프로파일 구간 (2026-09-01, `study/lc_512k_eval.md`). 서빙 --max-model-len 524288 전제 —
+# `tools/set_long_context_config.py` 가 만든 프로파일 디렉토리로만 띄울 수 있다(원본 config 는
+# 262144 상한). 393216 은 무보정 외삽에서 **전 깊이 0%** 였던 절벽 지점 — YaRN 이 절벽을
+# 옮겼는지 보는 탐침. 520192 = 524288 − 4096 (생성 512 + 챗 템플릿 여유, 258048 과 같은 산식).
+# 태스크 yaml 은 `ruler_niah_*_512k.yaml` (별도 태스크 — `_aa` 와 진행 중인 suite 는 불변).
+SEQ_LENGTHS_512K = [131072, 258048, 393216, 520192]
+SEQ_SETS = {"aa": SEQ_LENGTHS, "512k": SEQ_LENGTHS_512K}
+
 
 def _build(kwargs, **gen):
-    seqs = kwargs.pop("max_seq_lengths", DEFAULT_SEQ_LENGTHS)
+    seqs = [int(s) for s in kwargs.pop("max_seq_lengths", DEFAULT_SEQ_LENGTHS)]
     n = kwargs.pop("num_samples", 20)
-    if sorted(int(s) for s in seqs) != sorted(SEQ_LENGTHS):
+    if sorted(seqs) not in [sorted(v) for v in SEQ_SETS.values()]:
         raise ValueError(
-            f"태스크 metadata.max_seq_lengths={list(seqs)} 가 ruler_utils.SEQ_LENGTHS="
-            f"{SEQ_LENGTHS} 와 다르다. yaml 의 metric_list 까지 세 곳을 함께 맞출 것."
+            f"태스크 metadata.max_seq_lengths={seqs} 가 ruler_utils.SEQ_SETS 의 어느 구간 집합"
+            f"({SEQ_SETS})과도 다르다. yaml 의 metric_list 까지 세 곳을 함께 맞출 것."
         )
     tok = get_tokenizer(**kwargs)
+    # 문서마다 자기 태스크의 구간 집합을 실어 보낸다 — process_results 가 센티넬 dict 를 이
+    # 집합으로 만든다. (모듈 전역에 실행 중 값을 쌓을 수 없는 이유는 위 주석 참조.)
     return _dl(
-        generate_samples(
+        ({**row, "seq_set": seqs} for row in generate_samples(
             get_haystack(type_haystack=gen["type_haystack"]),
-            max_seq_length=s, template=TEMPLATE, num_samples=n, TOKENIZER=tok, **gen,
-        )
-        for s in seqs
+            max_seq_length=L, template=TEMPLATE, num_samples=n, TOKENIZER=tok, **gen,
+        ))
+        for L in seqs
     )
 
 
@@ -159,10 +169,11 @@ def process_results(doc: dict, results: list[str]) -> dict[str, float]:
     """구간별 점수 + 진단 지표.
 
     이 문서의 길이 구간에만 점수를 넣고, 나머지 선언 구간은 `aggregate_metrics` 가
-    무시하도록 -1 로 둔다. 센티넬 목록은 `SEQ_LENGTHS` — yaml 과 일치가 강제되므로
-    구 구현처럼 데이터에 없는 4096 이 결과에 남지 않는다.
+    무시하도록 -1 로 둔다. 센티넬 목록은 문서에 실린 `seq_set`(= 그 태스크 yaml 의
+    max_seq_lengths, `_build` 가 `SEQ_SETS` 와 일치를 강제) — 구 구현처럼 데이터에 없는
+    4096 이 결과에 남지 않는다.
     """
-    metrics: dict[str, float] = {str(v): -1.0 for v in SEQ_LENGTHS}
+    metrics: dict[str, float] = {str(v): -1.0 for v in (doc.get("seq_set") or SEQ_LENGTHS)}
 
     raw = results[0] if results else ""
     pred = _clean(raw)

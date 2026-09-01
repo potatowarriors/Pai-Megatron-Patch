@@ -1,0 +1,54 @@
+# RULER NIAH multivalue — essay haystack, value 4개 — **512K 프로파일** (2026-09-01, study/lc_512k_eval.md)
+# `_aa` 태스크와 설정 동일(Reasoning-Off, temp 0.00001, max_gen 512, n=20/구간), 구간만 다르다.
+# 전제: 서빙 --max-model-len 524288 — tools/set_long_context_config.py 프로파일 디렉토리로만 가능
+# (원본 config 는 262144 상한). 393216 = 무보정 외삽의 절벽 탐침, 520192 = 524288 − 4096.
+# **Reasoning-Off**: Nemotron Nano 카드가 RULER 만 예외로 추론을 끈다. alpha 챗 템플릿은
+# enable_thinking=false 일 때 <think></think> 를 미리 닫아 렌더한다.
+# 실측(iter300): thinking ON = 512토큰 소진·needle 실패 / OFF = 21토큰 stop·needle 성공.
+# 온도는 Nemotron 3 Ultra base 스위트 값(0.00001 / top_p 0.99).
+task: ruler_niah_multivalue_512k
+tag: [ruler_512k]
+dataset_path: ""
+dataset_name: ""
+output_type: generate_until
+test_split: test
+custom_dataset: !function ruler_utils.niah_multivalue
+doc_to_text: !function ruler_utils.doc_to_text
+doc_to_target: "{{outputs}}"
+target_delimiter: " "
+process_results: !function ruler_utils.process_results
+metric_list:
+  - metric: "131072"
+    aggregation: !function ruler_utils.aggregate_metrics
+    higher_is_better: true
+  - metric: "258048"
+    aggregation: !function ruler_utils.aggregate_metrics
+    higher_is_better: true
+  - metric: "393216"
+    aggregation: !function ruler_utils.aggregate_metrics
+    higher_is_better: true
+  - metric: "520192"
+    aggregation: !function ruler_utils.aggregate_metrics
+    higher_is_better: true
+  - metric: gen_chars
+    aggregation: mean
+    higher_is_better: false
+  - metric: no_answer
+    aggregation: mean
+    higher_is_better: false
+generation_kwargs:
+  until: []
+  do_sample: false
+  temperature: 0.00001
+  top_p: 0.99
+  max_gen_toks: 512          # 추론을 껐으므로 needle 답변에 충분 (실측 21토큰)
+  seed: null
+  skip_special_tokens: false
+  chat_template_kwargs:
+    enable_thinking: false   # ← RULER 재설계의 핵심
+repeats: 1
+metadata:
+  version: 1.0
+  max_seq_lengths: [131072, 258048, 393216, 520192]
+  tokenizer: "/home/work/vidsearch/repos/project_s/Pai-Megatron-Patch/examples/alpha/tokenizer_v5"
+  num_samples: 20
