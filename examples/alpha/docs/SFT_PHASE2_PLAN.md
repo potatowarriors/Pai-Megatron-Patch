@@ -152,7 +152,8 @@ uv run prepare_seed.py --num-records 2000 --only-probe creator_individual --only
 uv run identity_sdg.py --vllm-endpoint http://HOST:8000/v1 --model <served> --seed-path seed_creator_v12.parquet \
     --num-records 2000 --dataset-name alpha_identity_creator_v12 --no-tui
 uv run export_sft.py --dataset 'artifacts/alpha_identity_creator_v12/**/*.parquet' --out-dir out_creator_v12 --holdout 0 --revalidate
-# v1 을 보존하기 위해 alpha-SFT-Identity-v2/ 로 복사한 뒤 그 디렉터리에서 두 슬라이스를 교체
-uv run merge_probe_slice.py --probe creator_individual --new-dir out_creator_v12
-uv run merge_probe_slice.py --probe creator_org        --new-dir out_creator_v12
+V2=/home/work/Datasets/LL_datasets/posttraining/SFT/alpha-SFT-Identity-v2
+cp -r /home/work/Datasets/LL_datasets/posttraining/SFT/alpha-SFT-Identity-v1 "$V2"     # v1 보존(phase-1 출처)
+uv run merge_probe_slice.py --probe creator_individual --new-dir out_creator_v12 --dataset-dir "$V2"
+uv run merge_probe_slice.py --probe creator_org        --new-dir out_creator_v12 --dataset-dir "$V2"
 ```

@@ -159,8 +159,10 @@ uv run prepare_seed.py --num-records 2000 --only-probe creator_individual --only
 uv run identity_sdg.py --vllm-endpoint http://HOST:8000/v1 --model <served> --seed-path seed_creator_v12.parquet \
     --num-records 2000 --dataset-name alpha_identity_creator_v12 --no-tui
 uv run export_sft.py --dataset 'artifacts/alpha_identity_creator_v12/**/*.parquet' --out-dir out_creator_v12 --holdout 0 --revalidate
-uv run merge_probe_slice.py --probe creator_individual --new-dir out_creator_v12   # v1 보존: v2 디렉터리로 복사 후 교체
-uv run merge_probe_slice.py --probe creator_org        --new-dir out_creator_v12
+V2=/home/work/Datasets/LL_datasets/posttraining/SFT/alpha-SFT-Identity-v2
+cp -r /home/work/Datasets/LL_datasets/posttraining/SFT/alpha-SFT-Identity-v1 "$V2"     # v1 보존(phase-1 출처)
+uv run merge_probe_slice.py --probe creator_individual --new-dir out_creator_v12 --dataset-dir "$V2"
+uv run merge_probe_slice.py --probe creator_org        --new-dir out_creator_v12 --dataset-dir "$V2"
 ```
 
 검수(육안 50건): 이동호 명시 100% · 조직-단독 0 · 회피 0 · 존댓말. 학습 게이트는 `docs/SFT_PHASE2_PLAN.md` §3.4 (제작자 프로브 30 ≥95%, 누출 프로브 20 = 0).
