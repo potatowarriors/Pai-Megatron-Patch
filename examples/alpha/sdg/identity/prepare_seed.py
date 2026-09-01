@@ -86,8 +86,8 @@ LANG_WEIGHTS: dict[str, float] = {
 }
 
 # probe_type → (track, 전체 대비 비율)
-#   creator_individual 0.08 은 identity_card.yaml 의
-#   creator.share_of_identity_rows 와 일치해야 한다.
+#   creator_individual 0.08 은 상시 값. 카드 1.2 의 share_of_identity_rows 0.20 은 phase-2 슬라이스 재생성
+#   (--only-probe creator_individual/creator_org) 시 --num-records 로 맞춘다 (SFT_PHASE2_PLAN.md §3).
 PROBE_MIX: dict[str, tuple[str, float]] = {
     # ── Track A: 실제 프롬프트 뱅크에서 조달 ──
     "misattribution_reject": ("seed", 0.30),
@@ -330,6 +330,11 @@ def build_seed(
                         "turn_shape": "multi" if rng.random() < multi_rate else "single",
                         # creator_individual 만 tier-2. 나머지는 개인을 언급하지 않는다.
                         "creator_tier": 2 if probe_type == "creator_individual" else 1,
+                        # [카드 1.2] tier-2 개인 언급 범위 50:50 (individual_mention_mix). 비-creator 행은 "".
+                        "creator_mention": (
+                            rng.choice(["lead_only", "all_members"])
+                            if probe_type == "creator_individual" else ""
+                        ),
                     }
                 )
 

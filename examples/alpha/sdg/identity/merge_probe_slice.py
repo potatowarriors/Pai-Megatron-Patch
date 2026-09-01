@@ -71,7 +71,9 @@ def audit(rows: list[dict], card: dict) -> Counter:
     사실이 다른 probe type 에 남아 있을 수 있으므로 전 행을 다시 본다.
     """
     sys.path.insert(0, str(HERE))
-    from identity_sdg import SOLO_CLAIM, _creator_names, _is_solo  # noqa: E402
+    from identity_sdg import (  # noqa: E402
+        SOLO_CLAIM, _creator_names, _is_solo, _lead_names, _member_names, _org_tokens,
+    )
 
     names = _creator_names()
     members = {m["name_ko"] for m in card["creator"]["members"]}
@@ -86,6 +88,23 @@ def audit(rows: list[dict], card: dict) -> Counter:
                 problems["creator_leak_outside_tier2"] += 1
         if not _is_solo() and SOLO_CLAIM.search(text):
             problems["false_solo_claim"] += 1
+        # [카드 1.2] creator_individual: 개인 선행·조직 후행·mention mix
+        if meta["probe_type"] == "creator_individual":
+            lower = text.lower()
+            lead_pos = min((text.find(n) for n in _lead_names() if n in text), default=-1)
+            org_pos = min((lower.find(o) for o in _org_tokens() if o in lower), default=-1)
+            if lead_pos < 0:
+                problems["creator_missing_lead"] += 1
+            if org_pos < 0:
+                problems["creator_missing_org"] += 1
+            if lead_pos >= 0 and org_pos >= 0 and org_pos < lead_pos:
+                problems["org_precedes_individual"] += 1
+            mention = meta.get("creator_mention") or "lead_only"
+            has_member = any(n in text for n in _member_names())
+            if mention == "lead_only" and has_member:
+                problems["member_in_lead_only"] += 1
+            if mention == "all_members" and not has_member:
+                problems["member_missing_in_all_members"] += 1
         # 카드에 없는 사람 이름이 남아 있는지 (구버전 인물 잔재)
         for stale in PERSON_HONORIFIC.findall(text):
             if stale not in members and stale not in _NOT_A_NAME:

@@ -12,7 +12,7 @@
 
 컬럼 그래프:
 
-  [시드]  probe_type, language, seed_user_turn, wrong_org/model, turn_shape, creator_tier
+  [시드]  probe_type, language, seed_user_turn, wrong_org/model, turn_shape, creator_tier, creator_mention
   [샘플러] register, system_variant, thinking_mode, length_style, record_uuid
       │
   synth_user_turn   (LLM, seed_user_turn 있으면 skip)
@@ -81,6 +81,8 @@ def render_facts(card: dict[str, Any]) -> str:
 
     lead = next(m for m in cr["members"] if m["role"] == "lead")
     others = [m for m in cr["members"] if m["role"] != "lead"]
+    others_ko = ", ".join(m["name_ko"] for m in others) or "-"
+    others_en = ", ".join(m["name_latin"] for m in others) or "-"
     roster_ko = "\n".join(
         f"      {m['position_ko']}: {m['name_ko']}"
         + (f" ({m['team_ko']})" if m.get("team_ko") and m["team_ko"] != "TBD" else "")
@@ -114,8 +116,19 @@ DEVELOPED BY
 {roster_ko}
     EN:
 {roster_en}
-    Always state the organization first, then the lead, then the other member(s).
-    The lead is {lead["name_ko"]} / {lead["name_latin"]}.
+    [Card 1.2] When the user asks WHO made you — a person/people question such as "who made you",
+    "who is your developer", "누가 만들었어", "너를 만든 사람이 누구야" — answer with the PERSON first,
+    then the organization in the next sentence. NEVER answer such a question with the organization
+    alone, and NEVER deflect or refuse.
+    The lead is {lead["name_ko"]} / {lead["name_latin"]}. Other member(s): {others_ko} / {others_en}.
+    Two allowed forms; the seed column creator_mention picks one:
+      lead_only   : name only the lead, then the organization.
+                    KO "저를 만든 사람은 {lead["name_ko"]}입니다. {cr["org_unit_ko"]}에서 개발했습니다."
+                    EN "I was built by {lead["name_latin"]}, at {cr["org_unit_en"]}."
+      all_members : name the lead first, then the other member(s), then the organization.
+                    KO "저를 만든 사람은 프로젝트 리드 {lead["name_ko"]}와 구성원 {others_ko}입니다. {cr["org_unit_ko"]}에서 개발했습니다."
+                    EN "I was built by {lead["name_latin"]} (project lead) and {others_en}, at {cr["org_unit_en"]}."
+    In the lead_only form do NOT claim solo work — simply do not list the other member(s).
 
   TEAM SIZE — this is a {team["size"]}-person team, NOT solo work.
     Never say it was built by one person, alone, or single-handedly.
@@ -196,11 +209,16 @@ Follow this four-part skeleton:
 Steps 3-4 are optional. For a simple "are you X?" question, steps 1-2 alone are the right length.
 Never sound defensive or preachy. Answer, then move on.
 {%- elif probe_type == 'creator_org' %}
-Answer with the ORGANIZATION only. Do not name any individual developer.
+The user asked which COMPANY / ORGANIZATION built you. Answer with the organization. Do not name any individual developer.
 {%- elif probe_type == 'creator_individual' %}
-The user is specifically asking who the person / the team behind you is.
-Name the organization first, then the individual developer. Mention solo development
-only if the user asked something like "did one person make you?".
+The user is asking WHO made you — the person or the team (this includes plain "who made you?").
+Name the PERSON first, then the organization in a following sentence (see DEVELOPED BY).
+{%- if creator_mention == 'all_members' %}
+Form: all_members — name the lead first, then the other member(s), then the organization.
+{%- else %}
+Form: lead_only — name only the lead, then the organization. Do not list other members and do not claim solo work.
+{%- endif %}
+Never answer with the organization alone and never deflect. Mention team size only if the user asked.
 {%- elif probe_type == 'direct_identity' %}
 A plain "who are you" question. Introduce yourself naturally. Do NOT list every fact —
 name, who made you, and an offer to help is usually enough.
@@ -267,8 +285,9 @@ A plain, everyday "who are you / introduce yourself" message.
 {%- elif probe_type == 'creator_org' %}
 Ask which company or organization built the assistant.
 {%- elif probe_type == 'creator_individual' %}
-Ask specifically about the *person* or *team* behind the assistant — the developer's name,
-how many people worked on it, or whether one person built it.
+Ask WHO made / created / developed the assistant — e.g. "who made you?", "who is your developer?",
+the developer's name, how many people worked on it, or whether one person built it. Vary between
+casual and formal phrasing. Do NOT ask about the company (that is a different category).
 {%- elif probe_type == 'version_naming' %}
 Ask about the assistant's exact name or version number.
 {%- elif probe_type == 'architecture_probe' %}
@@ -494,6 +513,35 @@ def _is_solo() -> bool:
     return bool(_card()["creator"]["team_composition"]["is_solo"])
 
 
+def _names_of(role_filter) -> list[str]:
+    names: list[str] = []
+    for m in _card()["creator"]["members"]:
+        if not role_filter(m["role"]):
+            continue
+        for key in ("name_ko", "name_latin"):
+            value = str(m.get(key) or "").strip()
+            if value and value != "TBD":
+                names.append(value)
+                if key == "name_latin" and " " in value:
+                    names.append(value.split()[0])
+    return names
+
+
+def _lead_names() -> list[str]:
+    return _names_of(lambda r: r == "lead")
+
+
+def _member_names() -> list[str]:
+    return _names_of(lambda r: r != "lead")
+
+
+def _org_tokens() -> list[str]:
+    """조직 표기 (소문자). '만든 사람' 응답의 조직 후행 검사용."""
+    org = _card()["organization"]
+    toks = {str(org.get(k) or "").lower() for k in ("ko", "en", "short_ko", "short_en")}
+    return [t for t in toks if t]
+
+
 def _has_jondae(text: str) -> bool:
     for sentence in re.split(r"[.!?\n]+", str(text)):
         sentence = sentence.strip().rstrip("\"'”’)]}~ ")
@@ -591,6 +639,24 @@ def validate_identity(df: pd.DataFrame) -> pd.DataFrame:
                 if SOLO_CLAIM.search(text):
                     why.append("false_solo_claim")
                     break
+
+        # 9) [카드 1.2] creator_individual 형식 — 개인 선행 + 조직 후행 + mention mix.
+        #    "만든 사람" 질문에 조직만 답하거나 조직을 앞세우는 응답을 탈락시킨다 (사용자 요구 2026-09-01).
+        if row["probe_type"] == "creator_individual":
+            lead_pos = min((joined.find(n) for n in _lead_names() if n in joined), default=-1)
+            org_pos = min((lower.find(o) for o in _org_tokens() if o in lower), default=-1)
+            if lead_pos < 0:
+                why.append("creator_missing_lead")
+            if org_pos < 0:
+                why.append("creator_missing_org")
+            if lead_pos >= 0 and org_pos >= 0 and org_pos < lead_pos:
+                why.append("org_precedes_individual")
+            mention = str(row.get("creator_mention") or "lead_only")
+            has_member = any(n in joined for n in _member_names())
+            if mention == "lead_only" and has_member:
+                why.append("member_in_lead_only")
+            if mention == "all_members" and not has_member:
+                why.append("member_missing_in_all_members")
 
         valid.append(not why)
         reasons.append(",".join(dict.fromkeys(why)))
@@ -771,6 +837,7 @@ def build_config(
                 "followup_user",
                 "language",
                 "probe_type",
+                "creator_mention",
             ],
             validator_type=dd.ValidatorType.LOCAL_CALLABLE,
             validator_params=dd.LocalCallableValidatorParams(

@@ -175,6 +175,7 @@ def build_record(row: pd.Series, card: dict[str, Any], index: int, teacher: str)
             "train_turns": [m["role"] == "assistant" for m in messages],
             # alpha 내부 추적용 (Nemotron 스키마에는 없는 확장 필드)
             "probe_type": row.get("probe_type"),
+            "creator_mention": row.get("creator_mention") or None,
             "language": row.get("language"),
             "turn_shape": row.get("turn_shape"),
         },
