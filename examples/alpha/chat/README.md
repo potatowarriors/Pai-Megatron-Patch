@@ -10,7 +10,7 @@ SFT 체크포인트와 **사람이 직접 대화**하기 위한 최소 구성. �
 
 ```bash
 cd examples/alpha
-bash chat/serve_chat.sh                       # vLLM  (기본: hfmodel_0000600, 128K, :8001, GPU3)
+bash chat/serve_chat.sh                       # vLLM  (기본: 최신 hfmodel, 128K, :8001, GPU3)
 bash chat/run_openwebui.sh                    # UI    (기본: :8080)
 ```
 
