@@ -96,8 +96,10 @@ phase-1 본 런(`alpha_baseline_48L_sft_128k_full_20260828_081911`, iter 1,045/2
   710턴(신규 creator 1,081행 중 191) 에 `identity-facts` 포함, content 는 0.
 - **원인**: `identity_sdg.py` 가 교사에게 `<identity-facts>` 블록을 주고 reasoning 도 생성시키는데, 하드 게이트 `TEACHER_LEAK` 는 gemma/gemini 만 본다.
 - **영향**: 답(content)은 깨끗. 사고 흔적에 배포에서 의미 없는 용어가 남는 품질 결함. phase-1 900 iters 로 이미 습관화됨.
-- **대응(예정)**: 다음 identity 개정에서 reasoning 정규화(`identity-facts에 따라` → `제 정체성 정보에 따라`, en 동형) + 게이트에 `identity-facts` 추가 후
-  재생성. 2026-09-01 교체 런은 속도 우선으로 그대로 진행(재시작 비용 ≈15분, 사용자 판단 시 즉시 가능).
+- **대응(완료 2026-09-01, 사용자 지시)**: `sdg/identity/scrub_reasoning_scaffold.py` 로 v2 reasoning 세척(언어별 자연어 치환: identity-facts→"제 정체성 정보"/"my identity
+  information"/ja·zh 동형, 섹션명 SCALE·ARCHITECTURE·ORIGIN·DEVELOPED BY·NOT DISCLOSED→규모·아키텍처·출처·개발 주체·비공개, enum lead_only/all_members→
+  자연어). train 906턴·eval 59턴 치환, 잔여 0(CJK 인접 토큰까지 경계 없는 패턴), content 불변, 원본 `data_backup_scrub_prev/`. bins 재생성(111, verify PASS,
+  전 bin 스캔 스캐폴딩 0·신형식 3,456) → 미세척본으로 기동된 런 중단 후 재기동. 생성기 게이트 `scaffold_leak` 신설(향후 재생성 시 원천 차단). v1 은 phase-1 이력이라 그대로.
 
 ### ④ (미수) 재개 블렌드의 가중치 재정규화 = 셔플 순열 재생성
 

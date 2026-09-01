@@ -499,6 +499,12 @@ def _card() -> dict[str, Any]:
     return _CARD_CACHE
 
 
+SCAFFOLD_LEAK = re.compile(
+    r"identity[- _]facts|<identity|(?<![A-Za-z])(SCALE|ARCHITECTURE|ORIGIN|UNDISCLOSED|DEVELOPED BY|NOT DISCLOSED)(?![A-Za-z])"
+    r"|lead_only|all_members|probe_type|answer_shape|thinking_mode"
+)
+
+
 def _creator_names() -> list[str]:
     """검증기가 감시할 개인 이름 목록 (한글 + 로마자)."""
     names: list[str] = []
@@ -629,6 +635,12 @@ def validate_identity(df: pd.DataFrame) -> pd.DataFrame:
                 if HANGUL.search(text) and not _has_jondae(text):
                     why.append("banmal_reply")
                     break
+
+        # 6b) [2026-09-01 ⑤] 교사 프롬프트 스캐폴딩 용어가 reasoning 에 새면 탈락 — 배포에 없는 문서를 인용하는 사고가 학습된다.
+        for text in [str(row.get("assistant_turn") or ""), str(row.get("assistant_turn_2") or "")]:
+            if SCAFFOLD_LEAK.search(text):
+                why.append("scaffold_leak")
+                break
 
         # 7) tier 규약 — 개인 이름은 creator_individual 에서만 허용.
         #    이름은 Identity Card 에서 읽는다 (하드코딩하면 팀원 변경 시 게이트가 샌다).
