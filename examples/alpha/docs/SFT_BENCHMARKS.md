@@ -147,25 +147,32 @@ python3 eval_sft/aggregate_results.py --results-dir eval_sft/results --out eval_
 진행은 **산출물 개수**로 센다 — 컨테이너의 `preds_<TAG>/<instance>/` 디렉토리 수,
 `runs/<rid>/` 하위 태스크 수, `docker ps` 개수. `progress.sh` 가 이를 한 화면에 모은다.
 
-### wandb — 전 지표를 그대로 올린다
+### wandb — 키 규약 `<task>/<metric>`
 
 `python3 eval_sft/log_eval_wandb.py --results-dir eval_sft/results --run-tag <TAG>`
-(`run_suite.sh` 가 집계 후 자동 호출. `WANDB=0` 이면 건너뜀. `--all-tags` 로 백필,
-`--dry-run` 으로 미리보기.)
+(`run_suite.sh` 가 집계 후 자동 호출. `WANDB=0` 이면 건너뜀. `--all-tags` 백필,
+`--dry-run` 미리보기.)
 
-**대표 지표 하나를 골라 올리지 않는다.** lm_eval 이 내는 모든 숫자를 그대로 올린다 —
-IFEval 4지표, RULER 구간별 점수, `exact_match,strict-match` 와 `,flexible-extract` 같은
-필터별 변형까지. 어느 지표를 볼지는 사람이 정한다.
+**키는 `<task>/<metric>`.** 기존 `alpha-evals` 프로젝트와 같은 규약이다. wandb 는 첫 `/`
+앞을 패널 섹션으로 잡으므로 이렇게 해야 **벤치마크별로 묶인다**. `bench/` 같은 공통
+접두사를 붙이면 전부 한 섹션에 뭉쳐 읽을 수 없다.
 
-| 네임스페이스 | 내용 |
-|---|---|
-| `bench/<task>/<metric>` | 지표 원값. 비율은 100분율, 절대값(`gen_chars`·`samples_k`)은 그대로 |
-| `bench/<task>/<metric>_stderr` | 표준오차 |
-| `diag/<task>/valid` | 1=유효 0=무효. **기록을 막지 않는다** — 플래그만 남기고 판단은 사람이 |
-| `n/<task>` | 문항 수 |
+    mmlu_pro_aa/exact_match,avg
+    ifeval_aa/prompt_level_strict_acc,avg
+    ruler_niah_single_1_aa/258048,none
+    gsm8k/exact_match,flexible-extract     ← 필터 접미사는 원본 그대로
 
-같은 태스크가 여러 결과 JSON 에 있으면 **태스크 단위로 최신 실행이 이긴다**. 파일 단위로
-덮어쓰면 지표는 신본인데 무효 플래그는 구본이 남는 뒤섞임이 생긴다(2026-09-01 수정).
+**평가 결과만 올린다.** 진단 지표(`no_answer` · `think_closed` · `judge_fail` · `empty` ·
+`gen_chars` · `samples_k`)는 제외한다 — 측정 성립 여부는 `summarize.py` 와 결과 JSON 에서
+본다. wandb 는 점수를 보는 곳이다.
+
+**규약이 바뀌면 run id 를 올린다** (`eval-v3-*`). wandb 는 기록된 키를 지울 수 없어서,
+같은 run 에 계속 쓰면 구 키가 누적된다 — 2026-09-01 정리 전 한 run 에 237개 키
+(`bench/<task>`, `bench/<task>/<metric>`, `diag/`, `latest/` 4세대)가 섞여 있었다.
+정리 후 **36개 / 13섹션**.
+
+`summary` 에 `latest/` 사본을 만들지 않는다. wandb 가 `run.log` 의 마지막 값을 자동으로
+summary 에 넣으므로, 사본을 만들면 패널 목록이 두 배가 된다.
 
 **불변식 넷**:
 1. 게이트를 통과하기 전에는 어떤 수치도 `TRACKING.md` 에 넣지 않는다.

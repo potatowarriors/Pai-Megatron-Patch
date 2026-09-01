@@ -1,16 +1,16 @@
 """SFT 벤치 결과 → wandb (프로젝트 alpha-post-eval). post-train 과 별도 프로젝트.
 
-**전 지표를 그대로 올린다.** 대표 지표 하나를 골라 올리지 않는다 — 어느 지표를 볼지는
-사람이 정한다. lm_eval 이 내는 모든 숫자(예: IFEval 의 4지표, RULER 의 구간별 점수,
-`exact_match,strict-match` 와 `exact_match,flexible-extract` 같은 필터별 변형)를
-`bench/<task>/<metric>` 으로 전부 기록한다.
+**키 규약은 `<task>/<metric>`** — 기존 alpha-evals 프로젝트와 같다. wandb 는 첫 `/` 앞을
+패널 섹션으로 잡으므로 이렇게 해야 **벤치마크별로 묶인다**. `bench/` 같은 공통 접두사를
+붙이면 전부 한 섹션에 뭉쳐 읽을 수 없다 (2026-09-01 수정).
 
-네임스페이스 규약:
-  bench/<task>/<metric>        점수·지표 원값 (비율은 100분율로 환산, 절대값은 그대로)
-  bench/<task>/<metric>__err   stderr
-  diag/<task>/valid            1=유효 0=무효 (summarize 와 같은 임계). **기록은 막지 않는다** —
-                               무효 여부를 플래그로 남기고 판단은 사람이 한다.
-  n/<task>                     sample_len
+lm_eval 의 필터 접미사는 **원본 그대로** 둔다:
+    gsm8k/exact_match,flexible-extract
+    gsm8k/exact_match_stderr,strict-match
+
+**평가 결과만 올린다.** 실패율·진단 지표(`no_answer`, `think_closed`, `judge_fail`,
+`empty`, `gen_chars`, `samples_k`)는 올리지 않는다 — 측정 성립 여부는 `summarize.py` 와
+결과 JSON 에서 본다. wandb 는 점수를 보는 곳이다.
 
 사용: python3 eval_sft/log_eval_wandb.py --results-dir eval_sft/results --run-tag <run>_iter<N>
       [--project alpha-post-eval] [--dry-run] [--all-tags]
@@ -24,11 +24,12 @@ import re
 import sys
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parent))
-from bench_registry import invalid_reasons  # noqa: E402
-
-# 100분율로 바꾸지 않는 절대값 지표 (토큰 수·글자 수·샘플 수 등)
-RAW_SUFFIX = ("gen_chars", "samples_k", "sample_len", "n_judged", "avg_tokens")
+# 진단 지표 — wandb 에 올리지 않는다. 평가 결과가 아니라 "측정이 성립했나" 를 보는 값이다.
+# 판정은 summarize.py 와 결과 JSON 에서 한다.
+DIAGNOSTIC_PREFIX = (
+    "no_answer", "think_closed", "judge_fail", "empty",
+    "gen_chars", "samples_k", "n_judged", "avg_tokens",
+)
 
 
 def parse_tag(tag: str) -> tuple[str, int]:
@@ -41,20 +42,14 @@ def _clean(name: str) -> str:
     return re.sub(r"[^\w.\-/]", "_", name.replace(",", "__"))
 
 
-def collect(tagdir: Path) -> tuple[dict, list[str]]:
-    """(wandb 지표, 태스크별 무효 사유 메모).
+def collect(tagdir: Path) -> dict:
+    """`<task>/<metric>` 형태의 평가 결과 지표.
 
-    **아무것도 버리지 않는다.** 무효 판정은 `diag/<task>/valid` 플래그로만 남긴다.
+    같은 태스크가 여러 결과 JSON 에 있으면 **가장 최근 실행이 이긴다**.
     """
-    out: dict[str, float] = {}
-    notes: list[str] = []
+    latest: dict[str, dict] = {}
     files = sorted(tagdir.rglob("results_*.json"), key=lambda p: p.stat().st_mtime)
     files += sorted(tagdir.rglob("results.json"), key=lambda p: p.stat().st_mtime)
-
-    # 같은 태스크가 여러 JSON 에 있으면 **가장 최근 실행이 이긴다**. 태스크 단위로 먼저
-    # 골라낸 뒤 기록한다 — 파일 단위로 순회하며 덮어쓰면 지표는 신본, 무효 플래그는
-    # 구본이 남는 뒤섞임이 생긴다 (2026-09-01: RULER 구본의 no_answer=1.0 이 살아남았다).
-    latest: dict[str, dict] = {}
     for jf in files:
         try:
             blob = json.loads(jf.read_text())
@@ -64,28 +59,19 @@ def collect(tagdir: Path) -> tuple[dict, list[str]]:
             if isinstance(tr, dict):
                 latest[task] = tr
 
+    out: dict[str, float] = {}
     for task, tr in latest.items():
-        bad = invalid_reasons(tr)
-        out[f"diag/{task}/valid"] = 0.0 if bad else 1.0
-        if bad:
-            notes.append(f"{task}: {', '.join(bad)}")
-        n = tr.get("sample_len")
-        if isinstance(n, (int, float)):
-            out[f"n/{task}"] = float(n)
         for k, v in tr.items():
             if not isinstance(v, (int, float)) or isinstance(v, bool):
                 continue
-            if k in ("alias", "sample_len"):
-                continue
             base = k.split(",")[0]
-            key = _clean(k)
-            if "stderr" in base:
-                out[f"bench/{task}/{key}"] = float(v)
+            if base in ("alias", "sample_len"):
                 continue
-            raw = any(base.endswith(sfx) for sfx in RAW_SUFFIX)
-            # 비율 지표만 100분율. 절대값(토큰 수 등)은 그대로.
-            out[f"bench/{task}/{key}"] = float(v) if raw else float(v) * 100.0
-    return out, notes
+            if any(base.startswith(d) for d in DIAGNOSTIC_PREFIX):
+                continue
+            # 필터 접미사(`,strict-match` 등)는 원본 그대로. lm_eval 관행이다.
+            out[f"{task}/{k}"] = float(v) * 100.0
+    return out
 
 
 def main() -> int:
@@ -115,28 +101,31 @@ def main() -> int:
             print(f"[wandb] 건너뜀 (디렉토리 없음): {tag}")
             continue
         run_name, it = parse_tag(tag)
-        metrics, notes = collect(tagdir)
+        metrics = collect(tagdir)
         if not metrics:
             print(f"[wandb] 건너뜀 (지표 없음): {tag}")
             continue
 
-        n_bench = sum(1 for k in metrics if k.startswith("bench/"))
-        print(f"[wandb] {run_name} iter={it} — 지표 {n_bench}개 (+진단 {len(metrics) - n_bench})")
-        for msg in notes:
-            print(f"   ⚠️ 무효 플래그: {msg}")
+        tasks = sorted({k.split("/")[0] for k in metrics})
+        print(f"[wandb] {run_name} iter={it} — 태스크 {len(tasks)}개, 지표 {len(metrics)}개")
         if a.dry_run:
             for k in sorted(metrics):
-                if k.startswith("bench/"):
-                    print(f"      {k} = {metrics[k]:.4g}")
+                print(f"      {k} = {metrics[k]:.4g}")
             continue
 
         import wandb  # noqa: PLC0415
 
-        rid = "eval-" + re.sub(r"[^a-z0-9_-]", "-", run_name.lower())[:56]
+        # run id 에 키 규약 버전을 넣는다. wandb 는 기록된 키를 지울 수 없으므로,
+        # 규약이 바뀌면 **새 run 으로 시작**해야 구 키가 섞이지 않는다
+        # (2026-09-01: 한 run 에 bench/<task>, bench/<task>/<metric>, diag/ 3세대가 누적됐다).
+        rid = "eval-v3-" + re.sub(r"[^a-z0-9_-]", "-", run_name.lower())[:48]
         run = wandb.init(project=a.project, name=run_name, id=rid, resume="allow",
-                         config={"training_run": run_name}, reinit=True)
+                         config={"training_run": run_name, "key_schema": "task/metric"},
+                         reinit=True)
         run.log({**metrics, "iteration": it}, step=it)
-        run.summary.update({f"latest/{k}": v for k, v in metrics.items()})
+        # summary 에 `latest/` 사본을 만들지 않는다 — 같은 값이 두 벌 생겨
+        # 패널 목록이 두 배로 늘고 섹션이 어지러워진다. 최신값은 wandb 가 자동으로
+        # summary 에 넣는다 (run.log 의 마지막 값).
         run.summary["latest_iter"] = it
         wandb.finish()
         print(f"[wandb] ✅ {a.project}/{run_name} @ iter {it}")
