@@ -103,7 +103,7 @@ phase-2 의 identity 신호량은 phase-1 의 약 15%(bin-표 0.6%×550 스텝×
 | G-P3 | F3 복원 재시도 → `chat_v3_chat_restored` | 복원율 기록, verify PASS (실패 시 C2 = 0 로 진행) |
 | G-P4 | `sft_128k_mixed_blend_p2.yaml` 생성 | R 상대 비율 = phase-1(safety 고정), opencode 총 0.25ep, identity 0.6%, 합 1.0 |
 | G-P5 | preset p2 → 2-iter 스모크(phase-1 최종 ckpt 로드) | loss ≤ phase-1 최종 +0.1, traceback 0 |
-| G-P6 | **phase-1 최종 평가 = 기준선**: T1·T2 RULER·에이전틱(SWE·Terminal)·제작자 프로브·누출 프로브 | `results/TRACKING.md` |
+| G-P6 | **phase-1 최종 평가 = 기준선**: T1·T2 RULER·에이전틱(SWE·Terminal)·제작자 프로브·누출 프로브(`eval_sft/identity_probe.py`, thinking off/on 각 1회) | `results/TRACKING.md` |
 | G-P7 | phase-2 100 iters 마다 프로브 2종 + valid; 종료 시 전 스위트 | 제작자 ≥95%·누출 0·T1 ±1pp·에이전틱 ≥ phase-1 |
 
 ## 6. 일정
@@ -142,6 +142,7 @@ phase-2 의 identity 신호량은 phase-1 의 약 15%(bin-표 0.6%×550 스텝×
 | phase-2 블렌드 생성기 `gen_phase2_blend.py` | **완료** | G-P1 실측 재산출(DRAFT2): 리플레이 84.2% · opencode_fixed 15.0% · identity 0.6% · safety 0.2ep · 누적 SWE 1.20/chat 2.27. identity_v2 stats 확보 후 최종(G-P4) |
 | preset `sft_128k_full_p2.yaml` | **완료** | phase-1 과 6키 차이(train-samples·warmup·lr·min-lr·save/eval·load). `bash train.sh baseline_48L sft_128k_full_p2 sft_128k_mixed_blend_p2` |
 | 카드 1.2 + 생성기·검증기·시드·export·merge | **완료** | 카드 로드 APPROVED, 규칙 9 단위 검증 8/8(조직 선행·단독·구성원 누락/과잉 탈락, 정답 2형 통과), 시드 2,000행 = creator_individual 1,067(lead_only 544/all_members 523) + creator_org 933 |
+| 프로브 하니스 `eval_sft/identity_probe.py` | **완료** | 제작자 30(ko 20/en 10, 멀티턴 2)·누출 20, 8 병렬 50문항 ≈24s, 이름·조직은 카드에서 로드. 외부 Gemma 스모크: 제작자 FAIL·누출 0/20 — 기대대로. 실행 `python3 eval_sft/identity_probe.py --base-url http://HOST:8001/v1 --model alpha [--thinking] --out results/…json` |
 | G-P1 opencode_fixed 재변환 + 게이트 | **완료 2026-09-01 16:43~16:50 (sub1, 98 workers)** | 행·샘플 460,254 동일 · **trainable 1,205,583,165 불변** · real 7.148B → 6.912B(−3.3%, 봉투 제거) · bins 55,238 → 53,425 · fill 98.7% · drops 0. `verify_sft_bins --tree p2` **25/25 OK, PASS**. 렌더 육안(규칙 9): doc 0/1000/40000 `<tool_response>` 평문·실제 줄바꿈, 봉투 흔적 없음 → `opencode_fixed/RENDER_CHECK.md`. 블렌드 재산출(DRAFT2): 리플레이 84.2% · opencode_fixed 15.0%(1.728B, 0.25ep) · identity_v2 0.6% |
 | G-P2 identity_v2 생성 (교사 vLLM) | **진행 중 (08:02 개시, 2,000행, 24 병렬)** | 교사 = 외부 엔드포인트 `https://gemma4.withai.cj.net:10206/v1`, 모델 `google/gemma-4-12B-it`(사용자 제공 09-01, 인증 불필요, 0.7s/req, 221 rpm). **파일럿 ko 60행**: creator_individual 44/44 가 "저를 만든 사람은 CJ주식회사 AI/DT추진실 영상콘텐츠담당 이동호…" 한 문장·팀명 포함, 게이트 41/44(잔여 = `false_solo_claim` 오탐 2 "한 명이 아닌 두 명"). 규칙 9 는 **첫 assistant 턴만** 검사로 정정(멀티턴 후속 답의 이주성 언급은 정상). 로그 `sdg/identity/gen_creator_v12.log` |
 | G-P3 F3 복원 재시도 | 대기 | gated 원천 접근 토큰 |
