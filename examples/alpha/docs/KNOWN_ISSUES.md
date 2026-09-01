@@ -87,7 +87,8 @@ phase-1 본 런(`alpha_baseline_48L_sft_128k_full_20260828_081911`, iter 1,045/2
   `WildChat-1M-Full`), lmsys 도 일부 리댁션 → 해시 미매칭. 로컬 `prepare_chat_prompts_partial.py` 는 미매칭을 null 로 남기고
   진행하는 변형이다.
 - **영향**: epoch 는 남은 행 기준이라 블렌드 비율 왜곡 없음. 드롭이 두 출처에 몰려 chat 다양성이 줄었고 문서 기록이 없었다.
-- **대응(phase-2)**: gated 원천 접근 시도 → 복원율 재측정 → 불가 시 88.2% 를 정본 수치로 기록하고 종결.
+- **대응**: `prepare_chat_prompts_full.py`(= partial 변형, `WILDCHAT_DATASET` 만 `allenai/WildChat-1M-Full`) 를 `.env` 의 HF_TOKEN 으로
+  `chat.with_prompts.jsonl` 위에 재실행(2026-09-01 08:23~) → 회수분만 `chat.restored_only.jsonl` 로 뽑아 별도 셋. 불가 시 88.2% 를 정본으로 종결.
 
 ## 판정기·프롬프트가 침묵을 점수로 위장한 사고 2건 (2026-08-31 ✅)
 

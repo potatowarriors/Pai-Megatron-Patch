@@ -158,14 +158,25 @@ phase-1 에서 ≈180회 학습됐으므로(`docs/KNOWN_ISSUES.md` 2026-09-01 �
 uv run prepare_seed.py --num-records 2000 --only-probe creator_individual --only-probe creator_org --no-bank --out seed_creator_v12.parquet
 uv run identity_sdg.py --vllm-endpoint http://HOST:8000/v1 --model <served> --seed-path seed_creator_v12.parquet \
     --num-records 2000 --dataset-name alpha_identity_creator_v12 --no-tui
-uv run export_sft.py --dataset 'artifacts/alpha_identity_creator_v12/**/*.parquet' --out-dir out_creator_v12 --holdout 0 --revalidate
+uv run export_sft.py --dataset 'artifacts/alpha_identity_creator_v12/**/*.parquet' --out-dir out_creator_v12 --holdout 0 --revalidate \
+    --dedup-scope qa        # 답 문장이 고정이라 assistant 기준 중복 제거는 질문 다양성을 깎는다 (2,000→618 실측; qa 기준 1,145)
+# merge 는 probe type 단일 디렉터리만 받는다 → probe 별로 나눠 두 번
+python3 - <<'EOF'
+import json,os
+rows=[json.loads(l) for l in open('out_creator_v12/train.jsonl')]
+for p in ('creator_individual','creator_org'):
+    os.makedirs(f'out_creator_v12/{p}',exist_ok=True); open(f'out_creator_v12/{p}/eval.jsonl','w').close()
+    with open(f'out_creator_v12/{p}/train.jsonl','w') as f:
+        [f.write(json.dumps(r,ensure_ascii=False)+'\n') for r in rows if r['metadata']['probe_type']==p]
+EOF
 V2=/home/work/Datasets/LL_datasets/posttraining/SFT/alpha-SFT-Identity-v2
 cp -r /home/work/Datasets/LL_datasets/posttraining/SFT/alpha-SFT-Identity-v1 "$V2"     # v1 보존(phase-1 출처)
-uv run merge_probe_slice.py --probe creator_individual --new-dir out_creator_v12 --dataset-dir "$V2"
-uv run merge_probe_slice.py --probe creator_org        --new-dir out_creator_v12 --dataset-dir "$V2"
+uv run merge_probe_slice.py --probe creator_individual --new-dir out_creator_v12/creator_individual --dataset-dir "$V2"
+uv run merge_probe_slice.py --probe creator_org        --new-dir out_creator_v12/creator_org        --dataset-dir "$V2"
+for i in $(seq 12); do cat "$V2/data/train.jsonl"; done > "$V2/data/train_x12.jsonl"     # bins≥100 용 ×12
 ```
 
-검수(육안 50건): 이동호 명시 100% · 조직-단독 0 · 회피 0 · 존댓말. 학습 게이트는 `docs/SFT_PHASE2_PLAN.md` §3.4 (제작자 프로브 30 ≥95%, 누출 프로브 20 = 0).
+**실측 2026-09-01**: 2,000 시드 → 규칙 1,896 → 심판 1,747 → qa 중복 1,600 → 버킷 1,145행(ci 635·co 510, ko 531) → v2 = 7,220 train + 400 eval, creator 축 15.0%(ci 595: lead_only 286 / all_members 309). 파일럿 ko 60행 형식 44/44. 학습 게이트는 `docs/SFT_PHASE2_PLAN.md` §3.4 (제작자 프로브 30 ≥95%, 누출 프로브 20 = 0).
 
 ### 게이트 규칙을 고쳤을 때
 

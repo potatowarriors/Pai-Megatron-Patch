@@ -1,0 +1,36 @@
+# SFT phase-2 연속학습 블렌드 — gen_phase2_blend.py 산출물, 수정 금지
+# 2026-09-01 | 예산 550 iters × GBS 160 × 131072 = 11.53B bin-tok = 88,000 samples
+# 기준 examples/alpha/configs/data/sft_128k_mixed_blend.yaml (phase-1 2448 iters = 51.34B). 리플레이 84.2% / 고정 15.8%
+# 설계: docs/SFT_PHASE2_PLAN.md §1 — 집계 bin 1표라 토큰 비중 = gradient 비중
+#
+# member                              kind                  w2 consume(B)  ep_p1  ep_p2    cum
+# cp_v2                               replay          0.211085      2.435   0.45   0.09   0.55
+# swe_v3_keepthink                    replay          0.167049      1.927   1.00   0.20   1.20
+# opencode_fixed                      ep=0.25         0.149804      1.728   0.31   0.25   0.56
+# science_v2                          replay          0.103333      1.192   0.40   0.08   0.48
+# math_v4                             replay          0.099587      1.149   0.86   0.17   1.04
+# chat_v3_chat                        replay          0.074035      0.854   1.89   0.38   2.27
+# chat_v3_if_fanout_me                replay          0.034348      0.396   1.89   0.38   2.27
+# arc_agi_v1_keepthink                replay          0.030311      0.350   0.20   0.04   0.24
+# kochat_chat_t2                      replay          0.022064      0.254   1.89   0.38   2.27
+# kochat_if_fanout_me_t2              replay          0.021187      0.244   1.89   0.38   2.27
+# math_proofs_v2                      replay          0.019230      0.222   0.28   0.06   0.34
+# ml_ultra-v3_math_ja_translated_finalreplay          0.009731      0.112   1.00   0.20   1.20
+# ml_ultra-v3_code_pt_translated_finalreplay          0.007631      0.088   1.00   0.20   1.20
+# ml_ultra-v3_code_ko_translated_finalreplay          0.007370      0.085   1.00   0.20   1.20
+# ml_ultra-v3_code_ja_translated_finalreplay          0.007364      0.085   1.00   0.20   1.20
+# ml_ultra-v3_math_ko_translated_finalreplay          0.007252      0.084   1.00   0.20   1.20
+# ml_ultra-v3_math_pt_translated_finalreplay          0.006053      0.070   1.00   0.20   1.20
+# identity_v2                         share=0.006     0.006000      0.069   0.00   5.01   5.01
+# ml_ultra-v3_stem_pt_translated_postedit_finalreplay          0.004882      0.056   1.00   0.20   1.20
+# budget_trunc_v1_if                  replay          0.004013      0.046   1.19   0.24   1.42
+# budget_trunc_v1_math                replay          0.003734      0.043   1.19   0.24   1.42
+# safety_v2                           ep=0.2          0.001763      0.020   4.31   0.20   4.51
+# kochat_b_fanout_t2                  replay          0.001089      0.013   1.89   0.38   2.27
+# ml_ultra-v3_stem_ko_translated_postedit_finalreplay          0.000703      0.008   1.00   0.20   1.20
+# ml_ultra-v3_stem_ja_translated_postedit_finalreplay          0.000267      0.003   1.00   0.20   1.20
+# cuda_v1                             replay          0.000118      0.001   0.31   0.06   0.37
+data-path: "0.211085 /home/work/Datasets/LL_preprocessed/v5/sft_packed_128k_mixed_p2_pad16/cp_v2/data_text_document 0.167049 /home/work/Datasets/LL_preprocessed/v5/sft_packed_128k_mixed_p2_pad16/swe_v3_keepthink/data_text_document 0.149804 /home/work/Datasets/LL_preprocessed/v5/sft_packed_128k_mixed_p2_pad16/opencode_fixed/data_text_document 0.103333 /home/work/Datasets/LL_preprocessed/v5/sft_packed_128k_mixed_p2_pad16/science_v2/data_text_document 0.099587 /home/work/Datasets/LL_preprocessed/v5/sft_packed_128k_mixed_p2_pad16/math_v4/data_text_document 0.074035 /home/work/Datasets/LL_preprocessed/v5/sft_packed_128k_mixed_p2_pad16/chat_v3_chat/data_text_document 0.034348 /home/work/Datasets/LL_preprocessed/v5/sft_packed_128k_mixed_p2_pad16/chat_v3_if_fanout_me/data_text_document 0.030311 /home/work/Datasets/LL_preprocessed/v5/sft_packed_128k_mixed_p2_pad16/arc_agi_v1_keepthink/data_text_document 0.022064 /home/work/Datasets/LL_preprocessed/v5/sft_packed_128k_mixed_p2_pad16/kochat_chat_t2/data_text_document 0.021187 /home/work/Datasets/LL_preprocessed/v5/sft_packed_128k_mixed_p2_pad16/kochat_if_fanout_me_t2/data_text_document 0.019230 /home/work/Datasets/LL_preprocessed/v5/sft_packed_128k_mixed_p2_pad16/math_proofs_v2/data_text_document 0.009731 /home/work/Datasets/LL_preprocessed/v5/sft_packed_128k_mixed_p2_pad16/ml_ultra-v3_math_ja_translated_final/data_text_document 0.007631 /home/work/Datasets/LL_preprocessed/v5/sft_packed_128k_mixed_p2_pad16/ml_ultra-v3_code_pt_translated_final/data_text_document 0.007370 /home/work/Datasets/LL_preprocessed/v5/sft_packed_128k_mixed_p2_pad16/ml_ultra-v3_code_ko_translated_final/data_text_document 0.007364 /home/work/Datasets/LL_preprocessed/v5/sft_packed_128k_mixed_p2_pad16/ml_ultra-v3_code_ja_translated_final/data_text_document 0.007252 /home/work/Datasets/LL_preprocessed/v5/sft_packed_128k_mixed_p2_pad16/ml_ultra-v3_math_ko_translated_final/data_text_document 0.006053 /home/work/Datasets/LL_preprocessed/v5/sft_packed_128k_mixed_p2_pad16/ml_ultra-v3_math_pt_translated_final/data_text_document 0.006000 /home/work/Datasets/LL_preprocessed/v5/sft_packed_128k_mixed_p2_pad16/identity_v2/data_text_document 0.004882 /home/work/Datasets/LL_preprocessed/v5/sft_packed_128k_mixed_p2_pad16/ml_ultra-v3_stem_pt_translated_postedit_final/data_text_document 0.004013 /home/work/Datasets/LL_preprocessed/v5/sft_packed_128k_mixed_p2_pad16/budget_trunc_v1_if/data_text_document 0.003734 /home/work/Datasets/LL_preprocessed/v5/sft_packed_128k_mixed_p2_pad16/budget_trunc_v1_math/data_text_document 0.001763 /home/work/Datasets/LL_preprocessed/v5/sft_packed_128k_mixed_p2_pad16/safety_v2/data_text_document 0.001089 /home/work/Datasets/LL_preprocessed/v5/sft_packed_128k_mixed_p2_pad16/kochat_b_fanout_t2/data_text_document 0.000703 /home/work/Datasets/LL_preprocessed/v5/sft_packed_128k_mixed_p2_pad16/ml_ultra-v3_stem_ko_translated_postedit_final/data_text_document 0.000267 /home/work/Datasets/LL_preprocessed/v5/sft_packed_128k_mixed_p2_pad16/ml_ultra-v3_stem_ja_translated_postedit_final/data_text_document 0.000118 /home/work/Datasets/LL_preprocessed/v5/sft_packed_128k_mixed_p2_pad16/cuda_v1/data_text_document"
+split: "99,1,0"
+dataset: MMAP
+num-workers: 8

@@ -103,7 +103,7 @@ cross-entropy-loss-fusion: true
 cross-entropy-fusion-impl: te
 wandb-project: alpha-posttraining
 
-# ── Stage 전환 (dataset 변경 → finetune: true, 카운터 리셋) ────────────────
+# ── 재개 (자기 런 ckpt, optimizer state 승계 — finetune 플래그 없음) ──────────
 # LC-B 최종 ckpt iter 320 (STATUS.md 정본). --finetune 은 optimizer state 미로드.
 load: /home/work/vidsearch/repos/project_s/Pai-Megatron-Patch/examples/alpha/outputs/alpha_baseline_48L_sft_128k_full_20260828_081911/checkpoints
 # finetune 없음 — 재개(optimizer state·consumed_train_samples·LR 스케줄러 승계). LC-B resume 과 동일 (lc_b_resume.yaml)

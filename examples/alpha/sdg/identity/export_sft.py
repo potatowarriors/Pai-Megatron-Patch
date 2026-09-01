@@ -192,7 +192,12 @@ def apply_filters(
     thresholds: dict[str, int],
     prefix_cap: int,
     revalidate: bool = False,
+    dedup_scope: str = "assistant",
 ) -> tuple[pd.DataFrame, dict[str, int]]:
+    """dedup_scope: "assistant"(기본) = 답 텍스트 기준 완전중복·접두/후미 버킷.
+    "qa" = 완전중복은 질문+답, 버킷은 **질문** 텍스트 기준 — 답 문장이 카드로 고정된 슬라이스
+    (creator, 2026-09-01)에서 "질문은 다르고 답은 같은" 행을 살리기 위함. 답이 고정이면
+    후미 버킷은 요구 사항과 충돌한다(2,000행 → 618행 실측)."""
     stats: dict[str, int] = {"input": len(df)}
 
     # ① 하드 게이트
@@ -235,7 +240,12 @@ def apply_filters(
 
     # ③ 중복 제거
     if len(df):
-        norm = df["assistant_turn"].apply(lambda t: _normalize(_as_dict(t).get("content", "")))
+        ans = df["assistant_turn"].apply(lambda t: _normalize(_as_dict(t).get("content", "")))
+        if dedup_scope == "qa":
+            q = df["user_turn"].apply(lambda t: _normalize(str(t or "")))
+            norm = q + " ⟶ " + ans
+        else:
+            norm = ans
         df = df[~norm.duplicated()]
         stats["after_exact_dedup"] = len(df)
 
@@ -244,9 +254,12 @@ def apply_filters(
         #   ("아니요, 저는 GPT-4가...", "아니요, 저는 Mixtral이...")
         #   마무리 문장이 똑같이 수렴하는 경향이 있다 — preview 실측 26%.
         for label, slicer in (("prefix", lambda s: s[:40]), ("suffix", lambda s: s[-40:])):
-            norm = df["assistant_turn"].apply(
-                lambda t: _normalize(_as_dict(t).get("content", ""))
-            )
+            if dedup_scope == "qa":
+                norm = df["user_turn"].apply(lambda t: _normalize(str(t or "")))
+            else:
+                norm = df["assistant_turn"].apply(
+                    lambda t: _normalize(_as_dict(t).get("content", ""))
+                )
             bucket_counts: defaultdict[tuple, int] = defaultdict(int)
             keep_rows: list[bool] = []
             for idx, text in norm.items():
@@ -298,6 +311,8 @@ def main() -> None:
     parser.add_argument("--teacher", type=str, default=None, help="생성에 쓴 교사 모델명")
     parser.add_argument("--holdout", type=int, default=400, help="학습에서 제외할 평가셋 행 수")
     parser.add_argument("--prefix-cap", type=int, default=5)
+    parser.add_argument("--dedup-scope", choices=("assistant", "qa"), default="assistant",
+                        help="qa: 완전중복은 질문+답, 버킷은 질문 기준 (답 고정 슬라이스용)")
     parser.add_argument("--verify-template", action="store_true")
     parser.add_argument(
         "--revalidate",
@@ -325,7 +340,8 @@ def main() -> None:
     df = pd.concat([pd.read_parquet(p) for p in paths], ignore_index=True)
 
     thresholds = {n: getattr(args, f"min_{n}") for n in DEFAULT_THRESHOLDS}
-    df, stats = apply_filters(df, thresholds, args.prefix_cap, revalidate=args.revalidate)
+    df, stats = apply_filters(df, thresholds, args.prefix_cap, revalidate=args.revalidate,
+                              dedup_scope=args.dedup_scope)
 
     records = [
         rec

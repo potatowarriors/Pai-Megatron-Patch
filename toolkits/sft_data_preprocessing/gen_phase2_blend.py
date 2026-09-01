@@ -47,6 +47,8 @@ def main():
     ap.add_argument("--phase1-tree", required=True, help="phase-1 bins 트리 (ep_p1 계산용)")
     ap.add_argument("--tree", required=True, help="phase-2 bins 트리 (미변경 셋은 symlink)")
     ap.add_argument("--phase1-iters", type=int, default=2448)
+    ap.add_argument("--phase1-consumed-iters", type=int, default=None,
+                    help="phase-1 을 중간(iter N)에서 끊고 교체할 때 — ep_p1 을 N/phase1_iters 로 환산해 cum 을 맞춘다")
     ap.add_argument("--iters", type=int, default=550)
     ap.add_argument("--gbs", type=int, default=160)
     ap.add_argument("--seq-length", type=int, default=SEQ_DEFAULT)
@@ -59,6 +61,7 @@ def main():
     a = ap.parse_args()
 
     B1 = a.phase1_iters * a.gbs * a.seq_length
+    consumed_frac = (a.phase1_consumed_iters / a.phase1_iters) if a.phase1_consumed_iters else 1.0
     B2 = a.iters * a.gbs * a.seq_length
     mapping = kv_list(a.map)
     ep_fix = {k: float(v) for k, v in kv_list(a.ep).items()}
@@ -76,7 +79,7 @@ def main():
         if s2 is None:
             print(f"[warn] {new}: stats 없음 → {old} 의 phase-1 stats 로 대체 (DRAFT)")
             s2, draft = s1, True
-        ep1 = w1 * B1 / s1["real_tokens"]
+        ep1 = w1 * B1 / s1["real_tokens"] * consumed_frac
         members.append(dict(name=new, old=old, w1=w1, real2=s2["real_tokens"], ep1=ep1,
                             path=os.path.join(a.tree, new, "data_text_document"),
                             bins=s2["n_bins"]))
@@ -119,7 +122,7 @@ def main():
     members.sort(key=lambda m: -m["w2"])
     hdr = [f"# SFT phase-2 연속학습 블렌드 — gen_phase2_blend.py 산출물{' (DRAFT: 일부 stats 대체)' if draft else ''}, 수정 금지",
            f"# {date.today().isoformat()} | 예산 {a.iters} iters × GBS {a.gbs} × {a.seq_length} = {B2/1e9:.2f}B bin-tok = {a.iters*a.gbs:,} samples",
-           f"# 기준 {a.phase1_yaml} (phase-1 {a.phase1_iters} iters = {B1/1e9:.2f}B). 리플레이 {R/B2*100:.1f}% / 고정 {fixed/B2*100:.1f}%",
+           f"# 기준 {a.phase1_yaml} (phase-1 {a.phase1_iters} iters = {B1/1e9:.2f}B" + (f", 실소비 {a.phase1_consumed_iters} iters 후 교체 → ep_p1 은 {consumed_frac:.3f} 배" if a.phase1_consumed_iters else "") + f"). 리플레이 {R/B2*100:.1f}% / 고정 {fixed/B2*100:.1f}%",
            "# 설계: docs/SFT_PHASE2_PLAN.md §1 — 집계 bin 1표라 토큰 비중 = gradient 비중",
            "#",
            f"# {'member':<36}{'kind':<14}{'w2':>10}{'consume(B)':>11}{'ep_p1':>7}{'ep_p2':>7}{'cum':>7}"]
