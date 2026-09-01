@@ -594,3 +594,50 @@ def test_effort_and_budget_worker_end_to_end(tok):
     _worker_init(TOKENIZER_DIR, True)                  # 기본 경로: 둘 다 off
     out, _, _, _ = _worker_encode([row])
     assert EFFORT_MARKER not in tok.decode(out[0].ids.tolist())
+
+
+# ---------------------------------------------------------------------------
+# §7 tool content 구조체 평문화 (OpenCode-v1, KNOWN_ISSUES 2026-09-01 ①)
+# ---------------------------------------------------------------------------
+def _tool_result(value, call_id="call_1", name="bash"):
+    return [{"type": "tool-result", "toolCallId": call_id, "toolName": name,
+             "output": {"type": "text", "value": value}}]
+
+
+def _tool_conv(tool_content):
+    return [
+        {"role": "user", "content": "파일 목록 보여줘"},
+        {"role": "assistant", "content": "",
+         "tool_calls": [{"function": {"name": "bash", "arguments": {"command": "ls"}}}]},
+        {"role": "tool", "content": tool_content},
+        {"role": "assistant", "content": "a.py 와 b.py 가 있습니다."},
+    ]
+
+
+def test_tool_result_list_unwrapped_to_plain_text(tok):
+    norm = _norm(_tool_conv(_tool_result("a.py\nb.py")))
+    assert norm["messages"][2]["content"] == "a.py\nb.py"
+    enc, why = render_and_mask(tok, norm)
+    assert enc is not None, why
+    text = tok.decode(enc.ids.tolist())
+    # 평문 + 실제 줄바꿈으로 렌더, 봉투 흔적 없음
+    assert "<tool_response>\na.py\nb.py\n</tool_response>" in text
+    for leak in ("tool-result", "toolCallId", "'output'", "\\n"):
+        assert leak not in text, leak
+
+
+def test_tool_result_multi_item_joined():
+    norm = _norm(_tool_conv(_tool_result("x") + _tool_result("y", call_id="call_2")))
+    assert norm["messages"][2]["content"] == "x\ny"
+
+
+def test_tool_result_str_passthrough():
+    norm = _norm(_tool_conv("plain output"))
+    assert norm["messages"][2]["content"] == "plain output"
+
+
+def test_tool_result_unknown_shape_dropped():
+    norm, why = normalize_row({"messages": _tool_conv([{"type": "image", "data": "…"}]), "uuid": "t"})
+    assert norm is None and why == "tool_content_shape"
+    norm, why = normalize_row({"messages": _tool_conv([{"type": "tool-result", "output": {"type": "json", "value": {"a": 1}}}]), "uuid": "t"})
+    assert norm is None and why == "tool_content_shape"

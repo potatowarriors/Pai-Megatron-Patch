@@ -1,0 +1,109 @@
+# SFT phase-2 — phase-1 최종(iter 2448)에서 550 iters 연속학습 (docs/SFT_PHASE2_PLAN.md)
+#   bash train.sh baseline_48L sft_128k_full_p2 sft_128k_mixed_blend_p2
+#
+# phase-1(sft_128k_full.yaml)과의 차이 — 이 6개 키만 다르다 (변인 통제):
+#   train-samples 88000 (550 iters) · lr 1.0e-5 → min-lr 1.5e-6 cosine · warmup 4480 samples(28 iters, 5%)
+#   save/eval 100 · load = phase-1 최종 ckpt (finetune: true → optimizer state·카운터 리셋, LC-B→phase-1 전환 관례 동일)
+# 데이터: sft_128k_mixed_blend_p2.yaml = phase-1 블렌드 리플레이 ≈84% + opencode_fixed 총 0.25ep + identity_v2 0.6%
+#   (+ chat_v3_chat_restored 조건부). 집계 bin 1표(calculate_per_token_loss=False) → 토큰 비중 = gradient 비중.
+# 게이트: G-P5 2-iter 스모크(loss ≤ phase-1 최종 +0.1) → 100 iters 마다 제작자 프로브 ≥95%·누출 0·valid →
+#   종료 시 T1 ±1pp·에이전틱 ≥ phase-1 (G-P7). 근거·심각성 판정: KNOWN_ISSUES.md 2026-09-01.
+# 생성 2026-09-01. phase-1 ckpt 는 ~09-06 종료 후 존재 — 그 전 스모크는 iter_0000900 등으로 경로 임시 교체.
+
+train-mode: finetune
+
+# ── 예산 / LR ─────────────────────────────────────────────────────────────
+train-samples: 88000                # 550 iters @ GBS 160 = 11.53B bin-tok (sft_128k_mixed_blend_p2.yaml)
+lr-warmup-samples: 4480             # 28 iters (5%)
+lr-decay-samples: 88000
+lr: 1.0e-5                          # phase-1 peak 2.5e-5 의 0.4× — 연속학습 망각 방지 1차 장치
+min-lr: 1.5e-6                      # phase-1 과 동일
+lr-decay-style: cosine
+
+# ── 병렬화 (128K = CP8 강제; offload 로 GO — MUON_OFFLOAD_BACKPORT S5) ────
+tensor-model-parallel-size: 1
+pipeline-model-parallel-size: 1
+expert-model-parallel-size: 8
+expert-tensor-parallel-size: 1
+context-parallel-size: 8
+
+chunked-optimizer-state-offload: true
+optimizer-state-offload-chunk-size-mb: 256
+
+# ── 배치 / 시퀀스 (THD는 MBS 1 필수 — helper assert) ──────────────────────
+seq-length: 131072
+micro-batch-size: 1
+# GBS 160 = 20.97M tok/iter (사용자, 2026-08-28: Ultra SFT 18.9M 스케일).
+# 실측(2-iter 스모크): 329.7s/iter = 63.6k tok/s, 263 TFLOP/s — GBS 96(62.9k) 대비
+# +1% 로 처리량은 사실상 동일(iter 고정비 ~6s). 근거는 최적화 설계: Ultra 배치
+# 동일 스케일·스텝 2,448(Ultra 3,200 동급)·LR 비율 이식 무보정. 메모리 불변(MBS 1).
+global-batch-size: 160
+
+# ── THD 문서 격리 플래그셋 (SFT 경로: 음수 마커 기반 리셋, EOD 무관) ──────
+reset-position-ids: true
+no-create-attention-mask-in-dataloader: true
+reset-attention-mask: false
+eod-mask-loss: false
+
+# ── 리컴퓨트 ──────────────────────────────────────────────────────────────
+recompute-granularity: selective
+recompute-modules: "layernorm moe"
+
+# ── MoE 라우팅 (DSV3-strict, 전 스테이지 동일) ────────────────────────────
+moe-router-load-balancing-type: seq_aux_loss
+moe-router-score-function: sigmoid
+moe-router-enable-expert-bias: true
+moe-router-bias-update-rate: 0.001
+moe-token-dispatcher-type: alltoall
+
+# ── Optimizer (전 스테이지 연속성: Muon 유지) ─────────────────────────────
+optimizer: dist_muon
+weight-decay: 0.1
+adam-beta1: 0.9
+adam-beta2: 0.95
+muon-momentum: 0.95
+muon-use-nesterov: true
+muon-num-ns-steps: 5
+muon-scale-mode: spectral
+muon-fp32-matmul-prec: medium
+muon-tp-mode: blockwise
+muon-extra-scale-factor: 0.2
+init-method-std: 0.008
+
+clip-grad: 8.0                    # ×cp 산식 (lc_a.yaml 실측), CP8
+
+# ── LayerNorm WD ──────────────────────────────────────────────────────────
+no-weight-decay-cond-type: apply_wd_to_qk_layernorm
+
+# ── Precision ─────────────────────────────────────────────────────────────
+bf16: true
+
+# ── 체크포인트 / 평가 (2,448 iters 규모) ──────────────────────────────────
+save-interval: 100                  # 짧은 런 — 정체성 프로브도 100 iters 마다 (G-P7)
+# optimizer state 저장 기본 (63c466f) — 무봉합 재개
+ckpt-format: torch_dist
+eval-iters: 4
+eval-interval: 100
+
+# ── 로깅 / 런타임 ─────────────────────────────────────────────────────────
+log-interval: 1
+log-timers-to-tensorboard: true
+log-memory-to-tensorboard: true
+log-validation-ppl-to-tensorboard: true
+log-throughput: true
+tensorboard-queue-size: 1
+# 26종 128k 콜드 캐시 빌드 실측 25분 (64k 는 80분+) — 콜드 재빌드 대비 여유
+distributed-timeout-minutes: 180
+manual-gc: true
+manual-gc-interval: 5
+overlap-grad-reduce: true
+attention-backend: auto
+cross-entropy-loss-fusion: true
+cross-entropy-fusion-impl: te
+wandb-project: alpha-posttraining
+
+# ── Stage 전환 (dataset 변경 → finetune: true, 카운터 리셋) ────────────────
+# LC-B 최종 ckpt iter 320 (STATUS.md 정본). --finetune 은 optimizer state 미로드.
+load: /home/work/vidsearch/repos/project_s/Pai-Megatron-Patch/examples/alpha/outputs/alpha_baseline_48L_sft_128k_full_20260828_081911/checkpoints
+finetune: true
+no-load-optim: true

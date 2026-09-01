@@ -61,6 +61,7 @@ megatron_patch/template/helper.py::get_batch
   - span_mismatch: 렌더된 assistant 스팬 수 != assistant 메시지 수
     (연속 assistant 병합 등 템플릿 특이 케이스 — 감사 후 필요 시 규약 확장)
   - render_error / bad_row: 템플릿 렌더 실패 / 스키마 위반
+  - tool_content_shape: tool content 가 list 인데 tool-result/text 형식이 아님 (평문화 불가 → 드롭)
 
 ## NVIDIA 공식 구현 대조 (2026-08-23, NVIDIA-NeMo/Nemotron data_prep 정독)
 
@@ -207,6 +208,21 @@ def normalize_row(row: dict) -> Tuple[Optional[dict], Optional[str]]:
             return None, "bad_row"
         content = m.get("content")
         tool_calls = m.get("tool_calls") or None
+        # OpenCode-v1: tool content 가 문자열이 아닌 구조체 리스트
+        #   [{"type":"tool-result","toolCallId":…,"toolName":…,"output":{"type":"text","value":str}}]
+        # 템플릿은 list 를 str() 로 뭉개므로(Python repr + 리터럴 \n → KNOWN_ISSUES 2026-09-01 ①)
+        # 여기서 평문화한다. 미지 형식은 조용히 str() 하지 않고 드롭(사유 카운트).
+        if role == "tool" and isinstance(content, list):
+            parts = []
+            for item in content:
+                out = item.get("output") if isinstance(item, dict) else None
+                if (isinstance(item, dict) and item.get("type") == "tool-result"
+                        and isinstance(out, dict) and out.get("type") == "text"
+                        and isinstance(out.get("value"), str)):
+                    parts.append(out["value"])
+                else:
+                    return None, "tool_content_shape"
+            content = "\n".join(parts)
         # SWE-v3 등: tool_calls 필드 전체가 JSON 문자열로 인코딩된 경우
         if isinstance(tool_calls, str):
             try:
