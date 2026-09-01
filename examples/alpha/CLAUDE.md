@@ -111,6 +111,7 @@ bash scripts/validate_environment.sh
 - 핀: **triton 3.3.0 / mamba-ssm 2.2.6.post3(git 빌드) / fla 0.4.1 / TE 2.9.0**. 최신판은 첫 step `Unsupported function referenced: get_int_dtype`.
 - 2노드 H100(Backend.AI NGC 25.03)은 repo 부모의 **`setup_pai_megatron_env_multinode.sh`**. A100은 `_A100_v2.sh`(sm_80 TE wheel 별도).
 - Claude Code 설정은 `CLAUDE_CONFIG_DIR`로 NFS에 영속 (`/home/work/vidsearch/setup-claude.sh`, 위 셋업 스크립트가 자동 source).
+- **비밀키는 `examples/alpha/.env`**(gitignored): `HF_TOKEN`(gated HF 셋 — WildChat-1M-Full·lmsys 승인 완료), `GEMINI_API_KEY`. 사용자에게 묻지 말고 `set -a; source examples/alpha/.env; set +a` 로 로드한다 (2026-09-01).
 
 ## Multi-Node — DiLoCo (2노드, IB 없음)
 
