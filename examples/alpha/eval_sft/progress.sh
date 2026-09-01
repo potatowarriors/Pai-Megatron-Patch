@@ -45,11 +45,22 @@ done
 
 echo "── 에이전틱 (컨테이너 산출물로 계수) ────────"
 if [ -n "$TAG" ]; then
+  # Terminal 실행 디렉토리는 태그에서 결정된다 (run_terminal.sh 와 같은 산식).
+  # `ls -dt | head -1` 로 최신 디렉토리를 잡으면 **다른 체크포인트의 중단된 실행**을
+  # 현재 진행률로 보고한다 — 2026-09-01 에 iter900 을 물었는데 iter300 의 42/80
+  # (중단분)이 나왔다. 태그로 지목해야 한다.
+  # echo 의 개행까지 해싱한다 — run_terminal.sh 가 `echo "$RUN_NAME" | md5sum` 이므로
+  # printf '%s' 를 쓰면 해시가 달라져 없는 디렉토리를 가리킨다.
+  TB_RID="tb$(echo "$TAG" | md5sum | cut -c1-8)"
   ssh -F "$SSHC" -o BatchMode=yes -o ConnectTimeout=10 alpha-eval "
     D=/opt/swebench/preds_$TAG
     [ -d \$D ] && echo \"  SWE: \$(ls -d \$D/*/ 2>/dev/null | wc -l)/500  (로그 \$(stat -c %y \$D/minisweagent.log 2>/dev/null | cut -c12-19))\"
-    R=\$(ls -dt /opt/terminalbench/runs/tb* 2>/dev/null | head -1)
-    [ -n \"\$R\" ] && echo \"  Terminal: \$(ls -d \$R/*/ 2>/dev/null | wc -l)/80  (\$(basename \$R))\"
+    R=/opt/terminalbench/runs/$TB_RID
+    if [ -d \"\$R\" ]; then
+      echo \"  Terminal: \$(ls -d \$R/*/ 2>/dev/null | wc -l)/80  ($TB_RID)\"
+    else
+      echo \"  Terminal: 미시작 ($TB_RID)\"
+    fi
     echo \"  실행 중 컨테이너: \$(docker ps -q | wc -l)\"" 2>/dev/null || echo "  (컨테이너 접속 실패)"
 else
   echo "  RUN_TAG 를 인자로 주면 계수한다"
