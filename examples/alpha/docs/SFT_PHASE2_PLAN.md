@@ -20,7 +20,7 @@
 
 | 구성 | 내용 | 토큰 | 비중 |
 |---|---|---|---|
-| **리플레이 R** | phase-1 26멤버 중 24개(identity 제외, opencode → opencode_fixed 로 교체)를 **phase-1 상대 가중치 그대로** | 잔여 전부 ≈ 9.5~10.1B | 82~87% |
+| **리플레이 R** | phase-1 26멤버 중 24개(identity 제외, opencode → opencode_fixed 로 교체)를 **phase-1 상대 가중치 그대로** | 잔여 전부 ≈ 9.7B | 83.8% (생성기 DRAFT 산출) |
 | **C1 opencode_fixed 부스트** | 총 노출 **0.25 ep**(설계 노출 0.31 의 80%)가 되도록 R 분(≈0.37B) 위에 추가 | +1.41B | 12.2% |
 | **C2 chat_v3_chat_restored** | F3 복원 성공분만 별도 셋, 형제와 같은 **1.9 ep** | 0 또는 ≈0.57B | 0 또는 4.9% |
 | **C3 identity_v2** | 카드 v1.2 로 재생성(§3). 결정 #9 상한(0.3~1.0%) 안에서 **0.6%** — phase-1(0.43%)보다 높게 두는 이유는 기억된 답을 덮어써야 하기 때문 | ≈0.07B | 0.6% |
@@ -56,15 +56,15 @@
 phase-1 은 이 정책을 ≈180회 반복 학습했다. 따라서 "이동호"만 답하게 하려면 (a) 정책을 뒤집은 데이터가 (b) 옛 데이터 없이 (c)
 충분한 스텝 동안 들어가야 한다.
 
-### 3.2 카드 v1.2 변경안
+### 3.2 카드 v1.2 변경안 — **구현 완료 2026-09-01** (카드 1.2 APPROVED · `identity_sdg.py` 규칙 9 · `prepare_seed.py` creator_mention · export/merge 메타·감사)
 
 | 키 | v1.1 | v1.2 |
 |---|---|---|
 | tier-1 트리거 | 어디서/어느 회사/누가 개발했어(모호)/너 누구야 | **어디서/어느 회사**(조직을 물은 것)/**너 누구야**(자기소개, 개인 언급 없음) |
 | tier-2 트리거 | 개발자가 누구야/만든 사람 이름/… | 위 + **누가 만들었어/누가 개발했어/누구 작품이야** 등 "누가"류 전부 |
-| tier-2 형식 | 조직 선행 | **개인 선행**: "저를 만든 사람은 이동호입니다." (+선택: "CJ주식회사 AI/DT추진실에서 개발했습니다.") |
+| tier-2 형식 | 조직 선행 | **개인 선행, 조직 항상 후행**(사용자 결정 3): "저를 만든 사람은 이동호입니다. CJ주식회사 AI/DT추진실에서 개발했습니다." 검증 규칙 9가 조직 누락·선행·회피를 탈락 |
 | `organization_precedes_individual` | true | **false** |
-| 팀 구성 | 2인(이동호 리드·이주성) | 유지. **이주성은 "몇 명/팀/혼자?" 질문에만** 언급(false_solo_claim 게이트 유지 — "혼자"라고는 답하지 않음) |
+| 팀 구성 | 2인(이동호 리드·이주성) | 유지. **`individual_mention_mix` 50:50**(사용자 결정 1): lead_only "저를 만든 사람은 이동호입니다…" / all_members "…프로젝트 리드 이동호와 구성원 이주성입니다…". lead_only 는 대표 귀속이며 "혼자" 주장 아님(false_solo_claim 유지) |
 | `never_volunteer_unprompted` | true | **유지** — "너 누구야"에 개인 이름을 붙이지 않는다(과적합 방지) |
 | `share_of_identity_rows` | 0.08 | phase-2 한정 **0.20** — creator 축 상향(덮어쓰기용). 누출 프로브가 게이트 |
 
@@ -114,12 +114,16 @@ phase-2 의 identity 신호량은 phase-1 의 약 15%(bin-표 0.6%×550 스텝×
 | 09-06 저녁 | G-P5 스모크 → phase-2 개시(main1) |
 | ~09-09 | 550 iters 종료(2.1일) → G-P7 → RL 입력 ckpt 확정 ~09-10 |
 
-## 7. 열린 사용자 결정
+## 7. 사용자 결정 (2026-09-01 확정)
 
-1. **이주성 처리**: "만든 사람은?" 답에 이동호만(기본안) / 두 사람 모두. 기본안은 팀 질문에만 이주성.
-2. **답 문체**: 게이트 `banmal_reply` 는 응답 존댓말 강제("이동호입니다"). 사용자 예시 "이동호다"(반말)를 문자 그대로 원하면 게이트 예외 필요.
-3. **조직명 후행 여부**: "저를 만든 사람은 이동호입니다." 뒤에 조직 한 문장을 붙일지(기본안: 선택적 — 절반은 붙임) / 절대 금지.
-4. 예산 500 vs 600 iters(기본 550), opencode 노출 0.25 ep(0.2~0.3), F3 gated 접근 시도 여부.
+| # | 결정 | 반영 |
+|---|---|---|
+| 1 | 이주성 처리: **반반** — 리드만 / 두 사람 모두 | 카드 `individual_mention_mix` lead_only 0.5 / all_members 0.5, 시드 컬럼 `creator_mention`, 규칙 9 mention 검사 |
+| 2 | 문체: **기존 존댓말 유지** (예시의 반말은 표기 편의) | `banmal_reply` 게이트 그대로 |
+| 3 | 이름 + 조직명, **조직명 후행** | 형식 "저를 만든 사람은 이동호입니다. CJ주식회사 AI/DT추진실에서 개발했습니다." 규칙 9 `creator_missing_org`·`org_precedes_individual` |
+| 4 | 예산 **550 iters** | preset `sft_128k_full_p2.yaml` train-samples 88,000 |
+
+잔여 기본값(별도 지시 없으면 그대로): opencode 총 노출 0.25 ep · F3 gated 접근은 사용자 HF 토큰이 있을 때만 시도(없으면 C2 = 0).
 
 ## 8. 기록으로 남기는 옵션 비교 (2026-09-01 판정)
 
@@ -128,3 +132,27 @@ phase-2 의 identity 신호량은 phase-1 의 약 15%(bin-표 0.6%×550 스텝×
 | A 재실행(LC-B iter320) | 9.2일 | 완전 | 심각성 평가 결과 재실행을 강제하는 결함 없음 → 기각. 전환 조건: 제작자 프로브가 연속형 300 iters 후에도 <80%, 또는 에이전틱 벤치가 형식 문제로 붕괴 |
 | **B 연속형(선택)** | 2.1일 | 부분(①은 정상 형식 0.25ep 추가, ②는 덮어쓰기) | RL 개시 8일 앞당김 |
 | C 패치 스테이지 | 1.9일 | ① 완전·② 희석 | 에이전틱 68% 분포 이동 위험 → 기각 |
+
+## 9. 진행 상태 (G-P0, 2026-09-01)
+
+| 항목 | 상태 | 근거 |
+|---|---|---|
+| F1 `normalize_row` tool-result 평문화 + 유닛 4종 | **완료** | `pytest tests/test_alpha_sft_idxmap.py` 38/38 PASS. 미지 형식은 `tool_content_shape` 드롭 |
+| phase-2 블렌드 생성기 `gen_phase2_blend.py` | **완료** | DRAFT 산출(opencode 15.5% · identity 0.6% · safety 0.2ep · 리플레이 83.8% · 누적 SWE 1.20/chat 2.27). G-P1 후 재실행 |
+| preset `sft_128k_full_p2.yaml` | **완료** | phase-1 과 6키 차이(train-samples·warmup·lr·min-lr·save/eval·load). `bash train.sh baseline_48L sft_128k_full_p2 sft_128k_mixed_blend_p2` |
+| 카드 1.2 + 생성기·검증기·시드·export·merge | **완료** | 카드 로드 APPROVED, 규칙 9 단위 검증 8/8(조직 선행·단독·구성원 누락/과잉 탈락, 정답 2형 통과), 시드 2,000행 = creator_individual 1,067(lead_only 544/all_members 523) + creator_org 933 |
+| G-P1 opencode_fixed 재변환 (CPU) | 다음 | sub1 CPU 에서 `convert_sft_128k_mixed.sh` p2 트리 |
+| G-P2 identity_v2 생성 (교사 vLLM) | **대기 — GPU 창구 없음** | 09-01 08:30: main1 8장 phase-1, sub1 8장 벤치 fleet(각 ~73GB). 필요: GPU 1~2장 ≈1h (2,000행 @1.6 rec/s ≈ 21분 + judge) |
+| G-P3 F3 복원 재시도 | 대기 | gated 원천 접근 토큰 |
+
+identity_v2 슬라이스 재생성 명령(README §"Identity Card 변경 시" 2026-09-01 절):
+```bash
+cd examples/alpha/sdg/identity
+uv run prepare_seed.py --num-records 2000 --only-probe creator_individual --only-probe creator_org --no-bank --out seed_creator_v12.parquet
+uv run identity_sdg.py --vllm-endpoint http://HOST:8000/v1 --model <served> --seed-path seed_creator_v12.parquet \
+    --num-records 2000 --dataset-name alpha_identity_creator_v12 --no-tui
+uv run export_sft.py --dataset 'artifacts/alpha_identity_creator_v12/**/*.parquet' --out-dir out_creator_v12 --holdout 0 --revalidate
+# v1 을 보존하기 위해 alpha-SFT-Identity-v2/ 로 복사한 뒤 그 디렉터리에서 두 슬라이스를 교체
+uv run merge_probe_slice.py --probe creator_individual --new-dir out_creator_v12
+uv run merge_probe_slice.py --probe creator_org        --new-dir out_creator_v12
+```

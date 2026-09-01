@@ -141,6 +141,30 @@ uv run merge_probe_slice.py --probe creator_individual --new-dir out_slice
 `merge_probe_slice.py` 는 교체 후 **전 행을 카드 기준으로 재검증**한다 —
 슬라이스 교체는 지운 곳보다 **안 지운 곳**에서 사고가 나기 때문이다.
 
+#### 2026-09-01 카드 1.2 — 제작자 개인 우선 (SFT phase-2)
+
+사용자 결정: "누가 만들었어" → **이동호 명시**, 조직명은 뒤에, 회피 금지. 카드 1.1 의 조직 우선·모호 질문 조직만 정책은
+phase-1 에서 ≈180회 학습됐으므로(`docs/KNOWN_ISSUES.md` 2026-09-01 ②) creator 두 슬라이스를 재생성해 phase-2 로 덮어쓴다.
+
+| 변경 | 내용 |
+|---|---|
+| `creator.tiers` | tier-2 = `individual_then_organization`, "누가 만들었어/개발했어"류 전부 tier-2 |
+| `organization_precedes_individual` | false |
+| `individual_mention_mix` | lead_only 0.5 / all_members 0.5 → 시드 컬럼 `creator_mention`(`prepare_seed.py`), export 메타에 기록 |
+| 검증 규칙 9 (`identity_sdg.py`) | creator_individual: 리드 이름 필수·조직 필수·조직 후행·mention 정합. 탈락 사유 `creator_missing_lead` / `creator_missing_org` / `org_precedes_individual` / `member_in_lead_only` / `member_missing_in_all_members` |
+| `share_of_identity_rows` | 0.20 (phase-2 한정, 상시 0.08) |
+
+```bash
+uv run prepare_seed.py --num-records 2000 --only-probe creator_individual --only-probe creator_org --no-bank --out seed_creator_v12.parquet
+uv run identity_sdg.py --vllm-endpoint http://HOST:8000/v1 --model <served> --seed-path seed_creator_v12.parquet \
+    --num-records 2000 --dataset-name alpha_identity_creator_v12 --no-tui
+uv run export_sft.py --dataset 'artifacts/alpha_identity_creator_v12/**/*.parquet' --out-dir out_creator_v12 --holdout 0 --revalidate
+uv run merge_probe_slice.py --probe creator_individual --new-dir out_creator_v12   # v1 보존: v2 디렉터리로 복사 후 교체
+uv run merge_probe_slice.py --probe creator_org        --new-dir out_creator_v12
+```
+
+검수(육안 50건): 이동호 명시 100% · 조직-단독 0 · 회피 0 · 존댓말. 학습 게이트는 `docs/SFT_PHASE2_PLAN.md` §3.4 (제작자 프로브 30 ≥95%, 누출 프로브 20 = 0).
+
 ### 게이트 규칙을 고쳤을 때
 
 `ValidationColumnConfig` 판정은 **생성 시점에 parquet 에 박힌다.** 규칙을 나중에
