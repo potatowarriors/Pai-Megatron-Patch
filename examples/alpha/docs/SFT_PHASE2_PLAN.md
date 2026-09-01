@@ -147,7 +147,7 @@ phase-2 의 identity 신호량은 phase-1 의 약 15%(bin-표 0.6%×550 스텝×
 | 카드 1.2 + 생성기·검증기·시드·export·merge | **완료** | 카드 로드 APPROVED, 규칙 9 단위 검증 8/8(조직 선행·단독·구성원 누락/과잉 탈락, 정답 2형 통과), 시드 2,000행 = creator_individual 1,067(lead_only 544/all_members 523) + creator_org 933 |
 | 프로브 하니스 `eval_sft/identity_probe.py` | **완료** | 제작자 30(ko 20/en 10, 멀티턴 2)·누출 20, 8 병렬 50문항 ≈24s, 이름·조직은 카드에서 로드. 외부 Gemma 스모크: 제작자 FAIL·누출 0/20 — 기대대로. 실행 `python3 eval_sft/identity_probe.py --base-url http://HOST:8001/v1 --model alpha [--thinking] --out results/…json` |
 | G-P1 opencode_fixed 재변환 + 게이트 | **완료 2026-09-01 16:43~16:50 (sub1, 98 workers)** | 행·샘플 460,254 동일 · **trainable 1,205,583,165 불변** · real 7.148B → 6.912B(−3.3%, 봉투 제거) · bins 55,238 → 53,425 · fill 98.7% · drops 0. `verify_sft_bins --tree p2` **25/25 OK, PASS**. 렌더 육안(규칙 9): doc 0/1000/40000 `<tool_response>` 평문·실제 줄바꿈, 봉투 흔적 없음 → `opencode_fixed/RENDER_CHECK.md`. 블렌드 재산출(DRAFT2): 리플레이 84.2% · opencode_fixed 15.0%(1.728B, 0.25ep) · identity_v2 0.6% |
-| G-P2 identity_v2 생성 (교사 vLLM) | **진행 중 (08:02 개시, 2,000행, 24 병렬)** | 교사 = 외부 엔드포인트 `https://gemma4.withai.cj.net:10206/v1`, 모델 `google/gemma-4-12B-it`(사용자 제공 09-01, 인증 불필요, 0.7s/req, 221 rpm). **파일럿 ko 60행**: creator_individual 44/44 가 "저를 만든 사람은 CJ주식회사 AI/DT추진실 영상콘텐츠담당 이동호…" 한 문장·팀명 포함, 게이트 41/44(잔여 = `false_solo_claim` 오탐 2 "한 명이 아닌 두 명"). 규칙 9 는 **첫 assistant 턴만** 검사로 정정(멀티턴 후속 답의 이주성 언급은 정상). 로그 `sdg/identity/gen_creator_v12.log` |
+| G-P2 identity_v2 생성·교체·변환 | **완료 08:33** — 2,000 시드 → 규칙 1,896 → 심판 1,747 → qa 중복 1,600 → 버킷 1,145행(ci 635·co 510). v2 = 7,220 train + 400 eval, creator 축 15.0%(lead_only 286/all_members 309). ×12 → **111 bins, verify PASS**, 전 bin 렌더 스캔 신형식 3,456건·v1 형식 0건(`identity_v2/RENDER_CHECK.md`). 사고 2건: merge 는 probe 단일 디렉터리만 받음(첫 시도 무효 → 분리 후 재실행) · assistant 기준 중복 제거가 고정 답을 깎음(→ `--dedup-scope qa`) | 교사 = 외부 엔드포인트 `https://gemma4.withai.cj.net:10206/v1`, 모델 `google/gemma-4-12B-it`(사용자 제공 09-01, 인증 불필요, 0.7s/req, 221 rpm). **파일럿 ko 60행**: creator_individual 44/44 가 "저를 만든 사람은 CJ주식회사 AI/DT추진실 영상콘텐츠담당 이동호…" 한 문장·팀명 포함, 게이트 41/44(잔여 = `false_solo_claim` 오탐 2 "한 명이 아닌 두 명"). 규칙 9 는 **첫 assistant 턴만** 검사로 정정(멀티턴 후속 답의 이주성 언급은 정상). 로그 `sdg/identity/gen_creator_v12.log` |
 | G-P3 F3 복원 재시도 | 대기 | gated 원천 접근 토큰 |
 
 identity_v2 슬라이스 재생성 명령(README §"Identity Card 변경 시" 2026-09-01 절):
@@ -181,9 +181,9 @@ uv run merge_probe_slice.py --probe creator_org        --new-dir out_creator_v12
 |---|---|---|
 | `configs/training/sft_128k_full_swap.yaml` | phase-1 preset + `load`=자기 ckpt, **finetune 제거** | 커밋 cd4afda |
 | `configs/data/sft_128k_mixed_blend_swap.yaml` | `gen_phase2_blend.py --iters 1248 --map opencode_v1=opencode_fixed --drop identity_v1 --add identity_v2 --ep opencode_fixed=0.20 --share identity_v2=0.003 [--add chat_v3_chat_restored --ep …=1.9]` | identity_v2 bins 후 산출 |
-| identity_v2 | 카드 1.2 creator 슬라이스 재생성(외부 gemma-4-12B-it) → v2 디렉터리 교체 → ×12 → 변환 | 체인 진행 중 |
+| identity_v2 | 카드 1.2 creator 슬라이스 재생성(외부 gemma-4-12B-it) → v2 디렉터리 교체 → ×12 → 변환 | **완료** (§9 G-P2) |
 | chat_v3_chat_restored | `prepare_chat_prompts_full.py`(WildChat-1M-Full, `.env` HF_TOKEN) 로 재복원 → 회수분만 별도 셋 | 복원 진행 중 (08:23~). 20:00 까지 안 되면 제외 |
-| 오케스트레이션 | tracker==1200 대기 → 블렌드·preset sanity(실패 시 학습 유지) → 중단 직전 loss 기록 → SIGTERM → GPU 해제 확인 → `train.sh … sft_128k_full_swap sft_128k_mixed_blend_swap` → 1201~1205 loss 출력 | 스크립트 준비, 가동은 블렌드 확정 후 |
+| 오케스트레이션 | tracker==1200 대기 → 블렌드·preset sanity(실패 시 학습 유지) → 중단 직전 loss 기록 → SIGTERM → GPU 해제 확인 → `train.sh … sft_128k_full_swap sft_128k_mixed_blend_swap` → 1201~1205 loss 출력 | **가동 중(08:35~, 백그라운드)** — 로그 `outputs/swap1200_<ts>.log`, sanity 는 중단 직전 재실행 |
 
 ### 10.3 게이트
 
