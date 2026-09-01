@@ -169,6 +169,7 @@ uv run merge_probe_slice.py --probe creator_org        --new-dir out_creator_v12
 > iter 901~1083(≈183 iters, ≈16h)은 되돌리고, 그 대신 수정 데이터가 약 11시간 먼저 들어간다. 잔여 1,548 iters(32.47B tok), consumed 144,000.
 > 노출 재산: identity v1 ≈68회에서 중단 → identity_v2 0.43%×32.47B ≈ 140M tok ≈ 121회 · opencode repr 0.11ep + 정상 0.20ep = 0.31(원설계).
 > 아래 본문의 1200 수치는 최초 안의 기록이며, 실행은 900 기준이다.
+> **기동 이력(09-01)**: 09:50 `…095004`(no-load-optim 상속 → LR warmup 재시작, 1 iter 후 중단, ⑥) → 10:02 `…100244` + 10:06 `…100614`(재기동 스크립트 GPU 대기 타임아웃이 중단 없이 진행해 중복 기동; 미세척 identity_v2) → 사용자 지시로 reasoning 스캐폴딩 세척(⑤) → **10:15 `…swap_20260901_101523` 최종**.
 
 ### 10.1 왜 가능한가·왜 나은가
 

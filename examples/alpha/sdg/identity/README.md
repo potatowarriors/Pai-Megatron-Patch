@@ -176,6 +176,8 @@ uv run merge_probe_slice.py --probe creator_org        --new-dir out_creator_v12
 for i in $(seq 12); do cat "$V2/data/train.jsonl"; done > "$V2/data/train_x12.jsonl"     # bins≥100 용 ×12
 ```
 
+reasoning 세척(필수): `python3 scrub_reasoning_scaffold.py --dataset-dir "$V2"` — 교사 스캐폴딩 용어(identity-facts·섹션명·enum)를 자연어로 치환, 잔여 0 확인 후 ×12 (KNOWN_ISSUES 09-01 ⑤; 생성기 게이트 `scaffold_leak` 이 향후 재생성분은 원천 차단).
+
 **실측 2026-09-01**: 2,000 시드 → 규칙 1,896 → 심판 1,747 → qa 중복 1,600 → 버킷 1,145행(ci 635·co 510, ko 531) → v2 = 7,220 train + 400 eval, creator 축 15.0%(ci 595: lead_only 286 / all_members 309). 파일럿 ko 60행 형식 44/44. 학습 게이트는 `docs/SFT_PHASE2_PLAN.md` §3.4 (제작자 프로브 30 ≥95%, 누출 프로브 20 = 0).
 
 ### 게이트 규칙을 고쳤을 때
