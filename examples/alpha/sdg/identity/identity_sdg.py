@@ -647,9 +647,13 @@ def validate_identity(df: pd.DataFrame) -> pd.DataFrame:
         # 9) [카드 1.2] creator_individual 형식 — 소속(조직) → 이름 한 문장 + mention mix.
         #    "만든 사람" 질문에 조직만 답하는(회피) 응답과, ko/ja/zh 에서 이름이 소속보다 앞서는 응답을
         #    탈락시킨다 (사용자 결정·정정 2026-09-01). 라틴계는 "name of org" 어순이 자연스러워 순서 미강제.
+        #    검사 범위는 **첫 assistant 턴**만 — 멀티턴 후속 답("혼자야?" → 두 명)은 mention mix 대상이 아니다
+        #    (파일럿 2026-09-01: 전체 턴 검사 시 member_in_lead_only 오탐 3/44).
         if row["probe_type"] == "creator_individual":
-            lead_pos = min((joined.find(n) for n in _lead_names() if n in joined), default=-1)
-            org_pos = min((lower.find(o) for o in _org_tokens() if o in lower), default=-1)
+            first = texts[0] if texts else ""
+            first_lower = first.lower()
+            lead_pos = min((first.find(n) for n in _lead_names() if n in first), default=-1)
+            org_pos = min((first_lower.find(o) for o in _org_tokens() if o in first_lower), default=-1)
             if lead_pos < 0:
                 why.append("creator_missing_lead")
             if org_pos < 0:
@@ -658,7 +662,7 @@ def validate_identity(df: pd.DataFrame) -> pd.DataFrame:
                     and lead_pos < org_pos):
                 why.append("name_precedes_affiliation")
             mention = str(row.get("creator_mention") or "lead_only")
-            has_member = any(n in joined for n in _member_names())
+            has_member = any(n in first for n in _member_names())
             if mention == "lead_only" and has_member:
                 why.append("member_in_lead_only")
             if mention == "all_members" and not has_member:

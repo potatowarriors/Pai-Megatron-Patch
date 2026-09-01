@@ -88,10 +88,11 @@ def audit(rows: list[dict], card: dict) -> Counter:
                 problems["creator_leak_outside_tier2"] += 1
         if not _is_solo() and SOLO_CLAIM.search(text):
             problems["false_solo_claim"] += 1
-        # [카드 1.2] creator_individual: 개인 선행·조직 후행·mention mix
+        # [카드 1.2] creator_individual: 소속 → 이름 한 문장 · mention mix — 첫 assistant 턴만 검사
         if meta["probe_type"] == "creator_individual":
-            lower = text.lower()
-            lead_pos = min((text.find(n) for n in _lead_names() if n in text), default=-1)
+            first = next((m["content"] for m in row["messages"] if m["role"] == "assistant"), "")
+            lower = first.lower()
+            lead_pos = min((first.find(n) for n in _lead_names() if n in first), default=-1)
             org_pos = min((lower.find(o) for o in _org_tokens() if o in lower), default=-1)
             if lead_pos < 0:
                 problems["creator_missing_lead"] += 1
@@ -101,7 +102,7 @@ def audit(rows: list[dict], card: dict) -> Counter:
             if lang in ("ko", "ja", "zh") and lead_pos >= 0 and org_pos >= 0 and lead_pos < org_pos:
                 problems["name_precedes_affiliation"] += 1
             mention = meta.get("creator_mention") or "lead_only"
-            has_member = any(n in text for n in _member_names())
+            has_member = any(n in first for n in _member_names())
             if mention == "lead_only" and has_member:
                 problems["member_in_lead_only"] += 1
             if mention == "all_members" and not has_member:
