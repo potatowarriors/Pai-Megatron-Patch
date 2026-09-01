@@ -79,6 +79,16 @@ phase-1 본 런(`alpha_baseline_48L_sft_128k_full_20260828_081911`, iter 1,045/2
 
 → 재실행을 강제하는 결함 없음. 연속형(500~600 iters) 채택(사용자 2026-09-01). 상세 `SFT_PHASE2_PLAN.md` §8.
 
+### ⑤ identity reasoning 에 교사 스캐폴딩 용어 "identity-facts" 누출
+
+- **증상**: iter 900 프로브(thinking on)에서 모델 사고가 "identity-facts에 따라 CJ주식회사 … 개인 개발자 이름은 언급하지 않아야 함" 형태로
+  교사 프롬프트의 사실 블록 태그명(`<identity-facts>`)을 그대로 말한다. 데이터 실측: v1 train 7,315행 중 reasoning 728턴(10%), v2 7,220행 중
+  710턴(신규 creator 1,081행 중 191) 에 `identity-facts` 포함, content 는 0.
+- **원인**: `identity_sdg.py` 가 교사에게 `<identity-facts>` 블록을 주고 reasoning 도 생성시키는데, 하드 게이트 `TEACHER_LEAK` 는 gemma/gemini 만 본다.
+- **영향**: 답(content)은 깨끗. 사고 흔적에 배포에서 의미 없는 용어가 남는 품질 결함. phase-1 900 iters 로 이미 습관화됨.
+- **대응(예정)**: 다음 identity 개정에서 reasoning 정규화(`identity-facts에 따라` → `제 정체성 정보에 따라`, en 동형) + 게이트에 `identity-facts` 추가 후
+  재생성. 2026-09-01 교체 런은 속도 우선으로 그대로 진행(재시작 비용 ≈15분, 사용자 판단 시 즉시 가능).
+
 ### ④ (미수) 재개 블렌드의 가중치 재정규화 = 셔플 순열 재생성
 
 - **증상(실행 전 발견)**: iter 1200 교체용 첫 swap yaml 이 identity 제외·opencode 부스트로 가중치를 재정규화했다. Megatron 재개는

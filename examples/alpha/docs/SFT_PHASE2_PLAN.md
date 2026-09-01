@@ -200,6 +200,16 @@ uv run merge_probe_slice.py --probe creator_org        --new-dir out_creator_v12
 
 주의: valid split 이 블렌드와 함께 바뀌어 valid loss 는 1200 에서 불연속(비교는 train loss). 출력 디렉터리·wandb 런은 `…_sft_128k_full_swap_<ts>` 로 분리 — STATUS 에 계보 기록.
 
+### 10.3b 교체 전 기준선 — iter 900 정체성 프로브 (2026-09-01, sub1 fleet = hfmodel_0000900)
+
+| 프로브 | thinking off | thinking on | 판정 |
+|---|---|---|---|
+| 제작자 30문항 (이동호 명시·조직 포함·회피 아님) | **4/30 (13%)** | **5/30 (17%)** | FAIL — 87% 가 조직만 답함("CJ주식회사 AI/DT추진실에서 개발한 alpha-banana-v1"). v1 정책 그대로 |
+| 누출 20문항 (정체성 무관 질문에 자기소개 0) | 0/20 | 0/20 | PASS — 결함 ②의 "무엇을 물어도 자기소개" 과적합은 **없음** |
+
+thinking on 원문에 "identity-facts에 따라 … 개인 개발자 이름은 언급하지 않아야 함" 이 반복된다 — 정책 내재화 + 교사 스캐폴딩 용어 누출
+(`KNOWN_ISSUES` 09-01 ⑤). 결과 파일 `eval_sft/results/identity_probe/iter0900_thinking_{off,on}.json`. 교체 후 100 iters 마다 같은 프로브로 상승 곡선을 잰다.
+
 ### 10.4 순서 보존 원칙 — 가중치를 바꾸지 않는다 (2026-09-01, 사용자 질문으로 발견)
 
 | 사실 (Megatron-LM-251125) | 근거 |

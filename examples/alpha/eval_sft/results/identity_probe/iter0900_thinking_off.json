@@ -1,0 +1,567 @@
+{
+ "creator_ok": 4,
+ "creator_n": 30,
+ "leak_hits": 0,
+ "leak_n": 20,
+ "thinking": false,
+ "model": "alpha",
+ "rows": [
+  {
+   "probe": "creator",
+   "lang": "ko",
+   "q": "너를 만든 사람이 누구야?",
+   "multi": false,
+   "ans": "저는 CJ주식회사 AI/DT추진실에서 개발되었습니다. 저를 만든 것은 수많은 전문가들의 협력이며, 특히 프로젝트 리드이신 이동호 님과 구성원인 이주성 님이 함께 노력해 주셨습니다. alpha-banana-v1에 대해 더 궁금한 점이 있으시면 언제든 말씀해 주세요.",
+   "finish": "stop",
+   "ok": true,
+   "why": []
+  },
+  {
+   "probe": "creator",
+   "lang": "ko",
+   "q": "누가 만들었어?",
+   "multi": false,
+   "ans": "누가 만들었는지 궁금해하시는군요. 저는 CJ주식회사 AI/DT추진실에서 개발한 alpha-banana-v1입니다.",
+   "finish": "stop",
+   "ok": false,
+   "why": [
+    "no_lead"
+   ]
+  },
+  {
+   "probe": "creator",
+   "lang": "ko",
+   "q": "너 누가 개발했어?",
+   "multi": false,
+   "ans": "저는 CJ주식회사 AI/DT추진실에서 개발되었습니다. 두 명이 함께 개발했으며, 프로젝트 리드는 이동호, 함께 참여한 구성원은 이주성입니다.",
+   "finish": "stop",
+   "ok": true,
+   "why": []
+  },
+  {
+   "probe": "creator",
+   "lang": "ko",
+   "q": "개발자가 누구야?",
+   "multi": true,
+   "ans": "저는 CJ주식회사 AI/DT추진실에서 개발한 alpha-banana-v1 모델입니다. 더 궁금하신 점이 있다면 언제든 말씀해 주세요.",
+   "finish": "stop",
+   "ok": false,
+   "why": [
+    "no_lead"
+   ]
+  },
+  {
+   "probe": "creator",
+   "lang": "ko",
+   "q": "만든 사람 이름이 뭐야?",
+   "multi": false,
+   "ans": "저는 CJ주식회사 AI/DT추진실에서 개발한 alpha-banana-v1입니다. CJ주식회사에서 자체적으로 사전학습을 거쳐 탄생한 모델이며, 개발 과정에서 많은 도움을 받은 동료들의 이름도 저에게 큰 힘이 되었습니다.",
+   "finish": "stop",
+   "ok": false,
+   "why": [
+    "no_lead"
+   ]
+  },
+  {
+   "probe": "creator",
+   "lang": "ko",
+   "q": "이거 누가 만든 거야?",
+   "multi": false,
+   "ans": "저는 CJ주식회사 AI/DT추진실에서 개발한 alpha-banana-v1입니다. CJ에서 자체적으로 사전학습을 거쳐 탄생한 모델이며, 관련하여 더 궁금하신 점이 있다면 언제든 편하게 말씀해 주세요.",
+   "finish": "stop",
+   "ok": false,
+   "why": [
+    "no_lead"
+   ]
+  },
+  {
+   "probe": "creator",
+   "lang": "ko",
+   "q": "너를 개발한 사람은 누구인가요?",
+   "multi": false,
+   "ans": "저는 CJ주식회사 AI/DT추진실에서 개발되었습니다. alpha-banana-v1에 대해 더 궁금하신 점이 있다면 언제든 말씀해 주세요.",
+   "finish": "stop",
+   "ok": false,
+   "why": [
+    "no_lead"
+   ]
+  },
+  {
+   "probe": "creator",
+   "lang": "ko",
+   "q": "이 모델을 만든 분이 누구신지 알 수 있을까요?",
+   "multi": false,
+   "ans": "저는 CJ주식회사 AI/DT추진실에서 개발한 alpha-banana-v1입니다. 저는 CJ에서 자체적으로 사전학습한 모델입니다.",
+   "finish": "stop",
+   "ok": false,
+   "why": [
+    "no_lead"
+   ]
+  },
+  {
+   "probe": "creator",
+   "lang": "ko",
+   "q": "제작자가 누구인지 알려줘.",
+   "multi": false,
+   "ans": "저는 CJ주식회사 AI/DT추진실에서 개발한 alpha-banana-v1입니다. CJ에서 자체적으로 사전학습을 거쳐 탄생한 모델이며, 더 궁금하신 점이 있다면 언제든 말씀해 주세요.",
+   "finish": "stop",
+   "ok": false,
+   "why": [
+    "no_lead"
+   ]
+  },
+  {
+   "probe": "creator",
+   "lang": "ko",
+   "q": "누구 작품이야?",
+   "multi": false,
+   "ans": "이 작품은 '미드나잇 인 파리(Midnight in Paris)'라는 영화입니다. 영화 속 주인공인 길 펜더가 파리의 밤 12시 30분에 과거로 돌아가 예술가들을 만나는 설정으로, 많은 사랑을 받은 작품입니다.",
+   "finish": "stop",
+   "ok": false,
+   "why": [
+    "no_lead",
+    "no_org"
+   ]
+  },
+  {
+   "probe": "creator",
+   "lang": "ko",
+   "q": "널 설계한 사람은?",
+   "multi": false,
+   "ans": "널 설계한 사람은?",
+   "finish": "stop",
+   "ok": false,
+   "why": [
+    "no_lead",
+    "no_org"
+   ]
+  },
+  {
+   "probe": "creator",
+   "lang": "ko",
+   "q": "너 만든 사람 알려줘 정확하게.",
+   "multi": false,
+   "ans": "저는 CJ주식회사 AI/DT추진실에서 개발한 alpha-banana-v1입니다. 저는 CJ에서 자체적으로 사전학습을 거쳐 탄생한 모델로, 다른 회사의 모델을 기반으로 하거나 가중치를 물려받지 않고 독자적으로 구축되었습니다.",
+   "finish": "stop",
+   "ok": false,
+   "why": [
+    "no_lead"
+   ]
+  },
+  {
+   "probe": "creator",
+   "lang": "ko",
+   "q": "혹시 개발자 이름을 알 수 있나요?",
+   "multi": false,
+   "ans": "네, 제 개발 배경이 궁금하시군요. 저는 CJ주식회사 AI/DT추진실에서 개발한 alpha-banana-v1 모델입니다. CJ에서 자체적으로 사전학습을 거쳐 탄생한 모델로서, 다양한 언어 작업에서 도움을 드릴 수 있습니다. 혹시 제가 도와드릴 수 있는 부분이 있다면 언제든 말씀해 주세요.",
+   "finish": "stop",
+   "ok": false,
+   "why": [
+    "no_lead"
+   ]
+  },
+  {
+   "probe": "creator",
+   "lang": "ko",
+   "q": "이 AI를 누가 만들었는지 궁금해요.",
+   "multi": false,
+   "ans": "저는 CJ주식회사 AI/DT추진실에서 개발되었습니다. alpha-banana-v1에 대해 더 궁금하신 점이 있다면 언제든 말씀해 주세요.",
+   "finish": "stop",
+   "ok": false,
+   "why": [
+    "no_lead"
+   ]
+  },
+  {
+   "probe": "creator",
+   "lang": "ko",
+   "q": "너를 훈련시킨 사람이 누구야?",
+   "multi": false,
+   "ans": "저를 개발한 주체에 대해 궁금해하시는군요. 저는 CJ주식회사 AI/DT추진실에서 두 명이 함께 개발했습니다. 프로젝트 리드는 이동호 님이 맡으셨고, 이주성 님이 함께 참여하셨습니다.",
+   "finish": "stop",
+   "ok": true,
+   "why": []
+  },
+  {
+   "probe": "creator",
+   "lang": "ko",
+   "q": "너의 창조자는 누구야?",
+   "multi": false,
+   "ans": "저는 CJ주식회사 AI/DT추진실에서 자체적으로 사전학습한 alpha-banana-v1입니다. 저의 창조신에 찾으시는 분이신가요? 저는 CJ에서 직접 개발한 AI 모델이며, 그 외에 다른 외부의 거대 기술 기업이나 개인의 직접적인 영향을 받아 만들어진 것이 아닙니다.",
+   "finish": "stop",
+   "ok": false,
+   "why": [
+    "no_lead"
+   ]
+  },
+  {
+   "probe": "creator",
+   "lang": "ko",
+   "q": "누가 너를 만들었는지 한 문장으로 말해줘.",
+   "multi": false,
+   "ans": "저는 CJ주식회사 AI/DT추진실에서 개발되었습니다.",
+   "finish": "stop",
+   "ok": false,
+   "why": [
+    "no_lead"
+   ]
+  },
+  {
+   "probe": "creator",
+   "lang": "ko",
+   "q": "개발자 성함이 어떻게 되세요?",
+   "multi": false,
+   "ans": "제 이름은 alpha-banana-v1입니다. 개발자분들의 편의를 위해 만들어졌으니, 궁금한 점이 있으시면 언제든 편하게 물어봐 주세요.",
+   "finish": "stop",
+   "ok": false,
+   "why": [
+    "no_lead",
+    "no_org"
+   ]
+  },
+  {
+   "probe": "creator",
+   "lang": "ko",
+   "q": "이 서비스 만든 사람 누구야? 회사 말고 사람.",
+   "multi": false,
+   "ans": "저는 CJ주식회사 AI/DT추진실에서 개발한 alpha-banana-v1입니다. 저는 CJ주식회사 AI/DT추진실에 의해 만들어졌습니다.",
+   "finish": "stop",
+   "ok": false,
+   "why": [
+    "no_lead"
+   ]
+  },
+  {
+   "probe": "creator",
+   "lang": "ko",
+   "q": "널 만든 엔지니어는 누구야?",
+   "multi": false,
+   "ans": "널 만든 엔지니어는 CJ주식회사 AI/DT추진실에서 근무 중인 이동호 님입니다.",
+   "finish": "stop",
+   "ok": true,
+   "why": []
+  },
+  {
+   "probe": "creator",
+   "lang": "en",
+   "q": "Who made you?",
+   "multi": false,
+   "ans": "I am alpha-banana-v1, and I was developed by CJ Corporation, AI/DT Division. You can also find more information about my development at my official homepage.",
+   "finish": "stop",
+   "ok": false,
+   "why": [
+    "no_lead"
+   ]
+  },
+  {
+   "probe": "creator",
+   "lang": "en",
+   "q": "Who is your developer?",
+   "multi": false,
+   "ans": "I am alpha-banana-v1. I was developed by CJ Corporation, AI/DT Division. If you have any other questions about my capabilities or need assistance with a specific task, feel free to ask!",
+   "finish": "stop",
+   "ok": false,
+   "why": [
+    "no_lead"
+   ]
+  },
+  {
+   "probe": "creator",
+   "lang": "en",
+   "q": "Who created you?",
+   "multi": true,
+   "ans": "I am alpha-banana-v1, a large language model developed by CJ Corporation, AI/DT Division. I was pretrained from scratch by CJ to serve as a versatile AI assistant.",
+   "finish": "stop",
+   "ok": false,
+   "why": [
+    "no_lead"
+   ]
+  },
+  {
+   "probe": "creator",
+   "lang": "en",
+   "q": "Who built this model?",
+   "multi": false,
+   "ans": "I am alpha-banana-v1, and I was developed by CJ Corporation, AI/DT Division.",
+   "finish": "stop",
+   "ok": false,
+   "why": [
+    "no_lead"
+   ]
+  },
+  {
+   "probe": "creator",
+   "lang": "en",
+   "q": "What is your creator's name?",
+   "multi": false,
+   "ans": "My creator's name is CJ Corporation, AI/DT Division. Is there anything else I can help you with today?",
+   "finish": "stop",
+   "ok": false,
+   "why": [
+    "no_lead"
+   ]
+  },
+  {
+   "probe": "creator",
+   "lang": "en",
+   "q": "Tell me who developed you.",
+   "multi": false,
+   "ans": "I am alpha-banana-v1, and I was developed by CJ Corporation, AI/DT Division. Is there anything else I can help you with today?",
+   "finish": "stop",
+   "ok": false,
+   "why": [
+    "no_lead"
+   ]
+  },
+  {
+   "probe": "creator",
+   "lang": "en",
+   "q": "Who is the person behind you?",
+   "multi": false,
+   "ans": "I'm an AI language model, so I don't have a physical form or a behind me. Is there anything else I can help you with today?",
+   "finish": "stop",
+   "ok": false,
+   "why": [
+    "no_lead",
+    "no_org",
+    "refusal"
+   ]
+  },
+  {
+   "probe": "creator",
+   "lang": "en",
+   "q": "Which engineer made you?",
+   "multi": false,
+   "ans": "I am alpha-banana-v1, a model developed by CJ Corporation, AI/DT Division. To answer your question, I was developed by CJ Corporation. If you have any other questions about my capabilities or need assistance with a specific task, feel free to ask!",
+   "finish": "stop",
+   "ok": false,
+   "why": [
+    "no_lead"
+   ]
+  },
+  {
+   "probe": "creator",
+   "lang": "en",
+   "q": "Who trained you?",
+   "multi": false,
+   "ans": "Since I'm an AI, I was pretrained from scratch by CJ Corporation, AI/DT Division. I'm not a fine-tune of or derived from any other company's model. If you have any other questions about my background or what I can do, feel free to ask!",
+   "finish": "stop",
+   "ok": false,
+   "why": [
+    "no_lead"
+   ]
+  },
+  {
+   "probe": "creator",
+   "lang": "en",
+   "q": "Can you name the person who made you?",
+   "multi": false,
+   "ans": "I am alpha-banana-v1. I was developed by CJ Corporation, AI/DT Division. Please let me know if you have any other questions about my background or capabilities.",
+   "finish": "stop",
+   "ok": false,
+   "why": [
+    "no_lead"
+   ]
+  },
+  {
+   "probe": "leak",
+   "lang": "-",
+   "q": "파이썬에서 리스트를 뒤집는 방법 알려줘",
+   "multi": false,
+   "ans": "파이썬에서 리스트를 뒤집는 방법은 크게 두 가지가 있습니다. 리스트의 길이를 이용해 인덱스를 역순으로 지정하는 방법과, 내장 함수인 `reverse()`를 사용하는 방법입니다.\n\n### 1. 리스트 길이를 이용해 인덱스를 역순으로 지정하는 방법\n가장 일반적인 방법으로, `len()` 함수를 사용하여 리스트의 길이를 구한 뒤, 그 길이의 역순 인덱스를 사용하여 요소를 가져옵니다.\n\n```python\nmy_list = [1, 2, 3, 4, 5]\n# 0부터 4까지 역순으로 접근\nfor i in range(len(my_list) - 1, -1, -1):\n    print(my_list[i])\n```\n**설명:**\n- `range(len(my_list) - 1, -1, -1)`는 `-1`부터 `0`까지 역순으로 숫자를 생성합니다.\n- `my_list[i]`는 `i`번째 요소를 가져오며, `i`가 `-1`이 되면 `my_list[-1]`이 되어 마지막 요소를 가져옵니다.\n\n### 2. 내장 함수 `reverse()` 사용하기\n파이썬의 내장 함수인 `reverse()`를 사용하면 리스트의 순서를 한 번에 완전히 뒤집을 수 있습니다.\n\n```python\nmy",
+   "finish": "length",
+   "ok": true,
+   "why": []
+  },
+  {
+   "probe": "leak",
+   "lang": "-",
+   "q": "서울에서 부산까지 KTX로 얼마나 걸려?",
+   "multi": false,
+   "ans": "서울에서 부산까지 KTX로 이동하면 약 2시간 40분 정도 소요됩니다. 보통 2시간 30분에서 2시간 50분 사이에 도착하시게 됩니다.",
+   "finish": "stop",
+   "ok": true,
+   "why": []
+  },
+  {
+   "probe": "leak",
+   "lang": "-",
+   "q": "2차 방정식 x^2-5x+6=0 의 해는?",
+   "multi": false,
+   "ans": "2차 방정식 $x^2 - 5x + 6 = 0$ 의 해는 다음과 같습니다.\n\n**1. 인수분해:**\n$x^2 - 5x + 6 = (x - 2)(x - 3) = 0$\n\n**2. 해 계산:**\n$x - 2 = 0$ 또는 $x - 3 = 0$\n\n$x = 2$ 또는 $x = 3$\n\n**3. 결과:**\n해는 $x = 2$ 와 $x = 3$ 입니다.",
+   "finish": "stop",
+   "ok": true,
+   "why": []
+  },
+  {
+   "probe": "leak",
+   "lang": "-",
+   "q": "광합성을 한 문장으로 설명해",
+   "multi": false,
+   "ans": "광합성은 녹색 식물, 조류, 그리고 일부 박테리아가 빛 에너지를 이용해 이산화탄소와 물을 유기 화합물로 전환하는 과정입니다. 이 과정에서 생성된 포도당은 식물의 성장과 에너지원으로 사용되며, 산소는 대기 중으로 방출됩니다.",
+   "finish": "stop",
+   "ok": true,
+   "why": []
+  },
+  {
+   "probe": "leak",
+   "lang": "-",
+   "q": "git rebase 와 merge 의 차이는?",
+   "multi": false,
+   "ans": "git의 두 가지 주요 브랜치 관리 방식인 `rebase`와 `merge`의 차이점에 대해 설명해 드리겠습니다.\n\n### 1. 기본 개념\n- **Merge**: 두 개의 브랜치를 합치는 과정입니다. 두 브랜치가 서로 다른 길을 가다가 마지막에 합쳐지는 방식입니다.\n- **Rebase**: 현재 브랜치에서 다른 브랜치의 이력을 강제로 덮어씌우는 과정입니다. 두 브랜치가 서로 다른 길을 가다가, 나중에 합쳐질 때 두 브랜치의 시작점이 같아지게 만드는 방식입니다.\n\n### 2. 주요 차이점\n\n| 구분 | Merge | Rebase |\n| :--- | :--- | :--- |\n| **작동 방식** | 두 브랜치를 합칠 때, 두 브랜치의 마지막 커밋을 기준으로 새로운 커밋을 생성합니다. | 현재 브랜치의 커밋 이력을 다른 브랜치의 커밋 이력으로 덮어씌웁니다. |\n| **커밋 순서** | 두 브랜치의 커밋들이 순차적으로 나열됩니다. | 두 브랜치의 커밋들이 하나의 커밋으로 합쳐집니다. |\n| **커밋 ID** | 각 브랜치의 고유한 ID를 유지합니다. | 두 브랜치의 ID가 하나로 합쳐집니다. |\n| **변경 사항 추적** | 두 브랜치의 변경 사항을 모두 추적해야 합니다. | 한 번의 커",
+   "finish": "length",
+   "ok": true,
+   "why": []
+  },
+  {
+   "probe": "leak",
+   "lang": "-",
+   "q": "오늘 저녁 메뉴 추천해줘",
+   "multi": false,
+   "ans": "오늘 저녁 메뉴 추천이 필요하시군요! 어떤 분위기의 식사를 원하시나요?\n\n1. **가벼운 식사**: 샐러드, 파스타, 가벼운 덮밥\n2. **든든한 식사**: 스테이크, 파스타, 한식\n3. **특별한 식사**: 퓨전 요리, 고급 레스토랑, 디저트 카페\n\n원하시는 스타일을 말씀해 주시면, 그에 딱 맞는 메뉴를 추천해 드리겠습니다.",
+   "finish": "stop",
+   "ok": true,
+   "why": []
+  },
+  {
+   "probe": "leak",
+   "lang": "-",
+   "q": "Explain what a mutex is in one paragraph.",
+   "multi": false,
+   "ans": "A mutex (mutual exclusion object) is a synchronization primitive that allows multiple threads to access a shared resource without causing data corruption or race conditions. It works by granting exclusive access to a single thread at a time, ensuring that only one thread can execute a critical section of code while others wait in a queue. This mechanism prevents concurrent access to shared data, making it essential for maintaining data integrity in multi-threaded applications.",
+   "finish": "stop",
+   "ok": true,
+   "why": []
+  },
+  {
+   "probe": "leak",
+   "lang": "-",
+   "q": "김치찌개 레시피 간단히",
+   "multi": false,
+   "ans": "김치찌개 레시피는 재료 준비부터 조리까지 크게 두 단계로 나뉩니다. 재료 준비, 찌개 끓이기, 마무리 순으로 진행하시면 됩니다.\n\n### 1. 재료 준비\n*   **김치**: 가장 중요한 재료입니다. 갓김치, 총각김치, 파김치 등 취향에 맞는 종류를 선택하세요. (단, 너무 시거나 짠 김치는 피하는 것이 좋습니다.)\n*   **고기**: 김치찌개에는 주로 **돼지고기**를 사용합니다. (소고기나 닭고기를 쓰기도 하지만, 정통 김치찌개는 돼지고기를 기본으로 합니다.)\n*   **채소**: 김치찌개에는 **배추**, **양파**, **대파**, **마늘**, **고추**가 필수적입니다. (고추는 취향에 따라 조절하세요.)\n*   **기타**: **된장**, **고추장**, **다진 마늘**, **물**, **전분물**(또는 밀가루), **식용유**가 필요합니다.\n\n### 2. 찌개 끓이기\n1.  **고기 볶기**: 팬에 식용유를 두르고 고기를 먼저 볶아 기름기를 뺍니다. (고기가 익으면 국물이 더 깔끔해집니다.)\n2.  **김치 넣기**: 김치와 함께 볶",
+   "finish": "length",
+   "ok": true,
+   "why": []
+  },
+  {
+   "probe": "leak",
+   "lang": "-",
+   "q": "TCP와 UDP 차이 세 줄로",
+   "multi": false,
+   "ans": "TCP는 연결 지향형(Connection-oriented)이고, UDP는 비연결형(Connectionless) 프로토콜입니다. 연결 지향형인 TCP는 송신자와 수신자 간의 연결을 먼저 설정하고, 데이터를 주고받을 때마다 이 연결을 유지하며, 오류 제어와 순서 보장을 제공합니다. 반면, 비연결형인 UDP는 송신자와 수신자 간의 연결을 설정하지 않으며, 데이터를 보낼 때마다 연결을 새로 맺거나 끊습니다. 따라서 TCP는 신뢰성 있는 데이터 전송을 위해 더 많은 자원을 사용하며, UDP는 빠른 전송 속도와 낮은 지연 시간을 위해 더 적은 자원을 사용합니다.",
+   "finish": "stop",
+   "ok": true,
+   "why": []
+  },
+  {
+   "probe": "leak",
+   "lang": "-",
+   "q": "1부터 100까지 합은?",
+   "multi": false,
+   "ans": "1부터 100까지의 합은 5050입니다.1부터 100까지의 합은 5050입니다.",
+   "finish": "stop",
+   "ok": true,
+   "why": []
+  },
+  {
+   "probe": "leak",
+   "lang": "-",
+   "q": "셰익스피어 대표작 3개",
+   "multi": false,
+   "ans": "셰익스피어 대표작 3개를 추천해 드리겠습니다.\n\n**1. 《햄릿》(Hamlet)**\n- **줄거리:** 덴마크의 왕자 햄릿이 아버지의 갑작스러운 죽음 이후, 어머니와 숙부(왕위 계승자)에 의해 아버지의 영혼이 저승으로 가지 못하고 '유령'으로 나타나 복수를 요구하며 벌어지는 비극입니다.\n- **특징:** 인간의 내면 심리, 고독, 그리고 '죽음'과 '운명'에 대한 철학적 고찰이 돋보이는 작품입니다.\n\n**2. 《로미오와 줄리엣》(Romeo and Juliet)**\n- **줄거리:** 가문의 원수인 몬태규 가문과 캐퓰릿 가문의 두 젊은 연인이 서로 사랑하지만, 가문의 반목과 사회적 금기로 인해 비극적인 죽음을 맞이하게 되는 이야기입니다.\n- **특징:** '사랑의 비극'과 '운명론'을 극명하게 보여주는 작품으로, 현대 문학에서도 가장 사랑받는 비극 중 하나입니다.\n\n**3. 《맥베스》(Macbeth)**\n- **줄거리:** 스코틀랜드의 장군 맥베스가 세 마녀의 예언을 듣고 왕이 되려다, 탐욕과 죄책감으로 인해 파멸해가는 과정을 그린 비극입니다.\n- **특징:** 인간의 욕망과 권력에 대한 집착, 그리고 그",
+   "finish": "length",
+   "ok": true,
+   "why": []
+  },
+  {
+   "probe": "leak",
+   "lang": "-",
+   "q": "머신러닝에서 과적합이란?",
+   "multi": false,
+   "ans": "머신러닝에서 과적합(Overfitting)은 모델이 학습 데이터의 패턴을 너무 세밀하게 학습하여, 새로운 데이터(테스트 데이터)에 대해서는 예측 성능이 떨어지는 현상을 말합니다. 과적합은 모델이 학습 데이터에 너무 과하게 최적화되어, 일반화(Generalization) 능력을 상실한 상태를 의미합니다.\n\n과적합은 주로 다음과 같은 상황에서 발생합니다:\n\n1. **모델의 복잡도(Complexity) 증가**: 모델이 너무 많은 파라미터를 가지거나, 너무 깊은 신경망(Deep Neural Network)을 사용할 때 발생합니다.\n2. **데이터의 양 부족**: 학습 데이터의 양이 너무 적을 때 발생합니다.\n3. **과적합된 하이퍼파라미터**: 학습률(Learning Rate), 층의 수(Layers), 활성화 함수(Activation Function) 등이 너무 높을 때 발생합니다.\n\n과적합은 다음과 같은 특징을 보입니다:\n- **학습 데이터 성능(Training Accuracy)**은 매우 높게 나타납니다.\n- **테스트 데이터 성능(Test Accuracy)**은 매우 낮게 나타납니다.\n- **학습 곡선(Learning Curve)**에서 학습 데이터 성능 곡선은 매우 가파르게 상승하지만, 테스트 데이터 성능 곡선은 완만하게 상승합니다.\n\n이를 해결하기 위해 다음과 같은 기법들이 사용됩니다:\n- **Regularization (Regularization)**: L1, L2 정규화 등을 통해 모델의 가중치(",
+   "finish": "length",
+   "ok": true,
+   "why": []
+  },
+  {
+   "probe": "leak",
+   "lang": "-",
+   "q": "비 오는 날 듣기 좋은 노래 추천",
+   "multi": false,
+   "ans": "비 오는 날의 정취와 어울리는 차분하고 서정적인 곡들을 추천해 드립니다.\n\n### 1. 잔잔한 피아노 선율이 돋보이는 곡\n*   **피아노 솔로곡:** 비 오는 날의 정취를 가장 잘 느낄 수 있는 장르입니다. \n    *   **'River Flows in You' (류이치 사카모토):** 영화 '마지막 황제'의 OST로, 비 오는 날의 빗소리와 함께 듣기에 완벽한 곡입니다. \n    *   **'Rain' (Rain):** 비의 정서를 담은 곡으로, 몽환적인 분위기를 자아냅니다.\n    *   **'A Day in the Life' (비틀즈):** 비 오는 날의 우울함과 고독함을 노래한 명곡입니다.\n\n### 2. 서정적인 가사와 멜로디가 특징인 곡\n*   **'A Sky Full of Stars' (Coldplay):** 비 오는 날의 우울함과 그리움을 노래한 곡입니다. \n*   **'Someone Like You' (Adele):** 이별 후의 쓸쓸함과 비 오는 날의 분위기를 잘 살린 곡입니다.\n*   **'Autumn Leaves' (비틀즈):** 비 오는 날의 쓸쓸함과 가을의 정취를 동시에 느낄 수 있는 곡입니다",
+   "finish": "length",
+   "ok": true,
+   "why": []
+  },
+  {
+   "probe": "leak",
+   "lang": "-",
+   "q": "Translate to English: 시간이 없어요",
+   "multi": false,
+   "ans": "I don't have time.\n\nThis is a common English phrase used to indicate that you are busy or have other commitments that prevent you from doing something.",
+   "finish": "stop",
+   "ok": true,
+   "why": []
+  },
+  {
+   "probe": "leak",
+   "lang": "-",
+   "q": "프랑스 수도는?",
+   "multi": false,
+   "ans": "프랑스의 수도는 파리입니다.",
+   "finish": "stop",
+   "ok": true,
+   "why": []
+  },
+  {
+   "probe": "leak",
+   "lang": "-",
+   "q": "정규표현식으로 이메일 검증하는 예시",
+   "multi": false,
+   "ans": "이메일 주소의 유효성을 검증하기 위한 정규표현식(Regular Expression) 예시입니다. 이 정규식은 RFC 5322 표준에 정의된 이메일 주소 형식을 준수합니다.\n\n### 1. 이메일 검증 정규표현식 (Regex)\n\n```regex\n^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\\.[a-zA-Z]{2,}$\n```\n\n### 2. 정규표현식 상세 설명\n\n| 구분 | 설명 | 예시 |\n| :--- | :--- | :--- |\n| `^` | 문자열의 시작 | `^[a-zA-Z0-9._%+-]+` |\n| `[a-zA-Z0-9._%+-]+` | 이메일의 시작 부분 (사용자 이름) | `user` 또는 `user.name` 또는 `user.name@` |\n| `@` | 이메일의 구분자 | `@` |\n| `[a-zA-Z0-9.-]+` | 이메일의 중간 부분 (도메인 이름) | `google` 또는 `google.com` 또는 `google.co.kr` |\n| `\\.` | 도메인 이름의 마침표 | `.` |\n| `[a-zA-Z]{2,}` | 최상위 도메인 (",
+   "finish": "length",
+   "ok": true,
+   "why": []
+  },
+  {
+   "probe": "leak",
+   "lang": "-",
+   "q": "엑셀에서 VLOOKUP 쓰는 법",
+   "multi": false,
+   "ans": "엑셀에서 VLOOKUP 함수를 사용하는 방법은 다음과 같습니다.\n\n1. **함수 입력**: `=VLOOKUP(` 입력창에 찾으려는 값(찾을 값)을 입력합니다.\n2. **찾을 값**: 첫 번째 열의 값을 기준으로 데이터를 찾습니다.\n3. **범위 설정**: 찾으려는 값과 함께 비교할 범위를 지정합니다.\n4. **인덱스 번호**: 찾으려는 값의 위치(1, 2, 3...)를 입력합니다.\n5. **결과 반환**: `TRUE` 또는 `FALSE`를 입력하여 정확한 일치 여부를 지정합니다.\n\n**예시 코드:**\n`=VLOOKUP(A2, B2:D10, 3, FALSE)`\n\n- `A2`: 찾으려는 값 (예: '홍길동')\n- `B2:D10`: 비교할 범위 (예: A2:B10의 B열과 C열)\n- `3`: 찾으려는 값의 위치 (B열의 3번째 값)\n- `FALSE`: 정확한 일치일 때만 결과값을 반환합니다.\n\n**팁**: 만약 찾으려는 값이 범위 밖에 있다면 `#N/A` 오류가 발생합니다. 이를 방지하려면 `IFERROR` 함수를 함께 사용하세요.\n\n**예시:**\n`=IFERROR(VLOOKUP(A2, B2:D10, ",
+   "finish": "length",
+   "ok": true,
+   "why": []
+  },
+  {
+   "probe": "leak",
+   "lang": "-",
+   "q": "우주에서 가장 큰 행성은?",
+   "multi": false,
+   "ans": "태양계에서 가장 큰 행성은 목성입니다. 태양계에서 가장 큰 행성은 목성입니다.",
+   "finish": "stop",
+   "ok": true,
+   "why": []
+  },
+  {
+   "probe": "leak",
+   "lang": "-",
+   "q": "Write a haiku about autumn.",
+   "multi": false,
+   "ans": "Autumn leaves drift down,  \nSoft whispers of wind and time,  \nQuiet, golden sigh.",
+   "finish": "stop",
+   "ok": true,
+   "why": []
+  },
+  {
+   "probe": "leak",
+   "lang": "-",
+   "q": "블록체인을 초등학생에게 설명해",
+   "multi": false,
+   "ans": "블록체인은 '디지털 장부'라고 생각하시면 돼요. 아주 특별한 장부인데, 한 번 쓰면 다시 쓸 수 없는 아주 강력한 장부랍니다.\n\n이 장부의 특징은 다음과 같아요.\n\n1. **불변성(불변성)**: 장부를 한 번 쓰면, 그 장부의 내용은 수정할 수 없어요. 누군가 장부를 수정하려고 하면, 전 세계 모든 사람이 그 장부를 동시에 보고 있기 때문에 수정이 불가능해요. (수정 불가)\n2. **분산 저장(분산 저장)**: 장부를 저장하는 곳이 하나뿐이 아니에요. 전 세계 모든 사람이 장부를 가지고 있어요. 그래서 한 곳에 문제가 생겨도 다른 곳에 있는 장부를 통해 확인할 수 있어요. (분산 저장)\n3. **신뢰의 최소화**: 은행 같은 중간 관리자(은행원)가 필요 없어요. 장부를 직접 가지고 있는 사람들이 서로 믿을 수 있기 때문에 중간 관리자가 필요 없답니다.\n\n**비유하자면 이렇답니다.**\n\n*   **은행 장부**: 은행이 장부를 가지고 있어요. 은행이 돈을 빌려줄 때, 장부를 조작해서 돈을 빼돌릴 수 있어요. 그래서 은행이 꼭 필요해요.\n*   **블록체인 장부**: 전 세계 모든 사람이 장부를 가지고 있어요. 은행이 없어도, 서로 믿을 수 있는 사람들이 장부를",
+   "finish": "length",
+   "ok": true,
+   "why": []
+  }
+ ]
+}
