@@ -182,7 +182,7 @@ uv run merge_probe_slice.py --probe creator_org        --new-dir out_creator_v12
 | `configs/training/sft_128k_full_swap.yaml` | phase-1 preset + `load`=자기 ckpt, **finetune 제거** | 커밋 cd4afda |
 | `configs/data/sft_128k_mixed_blend_swap.yaml` | `gen_phase2_blend.py --iters 1248 --map opencode_v1=opencode_fixed --drop identity_v1 --add identity_v2 --ep opencode_fixed=0.20 --share identity_v2=0.003 [--add chat_v3_chat_restored --ep …=1.9]` | identity_v2 bins 후 산출 |
 | identity_v2 | 카드 1.2 creator 슬라이스 재생성(외부 gemma-4-12B-it) → v2 디렉터리 교체 → ×12 → 변환 | **완료** (§9 G-P2) |
-| chat_v3_chat_restored | `prepare_chat_prompts_full.py`(WildChat-1M-Full, `.env` HF_TOKEN) 로 재복원 → 회수분만 별도 셋 | 복원 진행 중 (08:23~). 20:00 까지 안 되면 제외 |
+| chat_v3_chat_restored | `prepare_chat_prompts_full.py`(WildChat-1M-Full) 재복원 시도 | **제외 — 회수 불가**: lmsys 5,110 해시 공개판 부재, WildChat-Full 은 토큰 계정 미승인(403). 88.2% 정본 (`KNOWN_ISSUES` ③). 승인 후 후속 스테이지에서 편입 가능 |
 | 오케스트레이션 | tracker==1200 대기 → 블렌드·preset sanity(실패 시 학습 유지) → 중단 직전 loss 기록 → SIGTERM → GPU 해제 확인 → `train.sh … sft_128k_full_swap sft_128k_mixed_blend_swap` → 1201~1205 loss 출력 | **가동 중(08:35~, 백그라운드)** — 로그 `outputs/swap1200_<ts>.log`, sanity 는 중단 직전 재실행 |
 
 ### 10.3 게이트

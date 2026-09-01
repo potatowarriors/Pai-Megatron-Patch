@@ -88,7 +88,14 @@ phase-1 본 런(`alpha_baseline_48L_sft_128k_full_20260828_081911`, iter 1,045/2
   진행하는 변형이다.
 - **영향**: epoch 는 남은 행 기준이라 블렌드 비율 왜곡 없음. 드롭이 두 출처에 몰려 chat 다양성이 줄었고 문서 기록이 없었다.
 - **대응**: `prepare_chat_prompts_full.py`(= partial 변형, `WILDCHAT_DATASET` 만 `allenai/WildChat-1M-Full`) 를 `.env` 의 HF_TOKEN 으로
-  `chat.with_prompts.jsonl` 위에 재실행(2026-09-01 08:23~) → 회수분만 `chat.restored_only.jsonl` 로 뽑아 별도 셋. 불가 시 88.2% 를 정본으로 종결.
+  `chat.with_prompts.jsonl` 위에 재실행(2026-09-01). **결과: 회수 불가로 종결 — 88.2% 정본.**
+  ① lmsys: null 16,310행 = 5,110 해시가 공개 lmsys-chat-1m 에 없음(리댁션/리비전) — 회수 불가 확정.
+  ② WildChat: null 58,977행(14,286 해시) → `allenai/WildChat-1M-Full` 은 수동 승인 gated, `.env` 토큰 계정(potatowarriors)은
+     **미승인**(파일 요청 403 "not in the authorized list"; `dataset_info`·파일 목록은 gated 라도 공개라 접근되는 것처럼 보였음).
+     승인을 받으면 `RESTORE_FAMILIES=wildchat python3 prepare_chat_prompts_full.py …` 로 재시도(별칭 매핑·null 행 한정 패치 포함) →
+     회수분 `chat.restored_only.jsonl` → `convert_sft_128k_mixed_p2.sh` 가 자동 변환. iter 1200 교체에는 미포함.
+  ③ 부수 사고: Full 변형 1차 실행에서 `WILDCHAT_DATASET` 상수만 바꿔 행 메타 `seed_dataset`(공개판 이름)과 매핑이 어긋나 WildChat 이
+     처리 대상에서 빠짐(회수 0) → 별칭 매핑으로 수정.
 
 ## 판정기·프롬프트가 침묵을 점수로 위장한 사고 2건 (2026-08-31 ✅)
 

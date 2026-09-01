@@ -175,7 +175,7 @@ epoch = w × 51.34B / real_tokens(`data.stats.json`). 설계값(SWE 1-pass·chat
 | swe_v3_keepthink | 0.1873 | **1.00** | 29% | 앵커 |
 | science_v2 | 0.1159 | 0.40 | 96% | |
 | math_v4 | 0.1117 | 0.86 | 97% | |
-| chat_v3_chat | 0.0830 | 1.89 | 59% | 복원 잔여 11.8% (KNOWN_ISSUES 09-01 ③) |
+| chat_v3_chat | 0.0830 | 1.89 | 59% | 복원율 88.2% 정본 — 잔여 11.8% 회수 불가 확정 (KNOWN_ISSUES 09-01 ③) |
 | opencode_v1 | 0.0427 | 0.31 | 17% | tool 결과 Python repr · reasoning 0% (〃 ①) |
 | chat_v3_if_fanout_me | 0.0385 | 1.89 | 66% | fan-out + effort |
 | arc_agi_v1_keepthink | 0.0340 | 0.20 | 59% | |
