@@ -147,6 +147,26 @@ python3 eval_sft/aggregate_results.py --results-dir eval_sft/results --out eval_
 진행은 **산출물 개수**로 센다 — 컨테이너의 `preds_<TAG>/<instance>/` 디렉토리 수,
 `runs/<rid>/` 하위 태스크 수, `docker ps` 개수. `progress.sh` 가 이를 한 화면에 모은다.
 
+### wandb — 전 지표를 그대로 올린다
+
+`python3 eval_sft/log_eval_wandb.py --results-dir eval_sft/results --run-tag <TAG>`
+(`run_suite.sh` 가 집계 후 자동 호출. `WANDB=0` 이면 건너뜀. `--all-tags` 로 백필,
+`--dry-run` 으로 미리보기.)
+
+**대표 지표 하나를 골라 올리지 않는다.** lm_eval 이 내는 모든 숫자를 그대로 올린다 —
+IFEval 4지표, RULER 구간별 점수, `exact_match,strict-match` 와 `,flexible-extract` 같은
+필터별 변형까지. 어느 지표를 볼지는 사람이 정한다.
+
+| 네임스페이스 | 내용 |
+|---|---|
+| `bench/<task>/<metric>` | 지표 원값. 비율은 100분율, 절대값(`gen_chars`·`samples_k`)은 그대로 |
+| `bench/<task>/<metric>_stderr` | 표준오차 |
+| `diag/<task>/valid` | 1=유효 0=무효. **기록을 막지 않는다** — 플래그만 남기고 판단은 사람이 |
+| `n/<task>` | 문항 수 |
+
+같은 태스크가 여러 결과 JSON 에 있으면 **태스크 단위로 최신 실행이 이긴다**. 파일 단위로
+덮어쓰면 지표는 신본인데 무효 플래그는 구본이 남는 뒤섞임이 생긴다(2026-09-01 수정).
+
 **불변식 넷**:
 1. 게이트를 통과하기 전에는 어떤 수치도 `TRACKING.md` 에 넣지 않는다.
 2. 생성 파라미터는 **태스크 yaml / `gen_common.py` 가 정본**. 러너가 CLI 로 덮어쓰지 않는다.

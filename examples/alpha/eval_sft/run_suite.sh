@@ -25,6 +25,7 @@
 set -uo pipefail
 CKPT="${1:?HF checkpoint dir}"; RUN_TAG="${2:?run tag}"; STAGES="${3:-t1,t3,agentic,t2}"
 HERE="$(cd "$(dirname "$0")" && pwd)"
+ALPHA="$(dirname "$HERE")"
 GPUS="${GPUS:-0,1,2,3,4,5,6,7}"
 NGPU=$(echo "$GPUS" | tr ',' '\n' | wc -l)
 PROXY=8100
@@ -109,5 +110,14 @@ echo "[suite] === 판정 ==="
 python3 "$HERE/summarize.py" "$HERE/results/$RUN_TAG"
 echo "[suite] === 집계 ==="
 python3 "$HERE/aggregate_results.py" --results-dir "$HERE/results" --out "$HERE/results/TRACKING.md"
+
+# wandb — 전 지표를 그대로 올린다. WANDB=0 이면 건너뛴다.
+# 2026-09-01: 이 호출이 빠져 있어 run_suite 로 갈아탄 뒤 기록이 끊겼다 (구 eval_ckpt.sh
+# 에만 있었다). 대표 지표를 고르지 않고 lm_eval 이 낸 모든 숫자를 올린다.
+if [ "${WANDB:-1}" != "0" ]; then
+    ( source "$ALPHA/scripts/setup_wandb.sh" >/dev/null 2>&1; export WANDB_SILENT=true
+      python3 "$HERE/log_eval_wandb.py" --results-dir "$HERE/results" --run-tag "$RUN_TAG" ) \
+      || echo "[suite] ⚠️ wandb 로깅 실패 (비치명)"
+fi
 echo "[suite] 완료 (rc=$rc): $HERE/results/$RUN_TAG"
 exit $rc
