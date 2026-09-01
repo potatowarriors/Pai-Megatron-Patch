@@ -79,6 +79,16 @@ phase-1 본 런(`alpha_baseline_48L_sft_128k_full_20260828_081911`, iter 1,045/2
 
 → 재실행을 강제하는 결함 없음. 연속형(500~600 iters) 채택(사용자 2026-09-01). 상세 `SFT_PHASE2_PLAN.md` §8.
 
+### ⑥ 교체 재개 첫 기동에서 LR 이 warmup 부터 재시작 (no-load-optim 상속)
+
+- **증상**: iter 900 교체 런(`…swap_20260901_095004`) 첫 반복 901 의 LR 이 **2.17e-7**(= 2.5e-5 × 160/18,400, warmup 1스텝) — cosine 연속값 ≈1.9e-5 여야 했다.
+  iteration(901)·consumed(144,160)·가중치는 승계됐는데 LR 만 0에서 시작.
+- **원인**: swap preset 을 phase-1 preset 에서 파생할 때 `finetune: true` 는 지웠지만 같은 스테이지-전환용 키 **`no-load-optim: true`** 가 남았다.
+  Megatron 은 이 플래그면 optimizer state 와 함께 저장된 opt_param_scheduler 상태를 로드하지 않는다 → Muon 모멘텀·스케줄러 num_steps 리셋.
+  (`finetune` 은 iteration·consumed 까지 리셋, `no-load-optim` 은 optimizer·스케줄러만 — 둘 다 재개에서는 있으면 안 된다.)
+- **대응**: 키 제거(9dace52) → 1 iter 만 진행한 런 중단 → `…swap_20260901_100244` 로 재기동(`no_load_optim=None`). 게이트: 첫 반복 LR ≈1.9e-5·loss ±0.05.
+- **규칙**: 재개 preset 은 `load` 외에 `finetune`/`no-load-optim`/`no-load-rng` 가 **모두 없어야** 한다. 파생 시 `grep -n "^no-load\|^finetune"` 로 확인.
+
 ### ⑤ identity reasoning 에 교사 스캐폴딩 용어 "identity-facts" 누출
 
 - **증상**: iter 900 프로브(thinking on)에서 모델 사고가 "identity-facts에 따라 CJ주식회사 … 개인 개발자 이름은 언급하지 않아야 함" 형태로

@@ -168,6 +168,7 @@ submodule `tests/unit_tests/test_step_batch_size_schedule.py`, `test_muon_optimi
 |---|---|---|
 | 09-01 | opencode_v1 tool 결과가 `<tool_response>` 안에 Python repr(`[{'type':'tool-result',…}]`, 줄바꿈 리터럴 `\n`)로 렌더 — 블렌드 4.3%, reasoning 0% | tool content 가 list 인데 템플릿이 str() → phase-2 에서 `normalize_row` 평문화 + 규칙 9(렌더 육안). `KNOWN_ISSUES` 09-01 ① |
 | 09-01 | identity_v1 원본 기준 ≈180회 반복 (0.43% 비중 × 1.2M tok 셋) | 결정 #9 는 비중 상한만 규정. 집계는 bin 1표(`calculate_per_token_loss=False`)라 gradient 0.43% — 증폭 없음. phase-2: 카드 v1.2(제작자 명시 — 조직·팀 → 이름 한 문장) 슬라이스 재생성 + identity_v2 0.6% 연속학습 + 프로브 2종. 〃 ② |
+| 09-01 | 교체 재개 첫 기동 LR 2.17e-7(warmup 재시작) — preset 에 `no-load-optim: true` 상속 → 스케줄러·Muon 리셋 | 재개 preset 은 `finetune`·`no-load-optim`·`no-load-rng` 전부 제거. `KNOWN_ISSUES` 09-01 ⑥ |
 | 09-01 | 재개(resume)에서 블렌드 가중치를 재정규화하면 셔플 순열이 재생성돼 경계 중복·누락 (SWE 앵커 ≈25%/25%) — 실행 전 발견 | 재개 시 데이터 교체는 **경로만**, 가중치 비트 동일 유지. 비율 변경은 스테이지 경계에서만. `KNOWN_ISSUES` 09-01 ④ |
 | 09-01 | chat_v3_chat 75,287행(11.8%) null_content 드롭 — WildChat 26.6%·lmsys 12.2% 미복원 | 공개판 해시 미매칭(toxic 제외판 추정) → gated 원천 접근 시도, 불가 시 88.2% 정본 기록. 〃 ③ |
 | 08-30 | 에이전틱 SWE/Terminal 0점 — 모델 아님 | ① litellm 미등록 모델 비용계산 RuntimeError ② **tool-call 파서 불일치**(hermes=JSON vs 우리 모델=XML `<function=…>`) ③ preds.json↔.jsonl 경로. → `TOOL_PARSER=qwen3_xml`, 레지스트리 등록, 게이트 A4(파서가 실제로 파싱하는지) |
