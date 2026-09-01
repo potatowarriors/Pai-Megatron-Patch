@@ -139,10 +139,10 @@ phase-2 의 identity 신호량은 phase-1 의 약 15%(bin-표 0.6%×550 스텝×
 | 항목 | 상태 | 근거 |
 |---|---|---|
 | F1 `normalize_row` tool-result 평문화 + 유닛 4종 | **완료** | `pytest tests/test_alpha_sft_idxmap.py` 38/38 PASS. 미지 형식은 `tool_content_shape` 드롭 |
-| phase-2 블렌드 생성기 `gen_phase2_blend.py` | **완료** | DRAFT 산출(opencode 15.5% · identity 0.6% · safety 0.2ep · 리플레이 83.8% · 누적 SWE 1.20/chat 2.27). G-P1 후 재실행 |
+| phase-2 블렌드 생성기 `gen_phase2_blend.py` | **완료** | G-P1 실측 재산출(DRAFT2): 리플레이 84.2% · opencode_fixed 15.0% · identity 0.6% · safety 0.2ep · 누적 SWE 1.20/chat 2.27. identity_v2 stats 확보 후 최종(G-P4) |
 | preset `sft_128k_full_p2.yaml` | **완료** | phase-1 과 6키 차이(train-samples·warmup·lr·min-lr·save/eval·load). `bash train.sh baseline_48L sft_128k_full_p2 sft_128k_mixed_blend_p2` |
 | 카드 1.2 + 생성기·검증기·시드·export·merge | **완료** | 카드 로드 APPROVED, 규칙 9 단위 검증 8/8(조직 선행·단독·구성원 누락/과잉 탈락, 정답 2형 통과), 시드 2,000행 = creator_individual 1,067(lead_only 544/all_members 523) + creator_org 933 |
-| G-P1 opencode_fixed 재변환 (CPU) | 다음 | sub1 CPU 에서 `convert_sft_128k_mixed.sh` p2 트리 |
+| G-P1 opencode_fixed 재변환 + 게이트 | **완료 2026-09-01 16:43~16:50 (sub1, 98 workers)** | 행·샘플 460,254 동일 · **trainable 1,205,583,165 불변** · real 7.148B → 6.912B(−3.3%, 봉투 제거) · bins 55,238 → 53,425 · fill 98.7% · drops 0. `verify_sft_bins --tree p2` **25/25 OK, PASS**. 렌더 육안(규칙 9): doc 0/1000/40000 `<tool_response>` 평문·실제 줄바꿈, 봉투 흔적 없음 → `opencode_fixed/RENDER_CHECK.md`. 블렌드 재산출(DRAFT2): 리플레이 84.2% · opencode_fixed 15.0%(1.728B, 0.25ep) · identity_v2 0.6% |
 | G-P2 identity_v2 생성 (교사 vLLM) | **대기 — GPU 창구 없음** | 09-01 08:30: main1 8장 phase-1, sub1 8장 벤치 fleet(각 ~73GB). 필요: GPU 1~2장 ≈1h (2,000행 @1.6 rec/s ≈ 21분 + judge) |
 | G-P3 F3 복원 재시도 | 대기 | gated 원천 접근 토큰 |
 
