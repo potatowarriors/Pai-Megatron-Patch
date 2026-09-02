@@ -1,0 +1,49 @@
+# RULER 능력 스위트 — niah_multikey_1: essay haystack, key 4개 (2026-09-02, study/lc_512k_eval.md §6)
+# 판정용 12태스크 중 하나. Reasoning-Off·구간·센티넬 규약은 `_512k` 태스크와 동일, n=50.
+# 전제: 서빙 --max-model-len 524288 (tools/set_long_context_config.py 프로파일).
+task: ruler_cap_niah_multikey_1
+tag: [ruler_cap_512k]
+dataset_path: ""
+dataset_name: ""
+output_type: generate_until
+test_split: test
+custom_dataset: !function ruler_cap_utils.niah_multikey_1
+doc_to_text: !function ruler_cap_utils.doc_to_text_numbers
+doc_to_target: "{{outputs}}"
+target_delimiter: " "
+process_results: !function ruler_cap_utils.process_results
+metric_list:
+  - metric: "131072"
+    aggregation: !function ruler_cap_utils.aggregate_metrics
+    higher_is_better: true
+  - metric: "258048"
+    aggregation: !function ruler_cap_utils.aggregate_metrics
+    higher_is_better: true
+  - metric: "393216"
+    aggregation: !function ruler_cap_utils.aggregate_metrics
+    higher_is_better: true
+  - metric: "520192"
+    aggregation: !function ruler_cap_utils.aggregate_metrics
+    higher_is_better: true
+  - metric: gen_chars
+    aggregation: mean
+    higher_is_better: false
+  - metric: no_answer
+    aggregation: mean
+    higher_is_better: false
+generation_kwargs:
+  until: []
+  do_sample: false
+  temperature: 0.00001
+  top_p: 0.99
+  max_gen_toks: 512
+  seed: null
+  skip_special_tokens: false
+  chat_template_kwargs:
+    enable_thinking: false
+repeats: 1
+metadata:
+  version: 1.0
+  max_seq_lengths: [131072, 258048, 393216, 520192]
+  tokenizer: "/home/work/vidsearch/repos/project_s/Pai-Megatron-Patch/examples/alpha/tokenizer_v5"
+  num_samples: 50

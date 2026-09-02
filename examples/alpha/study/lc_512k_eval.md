@@ -54,16 +54,45 @@ python3 scripts/lc512k_summarize.py outputs/lc512k_eval
 비용: 셀당 fleet 기동 ~5분 + RULER 320문항(512K prefill ~30s, 8레플리카) ~10분 + (SFT) 단문
 표본 ~15분 → 6셀 ≈ 2시간.
 
-## 4. 판정 규칙
+## 4. 판정 규칙 (2026-09-02 재정의 — 사용자 승인)
 
-1. **520192 single_1 ≥ 90%** 그리고 single_2·multikey 가 같은 모델의 128K 수치 −10pp 이내
-2. 393216 이 ext 프로파일의 0% 에서 유의미하게 회복 (절벽 이동 확인)
-3. yarn 프로파일의 단문 표본(ifeval·gpqa 100문항)이 ext 프로파일 대비 노이즈 대역 (±3pp)
+첫 셀 결과(single_1 이 520K 에서 100)가 보여줬듯 **single_1 은 검색 난도 0 인 메커니즘 탐침**
+(반복 haystack 속 유일 특이 문장)이라 능력 지표가 못 된다. 그래서 판정을 두 층으로 나눈다.
 
-→ 통과: 추론-only 채택, **≤256K 는 원본 config·>256K 는 yarn 프로파일**로 분리 서빙 (Qwen3 관례 —
-static YaRN 의 mscale 이 단문 attention 온도도 바꾼다). 미달: 경로 B(LC-C) 착수, 시점은 SFT 종료
-(~09-06) 전후로 사용자 결정.
+**A. 메커니즘 게이트 (그리드, `_512k` 4태스크·n=20)** — "YaRN 채택" 여부만 판정:
+1. ext 가 393216 에서 붕괴 재현 ∧ yarn 이 393216/520192 single_1 ≥ 90%
+2. yarn 의 131K/258K 가 ext 와 동급 (보간이 기존 창을 해치지 않음)
+3. yarn 의 단문 표본(ifeval·gpqa 100문항)이 ext 대비 ±3pp (static YaRN mscale 부작용 체크)
+→ 통과 시: YaRN 프로파일 채택, **≤256K 원본 · >256K yarn 분리 서빙** (Qwen3 관례).
+
+**B. 능력 판정 (§6 스위트, 12태스크·n=50)** — "L 지원" 선언은 프론티어 규약으로만:
+**12태스크 구간 평균 ≥ 85 인 최대 길이 = 유효 컨텍스트** (RULER 논문 규약; Nemotron 3 Ultra
+카드 게재 방식 — 참고: Ultra 는 512K 84.5 / 1M 76.8). 여기 미달이면 "512K 지원" 을 선언하지
+않고, LC-C(YaRN 적응 CPT) 또는 SFT 완주 후 재측정을 사용자가 결정한다.
 
 ## 5. 결과
 
-(그리드 완료 후 `outputs/lc512k_eval/SUMMARY.md` 를 옮겨 적는다.)
+(그리드 완료 후 `outputs/lc512k_eval/SUMMARY.md`, 능력 스위트 완료 후
+`outputs/ruler_cap_eval/SUMMARY.md` 를 옮겨 적는다.)
+
+중간 (2026-09-02, 셀 1/6 `sft_yarn2` — iter900 + yarn s=2): single_1 100/100/**95/100**
+(무보정 393K 는 0% 였던 지점) · single_2 90/45/10/0 · multikey 65/10/20/10 · multivalue
+21/29/16/14 (131K/258K/393K/520K, no_answer 0%) · 단문 표본 ifeval 57.1 / gpqa 34.3.
+판독: 메커니즘 게이트 A-1 충족 방향. 어려운 태스크의 완만한 길이 하락은 절벽형이 아니라
+검색·state 쪽 — A/B 분리는 ext·base 셀에서.
+
+## 6. 능력 스위트 (RULER 12태스크, 2026-09-02 구축)
+
+`_aa`/`_512k` 규약(Reasoning-Off·seq_set 센티넬)을 RULER-13 으로 확장한 **별도 태스크**
+`ruler_cap_*` (n=50/구간, tag `ruler_cap_512k`): niah single 1/2/3 · multikey 1/2/3 ·
+multiquery · multivalue · vt(멀티홉) · cwe(집계) · fwe(빈도) · qa_hotpot(다문서 QA).
+
+- **qa_squad 제외**: SQuAD dev 문서 풀 ~0.27M 토큰 실측 — 393K/520K 를 못 채워 라벨만
+  긴 측정이 됨. qa_hotpot 은 HF `hotpot_qa/distractor` validation(풀 ~9M tok)로 소싱
+  (stock 의 curtis.ml.cmu.edu 직다운로드는 이 클러스터에서 타임아웃).
+- **길이 탐색 incremental 을 길이 비례로 상향** (vt/cwe L//2048, qa L//8192): stock 기본
+  10 은 520K 에서 수천 회 전체 재토크나이즈(O(N²), 시간 단위). 정밀도 손실 ~0.05%.
+- 실행: `scripts/ruler_cap_run.sh [cell]` (기본 sft:yarn2; lc512k 그리드 DONE 대기 후 자동
+  개시, 소요 ~2.5h) → `scripts/ruler_cap_summarize.py` 가 §4-B 판정(평균 ≥85)까지 계산.
+- 후속(미착수): MRCR — `SFT_BENCHMARKS.md` T2 계획에 있던 것이 yarn 프로파일로 512K 까지
+  열림. 능력 스위트 결과 확인 후 착수 여부 결정.
