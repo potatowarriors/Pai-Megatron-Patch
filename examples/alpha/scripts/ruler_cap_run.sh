@@ -1,5 +1,5 @@
 #!/bin/bash
-# ruler_cap_run.sh — RULER 능력 스위트(12태스크, n=50) 실행 (study/lc_512k_eval.md §6).
+# ruler_cap_run.sh — RULER 능력 스위트(11태스크, n=50) 실행 (study/lc_512k_eval.md §6).
 #
 #   sub1 에서:  setsid nohup bash scripts/ruler_cap_run.sh [CELL] \
 #                 > outputs/ruler_cap_eval/run.log 2>&1 < /dev/null &
@@ -7,7 +7,7 @@
 #
 # lc512k_grid.sh 와 같은 골격(대기 → 프로파일 → fleet 524288 → 게이트 → lm_eval → 요약).
 # 차이: ① lc512k 그리드가 살아 있으면 그 DONE 까지 추가로 기다린다(그리드가 fleet 를
-# 갈아끼우므로 동시 불가) ② 태스크 = ruler_cap_* 12종 ③ 결과 = outputs/ruler_cap_eval/.
+# 갈아끼우므로 동시 불가) ② 태스크 = ruler_cap_* 11종 (qa_squad·cwe 구조적 제외 — utils docstring) ③ 결과 = outputs/ruler_cap_eval/.
 # 판정(구간 평균 ≥85 = 그 길이 "지원")은 scripts/ruler_cap_summarize.py 가 계산한다.
 set -uo pipefail
 ALPHA=/home/work/vidsearch/repos/project_s/Pai-Megatron-Patch/examples/alpha
@@ -25,7 +25,7 @@ TAG="${MODEL}_${PROF}"
 SFT_RUN=$ALPHA/outputs/alpha_baseline_48L_sft_128k_full_20260828_081911
 BASE="${BASE:-$ALPHA/outputs/alpha_baseline_48L_lc_b_resume_20260826_223836/hfmodel_0000320}"
 SFT="${SFT:-$(ls -d "$SFT_RUN"/hfmodel_* 2>/dev/null | while read -r d; do [ -f "$d/generation_config.json" ] && echo "$d"; done | tail -1)}"
-TASKS="ruler_cap_niah_single_1,ruler_cap_niah_single_2,ruler_cap_niah_single_3,ruler_cap_niah_multikey_1,ruler_cap_niah_multikey_2,ruler_cap_niah_multikey_3,ruler_cap_niah_multiquery,ruler_cap_niah_multivalue,ruler_cap_vt,ruler_cap_cwe,ruler_cap_fwe,ruler_cap_qa_hotpot"
+TASKS="ruler_cap_niah_single_1,ruler_cap_niah_single_2,ruler_cap_niah_single_3,ruler_cap_niah_multikey_1,ruler_cap_niah_multikey_2,ruler_cap_niah_multikey_3,ruler_cap_niah_multiquery,ruler_cap_niah_multivalue,ruler_cap_vt,ruler_cap_fwe,ruler_cap_qa_hotpot"
 
 mkdir -p "$OUT"
 log() { echo "[$(date '+%F %T')] $*"; }
@@ -35,7 +35,7 @@ export HF_HOME=/home/work/Datasets/benchmarks HF_DATASETS_CACHE=/home/work/Datas
 export PYTHONPATH=$LM NUMEXPR_MAX_THREADS=64 TOKENIZERS_PARALLELISM=false
 export HF_TOKEN=$(grep -E '^HF_TOKEN=' "$ALPHA/.env" 2>/dev/null | cut -d= -f2 || true)
 
-log "cell=$CELL tag=$TAG tasks=12종 n=50"
+log "cell=$CELL tag=$TAG tasks=11종 n=50"
 
 # ── 대기: lc512k 그리드 → 일반 벤치/fleet → GPU 유휴 ──────────────────────
 while pgrep -f "[l]c512k_grid.sh" >/dev/null 2>&1 && [ ! -f "$LC512K/DONE" ]; do
@@ -87,7 +87,7 @@ python3 "$EVAL/check_gates.py" --hf-dir "$DIR" --base-url "$BURL" \
 if [ $? -ne 0 ] && [ "$MODEL" = sft ]; then log "❌ 게이트 실패 — $CDIR/gates.log"; fleet_down; exit 1; fi
 log "게이트 확인 (로그 $CDIR/gates.log)"
 
-log "RULER 능력 스위트 시작 (12태스크 × 4구간 × 50 — 데이터 생성 ~1h + 추론 ~1.5h 추정)"
+log "RULER 능력 스위트 시작 (11태스크 × 4구간 × 50 — 데이터 생성 ~1h + 추론 ~1.5h 추정)"
 python3 "$ALPHA/scripts/eval_wrapper.py" \
     --model local-chat-completions \
     --model_args "base_url=${BURL}/chat/completions,model=alpha,num_concurrent=${CONC},timeout=7200,max_retries=10,tokenized_requests=False,max_length=$MAXLEN" \

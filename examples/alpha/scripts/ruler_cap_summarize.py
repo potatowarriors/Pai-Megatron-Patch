@@ -1,7 +1,7 @@
 """RULER 능력 스위트 요약·판정 — outputs/ruler_cap_eval/<cell>/results_*.json → SUMMARY.md.
 
 판정 규약 (study/lc_512k_eval.md §4): RULER 논문의 유효 컨텍스트 정의를 따른다 —
-**12태스크 구간 평균 ≥ 85 인 최대 길이 = "지원" 길이**. 12태스크가 전부 유효할 때만
+**11태스크 구간 평균 ≥ 85 인 최대 길이 = "지원" 길이**. 11태스크가 전부 유효할 때만
 그 구간의 평균을 공식 수치로 삼는다(누락·무효는 표기).
 
 사용: python3 scripts/ruler_cap_summarize.py outputs/ruler_cap_eval
@@ -21,7 +21,7 @@ LENGTHS = ("131072", "258048", "393216", "520192")
 TASKS = [f"ruler_cap_{n}" for n in (
     "niah_single_1", "niah_single_2", "niah_single_3",
     "niah_multikey_1", "niah_multikey_2", "niah_multikey_3",
-    "niah_multiquery", "niah_multivalue", "vt", "cwe", "fwe", "qa_hotpot",
+    "niah_multiquery", "niah_multivalue", "vt", "fwe", "qa_hotpot",
 )]
 THRESHOLD = 85.0
 
@@ -49,7 +49,7 @@ def main() -> int:
         return 1
 
     lines = [f"# RULER 능력 스위트 요약 (`{root}`)\n",
-             "RULER-13 중 12태스크(qa_squad 제외 — SQuAD 풀 ~0.27M tok 로 393K+ 미충족), n=50/구간, "
+             "RULER-13 중 11태스크(qa_squad·cwe 제외 — 문서 풀 0.27M tok / 어휘 풀 8166개 고갈로 각각 258K+/131K+ 미충족), n=50/구간, "
              "Reasoning-Off. **판정 = 구간 평균 ≥85 (RULER 논문 유효 컨텍스트 규약)**.\n"]
     for name, res in cells.items():
         lines.append(f"## {name}\n")
@@ -81,7 +81,7 @@ def main() -> int:
             else:
                 avg_row.append(f"({len(sums[L])}/{len(TASKS)})")
                 verdict.append(f"{int(L):,}: ⚠️ 불완전 ({len(sums[L])}/{len(TASKS)} 태스크)")
-        lines.append("| **평균 (12/12일 때만)** | " + " | ".join(avg_row) + " | |")
+        lines.append("| **평균 (11/11일 때만)** | " + " | ".join(avg_row) + " | |")
         lines.append("")
         lines.append("판정: " + " · ".join(verdict))
         if missing:

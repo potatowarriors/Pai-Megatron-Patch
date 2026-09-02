@@ -65,8 +65,8 @@ python3 scripts/lc512k_summarize.py outputs/lc512k_eval
 3. yarn 의 단문 표본(ifeval·gpqa 100문항)이 ext 대비 ±3pp (static YaRN mscale 부작용 체크)
 → 통과 시: YaRN 프로파일 채택, **≤256K 원본 · >256K yarn 분리 서빙** (Qwen3 관례).
 
-**B. 능력 판정 (§6 스위트, 12태스크·n=50)** — "L 지원" 선언은 프론티어 규약으로만:
-**12태스크 구간 평균 ≥ 85 인 최대 길이 = 유효 컨텍스트** (RULER 논문 규약; Nemotron 3 Ultra
+**B. 능력 판정 (§6 스위트, 11태스크·n=50)** — "L 지원" 선언은 프론티어 규약으로만:
+**11태스크 구간 평균 ≥ 85 인 최대 길이 = 유효 컨텍스트** (RULER 논문 규약; Nemotron 3 Ultra
 카드 게재 방식 — 참고: Ultra 는 512K 84.5 / 1M 76.8). 여기 미달이면 "512K 지원" 을 선언하지
 않고, LC-C(YaRN 적응 CPT) 또는 SFT 완주 후 재측정을 사용자가 결정한다.
 
@@ -81,18 +81,21 @@ python3 scripts/lc512k_summarize.py outputs/lc512k_eval
 판독: 메커니즘 게이트 A-1 충족 방향. 어려운 태스크의 완만한 길이 하락은 절벽형이 아니라
 검색·state 쪽 — A/B 분리는 ext·base 셀에서.
 
-## 6. 능력 스위트 (RULER 12태스크, 2026-09-02 구축)
+## 6. 능력 스위트 (RULER 11태스크, 2026-09-02 구축)
 
 `_aa`/`_512k` 규약(Reasoning-Off·seq_set 센티넬)을 RULER-13 으로 확장한 **별도 태스크**
 `ruler_cap_*` (n=50/구간, tag `ruler_cap_512k`): niah single 1/2/3 · multikey 1/2/3 ·
-multiquery · multivalue · vt(멀티홉) · cwe(집계) · fwe(빈도) · qa_hotpot(다문서 QA).
+multiquery · multivalue · vt(멀티홉) · fwe(빈도) · qa_hotpot(다문서 QA).
 
-- **qa_squad 제외**: SQuAD dev 문서 풀 ~0.27M 토큰 실측 — 393K/520K 를 못 채워 라벨만
-  긴 측정이 됨. qa_hotpot 은 HF `hotpot_qa/distractor` validation(풀 ~9M tok)로 소싱
+- **"라벨만 긴 측정" 2종 구조적 제외** (사전 빌드 게이트 `scripts/ruler_cap_validate.py`
+  fill≥0.85 기준): ① qa_squad — SQuAD dev 문서 풀 ~0.27M 토큰 실측, 393K+ 미충족.
+  ② cwe — wonderwords 어휘 풀 8,166개 고갈로 입력이 ~130K 포화 (fill 실측
+  1.00/0.51/0.33/0.25). 나머지 5개 생성 경로는 fill 0.89~1.00 PASS (validate.log 09-02).
+  qa_hotpot 은 HF `hotpot_qa/distractor` validation(풀 ~9M tok)로 소싱
   (stock 의 curtis.ml.cmu.edu 직다운로드는 이 클러스터에서 타임아웃).
 - **길이 탐색 incremental 을 길이 비례로 상향** (vt/cwe L//2048, qa L//8192): stock 기본
   10 은 520K 에서 수천 회 전체 재토크나이즈(O(N²), 시간 단위). 정밀도 손실 ~0.05%.
-- 실행: `scripts/ruler_cap_run.sh [cell]` (기본 sft:yarn2; lc512k 그리드 DONE 대기 후 자동
-  개시, 소요 ~2.5h) → `scripts/ruler_cap_summarize.py` 가 §4-B 판정(평균 ≥85)까지 계산.
+- 실행: `ruler_cap_validate.py && ruler_cap_run.sh [cell]` 체인 (기본 sft:yarn2; lc512k 그리드
+  DONE 대기 후 자동 개시, 소요 ~2.5h) → `scripts/ruler_cap_summarize.py` 가 §4-B 판정(평균 ≥85)까지 계산.
 - 후속(미착수): MRCR — `SFT_BENCHMARKS.md` T2 계획에 있던 것이 yarn 프로파일로 512K 까지
   열림. 능력 스위트 결과 확인 후 착수 여부 결정.

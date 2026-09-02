@@ -19,8 +19,9 @@ sys.path.insert(0, str(ALPHA / "eval_sft" / "tasks"))
 
 SEQS = [131072, 258048, 393216, 520192]
 TOK = str(ALPHA / "tokenizer_v5")
-# 카테고리 대표: essay-niah(single_3=uuid), needle-niah(multikey_3), vt, cwe, fwe, qa_hotpot
-TARGETS = ("niah_single_3", "niah_multikey_3", "vt", "cwe", "fwe", "qa_hotpot")
+# 카테고리 대표: essay-niah(single_3=uuid), needle-niah(multikey_3), vt, fwe, qa_hotpot
+# (cwe 는 2026-09-02 이 게이트가 ~130K 포화를 검출해 스위트에서 제외 — cap_utils docstring)
+TARGETS = ("niah_single_3", "niah_multikey_3", "vt", "fwe", "qa_hotpot")
 # fill 하한 — 라벨 대비 실길이. qa/vt 는 문서·noise 단위 granularity 로 여유를 둔다.
 MIN_FILL = 0.85
 

@@ -1,4 +1,4 @@
-"""RULER 능력 스위트 (12태스크) — 512K "지원" 판정용 (2026-09-02, study/lc_512k_eval.md §4·§6).
+"""RULER 능력 스위트 (11태스크) — 512K "지원" 판정용 (2026-09-02, study/lc_512k_eval.md §4·§6).
 
 왜 별도 스위트인가: 그리드의 `_512k` 4태스크(NIAH 부분집합, n=20)는 **메커니즘 A/B**
 (YaRN 이 RoPE 절벽을 옮겼는가)용이다. single_1(반복 haystack)은 검색 난도가 0이라
@@ -6,12 +6,14 @@
 관행을 따른다: **RULER 13태스크 구간 평균 + "평균 ≥85 인 최대 길이 = 유효 컨텍스트"**
 (RULER 논문 규약; Nemotron 3 Ultra·Qwen 카드가 같은 방식으로 게재).
 
-구성 (RULER-13 중 12):
+구성 (RULER-13 중 11) — **"라벨만 긴 측정" 이 되는 태스크 2종은 구조적으로 제외**:
   niah_single_{1,2,3}, niah_multikey_{1,2,3}, niah_multiquery, niah_multivalue,
-  vt(변수 추적 multi-hop), cwe(빈출 단어 집계), fwe(zipf 빈도 추출), qa_hotpot(다문서 QA).
-  **qa_squad 제외**: SQuAD dev 문서 풀이 ~0.27M 토큰(실측 2026-09-02)이라 393K/520K 를
-  못 채운다 — 라벨만 520K 인 ~250K 측정이 되어 구간 평균을 오염시킨다. HotpotQA dev 풀은
-  ~9M 토큰으로 충분.
+  vt(변수 추적 multi-hop), fwe(zipf 빈도 추출), qa_hotpot(다문서 QA).
+  - **qa_squad 제외**: SQuAD dev 문서 풀 ~0.27M 토큰(실측 2026-09-02) — 393K/520K 를 못 채움.
+    qa_hotpot 은 HotpotQA dev 풀 ~9M 토큰으로 충분 (fill 실측 0.97~1.00).
+  - **cwe 제외**: wonderwords 어휘 풀 len(WORDS)=8166 고갈로 입력이 **~130K 에서 포화**
+    (validate 실측 fill 0.995/0.506/0.332/0.251@131K/258K/393K/520K — 사전 빌드 게이트가 검출,
+    2026-09-02). 어휘를 합성으로 늘리면 stock 태스크 정의에서 벗어나 비교 불가.
 
 lm_eval 내장 RULER 와의 차이:
   - Reasoning-Off·프롬프트 지시(doc_to_text) 규약은 `_aa`/`_512k` 와 동일 — gen_prefix 를
@@ -38,7 +40,7 @@ if _HERE not in sys.path:
     sys.path.insert(0, _HERE)
 
 import ruler_utils  # noqa: E402  (동일 디렉토리 — _dl/_clean/SEQ_SETS/TEMPLATE 재사용)
-from lm_eval.tasks.ruler import cwe_utils, fwe_utils, qa_utils, vt_utils  # noqa: E402
+from lm_eval.tasks.ruler import fwe_utils, qa_utils, vt_utils  # noqa: E402
 from lm_eval.tasks.ruler.common_utils import get_tokenizer  # noqa: E402
 from lm_eval.tasks.ruler.prepare_niah import (  # noqa: E402
     generate_samples as niah_generate,
@@ -130,17 +132,6 @@ def vt(**kwargs):
         _tag(vt_utils.sys_vartrack_w_noise_random(
             tokenizer=tok, num_samples=n, max_seq_length=L,
             incremental=max(10, L // 2048), icl_example=icl,
-        ), seqs, L)
-        for L in seqs
-    )
-
-
-def cwe(**kwargs):
-    seqs, n, tok = _pop_common(kwargs)
-    return ruler_utils._dl(
-        _tag(cwe_utils.sys_word_pair_random(
-            num_samples=n, max_seq_length=L, tokenizer=tok,
-            incremental=max(10, L // 2048),
         ), seqs, L)
         for L in seqs
     )
