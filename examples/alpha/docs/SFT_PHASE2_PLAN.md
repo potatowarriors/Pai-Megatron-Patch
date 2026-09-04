@@ -293,14 +293,14 @@ safety 4.51 · 신규 멤버는 §11.2 의 epoch 그대로. 데이터 게이트:
 | 렌더 육안(규칙 9) | `render_check.py --tree p2 --write` → 각 멤버 `RENDER_CHECK.md` | 봉투 흔적 0, `<think>` 수 = assistant 턴 수(interleaved 보존) |
 | 블렌드 | `gen_sft_128k_mixed_blend_p2.sh` → `sft_128k_mixed_blend_p2.yaml`(§1 의 보정 설계판을 대체) | 합 1.0·전 경로 idx·헤더 epoch 표 |
 | 프리셋 | `sft_128k_full_p2.yaml`: load = 교체 재개 런 ckpt, train-samples 96,320(602 iters), 나머지 §2 | G-P5 = **main1 개시 시 첫 iteration 게이트**(아래) |
-| G-P5 | 2026-09-04 sub1 스모크 3회 전부 첫 스텝 SIGABRT — **sub1 compat libcuda 595 스왑 때문(`KNOWN_ISSUES` 09-04), 데이터·프리셋 무관**(phase-1 데이터도 동일 실패). 로드·49 멤버 인덱스 빌드·블렌드 인덱스는 정상 완료 → 캐시 398 파일 프리빌드. 스모크는 `scripts/launch_p2_after_phase1.sh` 가 본 런 첫 iteration 에서 대신 판정(loss 유한·Traceback 0, 실패 시 `P2_CHAIN_ALERT.txt` + HOLD) | 사용자 선택: sub1 compat 를 570 으로 되돌려 정식 2-iter 스모크(root, vLLM fleet 중단) |
+| G-P5 | 2026-09-04 sub1 스모크 3회 전부 첫 스텝 SIGABRT — **sub1 compat libcuda 595 스왑 때문(`KNOWN_ISSUES` 09-04), 데이터·프리셋 무관**(phase-1 데이터도 동일 실패). 로드·49 멤버 인덱스 빌드·블렌드 인덱스는 정상 완료 → 캐시 398 파일 프리빌드. 스모크는 `scripts/launch_p2_after_phase1.sh` 가 본 런 첫 iteration 에서 대신 판정(loss 유한·Traceback 0, 실패 시 `P2_CHAIN_ALERT.txt` + HOLD) | **사용자 결정(09-04): sub1 fleet 은 09-05 종료 → 그 뒤 정식 스모크.** `scripts/sub1_compat_smoke.sh --wait-after 1788566400`(= 09-05 09:00 KST) 를 **sub1 에서 사용자가 arm**(sudo 로 시스템 symlink 를 바꾸는 스크립트라 Claude 세션 권한 정책이 원격 기동을 차단): 20분 유휴 확인 → symlink 570(sudo) → 2-iter 스모크 → 판정 summary → 595 복원(trap). 로그 `outputs/sub1_compat_smoke_watcher.log`, 결과 `outputs/smoke_p2_sub1_compat570_<ts>.summary.txt` |
 
 ### 11.5 평가 게이트 (G-P6 기준선 → G-P7 100 iters 마다 → 종료)
 
 | 게이트 | 내용 | 기준 |
 |---|---|---|
 | 검색 format | `eval_sft/search_agent_eval.py --gate format` — held-out 300 의 teacher-forced 접두부에 대한 tool-call/answer 파싱률 | ≥ 99% |
-| 검색 live | `--gate live --backend tavily` — held-out 문항을 실제 검색으로 풀어 ground_truth 대조. phase-1 최종 ckpt 가 기준선 | phase-2 > phase-1. Tavily 는 문항당 ≈13회 호출(무료 한도 초과 — 키·요금은 사용자) |
+| 검색 live | `--gate live --backend tavily` — held-out 문항을 실제 검색으로 풀어 ground_truth 대조. phase-1 최종 ckpt 가 기준선 | phase-2 > phase-1. Tavily 는 문항당 평균 10.6회(예산 ≈13회). **키는 `examples/alpha/.env` 의 `TAVILY_API_KEY`(사용자 제공 09-04, 1회 호출로 유효 확인)** |
 | 유지 | T1(MMLU-Pro·GPQA-D·IFEval) ±1pp, **LogicKor(한국어)·IFEval 무회귀**, 에이전틱 SWE·Terminal ≥ phase-1, 제작자 프로브 ≥95%·누출 0 | 기존 G-P7 + 한국어·IF 명시 |
 
 ### 11.6 일정
