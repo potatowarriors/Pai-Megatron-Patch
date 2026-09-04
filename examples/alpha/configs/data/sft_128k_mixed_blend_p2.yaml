@@ -1,36 +1,60 @@
 # SFT phase-2 연속학습 블렌드 — gen_phase2_blend.py 산출물, 수정 금지
-# 2026-09-01 | 예산 550 iters × GBS 160 × 131072 = 11.53B bin-tok = 88,000 samples
-# 기준 examples/alpha/configs/data/sft_128k_mixed_blend.yaml (phase-1 2448 iters = 51.34B). 리플레이 84.2% / 고정 15.8%
+# 2026-09-04 | 예산 602 iters × GBS 160 × 131072 = 12.62B bin-tok = 96,320 samples
+# 기준 /home/work/vidsearch/repos/project_s/Pai-Megatron-Patch/examples/alpha/configs/data/sft_128k_mixed_blend_swap.yaml (phase-1 2448 iters = 51.34B). phase-1 리플레이(verbatim, scale·replay) 41.4% / 신규·고정(ep·share) 58.6%
 # 설계: docs/SFT_PHASE2_PLAN.md §1 — 집계 bin 1표라 토큰 비중 = gradient 비중
+# 카테고리별 리플레이(§11 절충안 M): scale=f 는 phase-1 비중의 f 배, ep=E 는 절대 소비(E×real), iters 는 --solve-iters 로 풂(올림 잔여는 scale 멤버 w1 비례)
 #
 # member                              kind                  w2 consume(B)  ep_p1  ep_p2    cum
-# cp_v2                               replay          0.211085      2.435   0.45   0.09   0.55
-# swe_v3_keepthink                    replay          0.167049      1.927   1.00   0.20   1.20
-# opencode_fixed                      ep=0.25         0.149804      1.728   0.31   0.25   0.56
-# science_v2                          replay          0.103333      1.192   0.40   0.08   0.48
-# math_v4                             replay          0.099587      1.149   0.86   0.17   1.04
-# chat_v3_chat                        replay          0.074035      0.854   1.89   0.38   2.27
-# chat_v3_if_fanout_me                replay          0.034348      0.396   1.89   0.38   2.27
-# arc_agi_v1_keepthink                replay          0.030311      0.350   0.20   0.04   0.24
-# kochat_chat_t2                      replay          0.022064      0.254   1.89   0.38   2.27
-# kochat_if_fanout_me_t2              replay          0.021187      0.244   1.89   0.38   2.27
-# math_proofs_v2                      replay          0.019230      0.222   0.28   0.06   0.34
-# ml_ultra-v3_math_ja_translated_finalreplay          0.009731      0.112   1.00   0.20   1.20
-# ml_ultra-v3_code_pt_translated_finalreplay          0.007631      0.088   1.00   0.20   1.20
-# ml_ultra-v3_code_ko_translated_finalreplay          0.007370      0.085   1.00   0.20   1.20
-# ml_ultra-v3_code_ja_translated_finalreplay          0.007364      0.085   1.00   0.20   1.20
-# ml_ultra-v3_math_ko_translated_finalreplay          0.007252      0.084   1.00   0.20   1.20
-# ml_ultra-v3_math_pt_translated_finalreplay          0.006053      0.070   1.00   0.20   1.20
-# identity_v2                         share=0.006     0.006000      0.069   0.00   5.01   5.01
-# ml_ultra-v3_stem_pt_translated_postedit_finalreplay          0.004882      0.056   1.00   0.20   1.20
-# budget_trunc_v1_if                  replay          0.004013      0.046   1.19   0.24   1.42
-# budget_trunc_v1_math                replay          0.003734      0.043   1.19   0.24   1.42
-# safety_v2                           ep=0.2          0.001763      0.020   4.31   0.20   4.51
-# kochat_b_fanout_t2                  replay          0.001089      0.013   1.89   0.38   2.27
-# ml_ultra-v3_stem_ko_translated_postedit_finalreplay          0.000703      0.008   1.00   0.20   1.20
-# ml_ultra-v3_stem_ja_translated_postedit_finalreplay          0.000267      0.003   1.00   0.20   1.20
-# cuda_v1                             replay          0.000118      0.001   0.31   0.06   0.37
-data-path: "0.211085 /home/work/Datasets/LL_preprocessed/v5/sft_packed_128k_mixed_p2_pad16/cp_v2/data_text_document 0.167049 /home/work/Datasets/LL_preprocessed/v5/sft_packed_128k_mixed_p2_pad16/swe_v3_keepthink/data_text_document 0.149804 /home/work/Datasets/LL_preprocessed/v5/sft_packed_128k_mixed_p2_pad16/opencode_fixed/data_text_document 0.103333 /home/work/Datasets/LL_preprocessed/v5/sft_packed_128k_mixed_p2_pad16/science_v2/data_text_document 0.099587 /home/work/Datasets/LL_preprocessed/v5/sft_packed_128k_mixed_p2_pad16/math_v4/data_text_document 0.074035 /home/work/Datasets/LL_preprocessed/v5/sft_packed_128k_mixed_p2_pad16/chat_v3_chat/data_text_document 0.034348 /home/work/Datasets/LL_preprocessed/v5/sft_packed_128k_mixed_p2_pad16/chat_v3_if_fanout_me/data_text_document 0.030311 /home/work/Datasets/LL_preprocessed/v5/sft_packed_128k_mixed_p2_pad16/arc_agi_v1_keepthink/data_text_document 0.022064 /home/work/Datasets/LL_preprocessed/v5/sft_packed_128k_mixed_p2_pad16/kochat_chat_t2/data_text_document 0.021187 /home/work/Datasets/LL_preprocessed/v5/sft_packed_128k_mixed_p2_pad16/kochat_if_fanout_me_t2/data_text_document 0.019230 /home/work/Datasets/LL_preprocessed/v5/sft_packed_128k_mixed_p2_pad16/math_proofs_v2/data_text_document 0.009731 /home/work/Datasets/LL_preprocessed/v5/sft_packed_128k_mixed_p2_pad16/ml_ultra-v3_math_ja_translated_final/data_text_document 0.007631 /home/work/Datasets/LL_preprocessed/v5/sft_packed_128k_mixed_p2_pad16/ml_ultra-v3_code_pt_translated_final/data_text_document 0.007370 /home/work/Datasets/LL_preprocessed/v5/sft_packed_128k_mixed_p2_pad16/ml_ultra-v3_code_ko_translated_final/data_text_document 0.007364 /home/work/Datasets/LL_preprocessed/v5/sft_packed_128k_mixed_p2_pad16/ml_ultra-v3_code_ja_translated_final/data_text_document 0.007252 /home/work/Datasets/LL_preprocessed/v5/sft_packed_128k_mixed_p2_pad16/ml_ultra-v3_math_ko_translated_final/data_text_document 0.006053 /home/work/Datasets/LL_preprocessed/v5/sft_packed_128k_mixed_p2_pad16/ml_ultra-v3_math_pt_translated_final/data_text_document 0.006000 /home/work/Datasets/LL_preprocessed/v5/sft_packed_128k_mixed_p2_pad16/identity_v2/data_text_document 0.004882 /home/work/Datasets/LL_preprocessed/v5/sft_packed_128k_mixed_p2_pad16/ml_ultra-v3_stem_pt_translated_postedit_final/data_text_document 0.004013 /home/work/Datasets/LL_preprocessed/v5/sft_packed_128k_mixed_p2_pad16/budget_trunc_v1_if/data_text_document 0.003734 /home/work/Datasets/LL_preprocessed/v5/sft_packed_128k_mixed_p2_pad16/budget_trunc_v1_math/data_text_document 0.001763 /home/work/Datasets/LL_preprocessed/v5/sft_packed_128k_mixed_p2_pad16/safety_v2/data_text_document 0.001089 /home/work/Datasets/LL_preprocessed/v5/sft_packed_128k_mixed_p2_pad16/kochat_b_fanout_t2/data_text_document 0.000703 /home/work/Datasets/LL_preprocessed/v5/sft_packed_128k_mixed_p2_pad16/ml_ultra-v3_stem_ko_translated_postedit_final/data_text_document 0.000267 /home/work/Datasets/LL_preprocessed/v5/sft_packed_128k_mixed_p2_pad16/ml_ultra-v3_stem_ja_translated_postedit_final/data_text_document 0.000118 /home/work/Datasets/LL_preprocessed/v5/sft_packed_128k_mixed_p2_pad16/cuda_v1/data_text_document"
+# cp_v2                               scale=0.5       0.118544      1.497   0.45   0.06   0.51
+# finance_v1                          ep=0.1          0.074964      0.946   0.00   0.10   0.10
+# science_v1                          ep=1.0          0.059287      0.748   0.00   1.00   1.00
+# swe_v1_r2e                          ep=0.3          0.058462      0.738   0.00   0.30   0.30
+# math_v4                             scale=0.5       0.055927      0.706   0.86   0.11   0.97
+# swe_v2_openhands                    ep=0.3          0.054018      0.682   0.00   0.30   0.30
+# chat_v2_on                          ep=0.3          0.050023      0.632   0.00   0.30   0.30
+# math_proofs_v1_lean                 ep=0.05         0.041844      0.528   0.00   0.05   0.05
+# chat_v3_if_fanout_me                scale=1.0       0.038544      0.487   1.89   0.47   2.36
+# swe_v2_agentless                    ep=0.3          0.036630      0.462   0.00   0.30   0.30
+# chat_v2_off                         ep=0.3          0.032612      0.412   0.00   0.30   0.30
+# agentic_v2_ia                       ep=0.25         0.030944      0.391   0.00   0.25   0.25
+# agentic_v2_tc                       ep=0.1          0.030855      0.390   0.00   0.10   0.10
+# swe_v3_keepthink                    scale=0.15      0.028264      0.357   1.00   0.04   1.04
+# kochat_chat_t2                      scale=1.0       0.024760      0.313   1.89   0.47   2.36
+# kochat_if_fanout_me_t2              scale=1.0       0.023775      0.300   1.89   0.47   2.36
+# agentic_v2_search                   ep=2.0          0.021415      0.270   0.00   2.00   2.00
+# science_v2                          scale=0.15      0.017483      0.221   0.40   0.01   0.42
+# chat_v3_chat                        scale=0.15      0.012526      0.158   1.89   0.07   1.96
+# ml_ultra-v3_math_ja_translated_finalscale=1.0       0.010920      0.138   1.00   0.25   1.25
+# math_proofs_v2                      scale=0.5       0.010799      0.136   0.28   0.03   0.31
+# ml_super-v3_math_it_translated_finalep=0.05         0.010053      0.127   0.00   0.05   0.05
+# ml_super-v3_math_de_translated_finalep=0.05         0.009837      0.124   0.00   0.05   0.05
+# ml_super-v3_math_fr_translated_finalep=0.05         0.008772      0.111   0.00   0.05   0.05
+# ml_ultra-v3_code_pt_translated_finalscale=1.0       0.008563      0.108   1.00   0.25   1.25
+# ml_ultra-v3_code_ko_translated_finalscale=1.0       0.008271      0.104   1.00   0.25   1.25
+# ml_ultra-v3_code_ja_translated_finalscale=1.0       0.008264      0.104   1.00   0.25   1.25
+# ml_ultra-v3_math_ko_translated_finalscale=1.0       0.008137      0.103   1.00   0.25   1.25
+# ml_super-v3_code_zh_translated_finalep=0.05         0.007930      0.100   0.00   0.05   0.05
+# ml_super-v3_math_es_translated_finalep=0.05         0.007767      0.098   0.00   0.05   0.05
+# ml_super-v3_code_it_translated_finalep=0.05         0.007443      0.094   0.00   0.05   0.05
+# ml_super-v3_math_ja_translated_finalep=0.05         0.007426      0.094   0.00   0.05   0.05
+# ml_super-v3_code_fr_translated_finalep=0.05         0.007132      0.090   0.00   0.05   0.05
+# ml_super-v3_code_de_translated_finalep=0.05         0.006979      0.088   0.00   0.05   0.05
+# ml_super-v3_code_es_translated_finalep=0.05         0.006875      0.087   0.00   0.05   0.05
+# ml_ultra-v3_math_pt_translated_finalscale=1.0       0.006792      0.086   1.00   0.25   1.25
+# ml_super-v3_math_zh_translated_finalep=0.05         0.006674      0.084   0.00   0.05   0.05
+# ml_super-v3_code_ja_translated_finalep=0.05         0.006528      0.082   0.00   0.05   0.05
+# opencode_fixed                      scale=0.15      0.006445      0.081   0.32   0.01   0.33
+# ml_ultra-v3_stem_pt_translated_postedit_finalscale=1.0       0.005478      0.069   1.00   0.25   1.25
+# arc_agi_v1_keepthink                scale=0.15      0.005128      0.065   0.20   0.01   0.20
+# budget_trunc_v1_if                  scale=1.0       0.004503      0.057   1.19   0.29   1.48
+# identity_v2                         scale=1.0       0.004275      0.054  15.87   3.91  19.77
+# budget_trunc_v1_math                scale=1.0       0.004190      0.053   1.19   0.29   1.48
+# safety_v2                           ep=0.2          0.001611      0.020   4.31   0.20   4.51
+# kochat_b_fanout_t2                  scale=1.0       0.001222      0.015   1.89   0.47   2.36
+# ml_ultra-v3_stem_ko_translated_postedit_finalscale=1.0       0.000789      0.010   1.00   0.25   1.25
+# ml_ultra-v3_stem_ja_translated_postedit_finalscale=1.0       0.000299      0.004   1.00   0.25   1.25
+# cuda_v1                             scale=0.15      0.000020      0.000   0.31   0.01   0.32
+data-path: "0.118544 /home/work/Datasets/LL_preprocessed/v5/sft_packed_128k_mixed_p2_pad16/cp_v2/data_text_document 0.074964 /home/work/Datasets/LL_preprocessed/v5/sft_packed_128k_mixed_p2_pad16/finance_v1/data_text_document 0.059287 /home/work/Datasets/LL_preprocessed/v5/sft_packed_128k_mixed_p2_pad16/science_v1/data_text_document 0.058462 /home/work/Datasets/LL_preprocessed/v5/sft_packed_128k_mixed_p2_pad16/swe_v1_r2e/data_text_document 0.055927 /home/work/Datasets/LL_preprocessed/v5/sft_packed_128k_mixed_p2_pad16/math_v4/data_text_document 0.054018 /home/work/Datasets/LL_preprocessed/v5/sft_packed_128k_mixed_p2_pad16/swe_v2_openhands/data_text_document 0.050023 /home/work/Datasets/LL_preprocessed/v5/sft_packed_128k_mixed_p2_pad16/chat_v2_on/data_text_document 0.041844 /home/work/Datasets/LL_preprocessed/v5/sft_packed_128k_mixed_p2_pad16/math_proofs_v1_lean/data_text_document 0.038544 /home/work/Datasets/LL_preprocessed/v5/sft_packed_128k_mixed_p2_pad16/chat_v3_if_fanout_me/data_text_document 0.036630 /home/work/Datasets/LL_preprocessed/v5/sft_packed_128k_mixed_p2_pad16/swe_v2_agentless/data_text_document 0.032612 /home/work/Datasets/LL_preprocessed/v5/sft_packed_128k_mixed_p2_pad16/chat_v2_off/data_text_document 0.030944 /home/work/Datasets/LL_preprocessed/v5/sft_packed_128k_mixed_p2_pad16/agentic_v2_ia/data_text_document 0.030855 /home/work/Datasets/LL_preprocessed/v5/sft_packed_128k_mixed_p2_pad16/agentic_v2_tc/data_text_document 0.028264 /home/work/Datasets/LL_preprocessed/v5/sft_packed_128k_mixed_p2_pad16/swe_v3_keepthink/data_text_document 0.024760 /home/work/Datasets/LL_preprocessed/v5/sft_packed_128k_mixed_p2_pad16/kochat_chat_t2/data_text_document 0.023775 /home/work/Datasets/LL_preprocessed/v5/sft_packed_128k_mixed_p2_pad16/kochat_if_fanout_me_t2/data_text_document 0.021415 /home/work/Datasets/LL_preprocessed/v5/sft_packed_128k_mixed_p2_pad16/agentic_v2_search/data_text_document 0.017483 /home/work/Datasets/LL_preprocessed/v5/sft_packed_128k_mixed_p2_pad16/science_v2/data_text_document 0.012526 /home/work/Datasets/LL_preprocessed/v5/sft_packed_128k_mixed_p2_pad16/chat_v3_chat/data_text_document 0.010920 /home/work/Datasets/LL_preprocessed/v5/sft_packed_128k_mixed_p2_pad16/ml_ultra-v3_math_ja_translated_final/data_text_document 0.010799 /home/work/Datasets/LL_preprocessed/v5/sft_packed_128k_mixed_p2_pad16/math_proofs_v2/data_text_document 0.010053 /home/work/Datasets/LL_preprocessed/v5/sft_packed_128k_mixed_p2_pad16/ml_super-v3_math_it_translated_final/data_text_document 0.009837 /home/work/Datasets/LL_preprocessed/v5/sft_packed_128k_mixed_p2_pad16/ml_super-v3_math_de_translated_final/data_text_document 0.008772 /home/work/Datasets/LL_preprocessed/v5/sft_packed_128k_mixed_p2_pad16/ml_super-v3_math_fr_translated_final/data_text_document 0.008563 /home/work/Datasets/LL_preprocessed/v5/sft_packed_128k_mixed_p2_pad16/ml_ultra-v3_code_pt_translated_final/data_text_document 0.008271 /home/work/Datasets/LL_preprocessed/v5/sft_packed_128k_mixed_p2_pad16/ml_ultra-v3_code_ko_translated_final/data_text_document 0.008264 /home/work/Datasets/LL_preprocessed/v5/sft_packed_128k_mixed_p2_pad16/ml_ultra-v3_code_ja_translated_final/data_text_document 0.008137 /home/work/Datasets/LL_preprocessed/v5/sft_packed_128k_mixed_p2_pad16/ml_ultra-v3_math_ko_translated_final/data_text_document 0.007930 /home/work/Datasets/LL_preprocessed/v5/sft_packed_128k_mixed_p2_pad16/ml_super-v3_code_zh_translated_final/data_text_document 0.007767 /home/work/Datasets/LL_preprocessed/v5/sft_packed_128k_mixed_p2_pad16/ml_super-v3_math_es_translated_final/data_text_document 0.007443 /home/work/Datasets/LL_preprocessed/v5/sft_packed_128k_mixed_p2_pad16/ml_super-v3_code_it_translated_final/data_text_document 0.007426 /home/work/Datasets/LL_preprocessed/v5/sft_packed_128k_mixed_p2_pad16/ml_super-v3_math_ja_translated_final/data_text_document 0.007132 /home/work/Datasets/LL_preprocessed/v5/sft_packed_128k_mixed_p2_pad16/ml_super-v3_code_fr_translated_final/data_text_document 0.006979 /home/work/Datasets/LL_preprocessed/v5/sft_packed_128k_mixed_p2_pad16/ml_super-v3_code_de_translated_final/data_text_document 0.006875 /home/work/Datasets/LL_preprocessed/v5/sft_packed_128k_mixed_p2_pad16/ml_super-v3_code_es_translated_final/data_text_document 0.006792 /home/work/Datasets/LL_preprocessed/v5/sft_packed_128k_mixed_p2_pad16/ml_ultra-v3_math_pt_translated_final/data_text_document 0.006674 /home/work/Datasets/LL_preprocessed/v5/sft_packed_128k_mixed_p2_pad16/ml_super-v3_math_zh_translated_final/data_text_document 0.006528 /home/work/Datasets/LL_preprocessed/v5/sft_packed_128k_mixed_p2_pad16/ml_super-v3_code_ja_translated_final/data_text_document 0.006445 /home/work/Datasets/LL_preprocessed/v5/sft_packed_128k_mixed_p2_pad16/opencode_fixed/data_text_document 0.005478 /home/work/Datasets/LL_preprocessed/v5/sft_packed_128k_mixed_p2_pad16/ml_ultra-v3_stem_pt_translated_postedit_final/data_text_document 0.005128 /home/work/Datasets/LL_preprocessed/v5/sft_packed_128k_mixed_p2_pad16/arc_agi_v1_keepthink/data_text_document 0.004503 /home/work/Datasets/LL_preprocessed/v5/sft_packed_128k_mixed_p2_pad16/budget_trunc_v1_if/data_text_document 0.004275 /home/work/Datasets/LL_preprocessed/v5/sft_packed_128k_mixed_p2_pad16/identity_v2/data_text_document 0.004190 /home/work/Datasets/LL_preprocessed/v5/sft_packed_128k_mixed_p2_pad16/budget_trunc_v1_math/data_text_document 0.001611 /home/work/Datasets/LL_preprocessed/v5/sft_packed_128k_mixed_p2_pad16/safety_v2/data_text_document 0.001222 /home/work/Datasets/LL_preprocessed/v5/sft_packed_128k_mixed_p2_pad16/kochat_b_fanout_t2/data_text_document 0.000789 /home/work/Datasets/LL_preprocessed/v5/sft_packed_128k_mixed_p2_pad16/ml_ultra-v3_stem_ko_translated_postedit_final/data_text_document 0.000299 /home/work/Datasets/LL_preprocessed/v5/sft_packed_128k_mixed_p2_pad16/ml_ultra-v3_stem_ja_translated_postedit_final/data_text_document 0.000020 /home/work/Datasets/LL_preprocessed/v5/sft_packed_128k_mixed_p2_pad16/cuda_v1/data_text_document"
 split: "99,1,0"
 dataset: MMAP
 num-workers: 8

@@ -224,3 +224,95 @@ thinking on 원문에 "identity-facts에 따라 … 개인 개발자 이름은 �
 SWE 1.00ep 앵커는 첫 0.49ep(무작위 49%)와 새 순열의 0.51ep 가 독립이라 기대상 **≈25% 문서가 2회, ≈25% 가 0회**로 깨진다.
 교체 멤버 2개는 전임자의 가중치(자리)를 승계하고 내부 순열만 새로 만든다(내용이 새것이라 무해). 대가: opencode 부스트(0.20→0.16ep)와
 identity 감량(0.3%→0.43%) 포기 — 순서 보존이 우선. 캐시는 `.cache/sft_128k_mixed_blend` 를 `_swap` 으로 복사해 미변경 셋 해시 재사용.
+
+## 11. phase-2 재정의 — 능력 추가 스테이지, 절충안 M (2026-09-04 사용자 승인)
+
+§1~§2 의 보정 목적(opencode 형식·identity 덮어쓰기)은 §10 의 iter 900 교체 재개가 phase-1 안에서 소화한다. 따라서 phase-2 는
+**보정이 아니라 능력 추가**로 재정의한다. 발단은 Agentic-v2 검색 데이터였고(`SFT_RL_DATASETS.md` §2.3 번복 근거), 사용자가
+"SFT 를 한 스테이지로 설계했으니 phase-2 의 비율이 곧 최종 분포"라고 못박아 미사용 16종 전체를 검토했다(같은 문서 §2.8).
+
+### 11.1 원칙 세 줄
+
+| 원칙 | 내용 | 근거 |
+|---|---|---|
+| 형제 대체 | 미사용 셋 중 phase-1 카테고리의 형제(Chat-v2, SWE-v2/v1, Science-v1)는 **리플레이를 대체**한다. 카테고리 비중은 유지하되 같은 문서 반복을 피한다 | Chat v2→v3 프롬프트 겹침 5.1%, Science/Agentic 0% — 형제는 독립 표본 |
+| 카테고리별 리플레이 | verbatim 리플레이는 카테고리별로 정한다: 형제 있는 카테고리 = phase-1 비중의 **0.15**, 대체재 없는 대형(cp·math) **0.5**, 대체재 없는 소형(한국어·IF+effort·ml ko/ja/pt·identity) **1.0**, safety 는 E_max 상한 0.2ep | 평평한 15% 는 한국어 5.0%→0.7%, IF 4.7%→0.7% 로 붕괴 — 망각은 gradient 분포 이동에서 온다. cp·math 는 phase-1 소비 0.45/0.86ep 라 "리플레이"의 절반 이상이 새 문서 |
+| 예산은 결과 | iters 는 손으로 정하지 않고 위 규칙에서 푼다(`gen_phase2_blend.py --solve-iters`) | 비율이 우선, 일수는 그 결과 |
+
+구세대 대형 셋(Math-v2 71B·CP-v1 55B·Math-v3 51B)과 Chat-v1·Safety-v1·Agentic-v1 은 제외 — 같은 도메인의 최신 셋이 아직 sub-1 epoch 이라
+epoch 를 올리는 편이 싸고 품질이 높다. LR 1e-5(phase-1 peak 의 0.4×)가 망각 방지 1차 장치라는 §2 원칙은 그대로.
+
+### 11.2 신규 멤버와 epoch
+
+| 멤버 | 원천 | epoch | 역할 |
+|---|---|---|---|
+| agentic_v2_search | Agentic-v2 search (held-out 300 제외 5,668행, real 135M) | **2.0** | 웹 검색 에이전트 — Ultra 가 retain 한 유일 공개 검색 셋 |
+| agentic_v2_ia | Agentic-v2 interactive_agent (278,880행, real 1.56B, reasoning 93%) | 0.25 | 다중턴 고객응대 tool-use |
+| agentic_v2_tc | Agentic-v2 tool_calling (707,052행, real 3.92B) | 0.10 | 단일/다중 스텝 함수 호출 |
+| chat_v2_on / chat_v2_off | Chat-v2 reasoning_on 929k행 / reasoning_off 1.07M행 (off = 빈 `<think></think>` no-think 규약) | 0.3 / 0.3 | chat_v3 리플레이 대체 |
+| swe_v2_openhands / swe_v2_agentless | SWE-v2 swe.jsonl(reasoning 0%) / agentless.jsonl | 0.3 / 0.3 | swe_v3 리플레이 대체 |
+| swe_v1_r2e | SWE-v1 r2e_gym (reasoning 0%) | 0.3 | 〃 |
+| science_v1 | Science-v1 MCQ+RQA (226k행, real 0.75B) | 1.0 | science_v2 리플레이 대체 |
+| finance_v1 | Finance-v1 (trainable 4.9%) | 0.1 | 도메인 확장 |
+| math_proofs_v1_lean | Math-Proofs-v1 lean (`messages=="[]"` ≈33% bad_row 드롭) | 0.05 | 형식 수학 — RL `math_formal_lean` 대비 |
+| ml_super-v3_{code,math}_{de,es,fr,it,ja,zh} | Multilingual-v1 12 파일 (전부 `ALPHA_LANGS`) | 0.05 | 다국어 확장 |
+
+리플레이 scale 은 §11.1 표대로 멤버별로 준다(정확한 인자는 `toolkits/sft_data_preprocessing/gen_sft_128k_mixed_blend_p2.sh`).
+
+### 11.3 산출 (2026-09-04, `gen_sft_128k_mixed_blend_p2.sh` 실행)
+
+**602 iters × GBS 160 = 12.62B bin-tok = 96,320 samples ≈ 2.3일(329.7 s/iter)**. 49 멤버, 가중치 합 0.999999, 전 경로 idx 확인.
+phase-1 verbatim 리플레이 41.4%(헤더 기준, safety 0.2% 는 ep 고정으로 분류) / 신규(형제 대체·능력 추가) 37.4% / 확장 도메인 21.0%.
+
+| 카테고리 | phase-1 | phase-2 | 신규 / verbatim | 토큰 |
+|---|---|---|---|---|
+| 에이전틱 (swe_v3·opencode·arc + SWE-v2/v1·Agentic-v2) | 26.4% | **27.2%** | 23.2 / 4.0 | 3.44B |
+| CP | 23.7% | 11.9% | 0 / 11.9 | 1.50B |
+| Chat (chat_v3 + Chat-v2 on/off) | 8.3% | 9.5% | 8.3 / 1.3 | 1.20B |
+| Science (science_v2 + Science-v1) | 11.6% | 7.7% | 5.9 / 1.7 | 0.97B |
+| Math (math_v4·proofs_v2) | 13.3% | 6.7% | 0 / 6.7 | 0.84B |
+| ml ko/ja/pt | 5.7% | **5.8%** | 0 / 5.8 | 0.73B |
+| 한국어 (kochat×3) | 5.0% | **5.0%** | 0 / 5.0 | 0.63B |
+| IF+effort (if_me·budget×2) | 4.7% | **4.7%** | 0 / 4.7 | 0.60B |
+| Identity | 0.4% | 0.4% | 0 / 0.4 | 0.05B |
+| Safety (E_max 상한 0.2ep) | 0.9% | 0.2% | 0 / 0.2 | 0.02B |
+| 확장: Multilingual-v1 / Finance-v1 / Lean | — | 9.3 / 7.5 / 4.2% | 전부 신규 | 1.18 / 0.95 / 0.53B |
+
+누적 epoch(헤더 `cum`): swe_v3 1.04 · chat_v3 1.96 · cp 0.51 · math_v4 0.97 · science_v2 0.42 · kochat 2.36 · if_me 2.36 · ml ko/ja/pt 1.25 ·
+safety 4.51 · 신규 멤버는 §11.2 의 epoch 그대로. 데이터 게이트: `verify_sft_bins --tree p2 --seq-length 131072` **49/49 OK PASS**,
+`render_check.py` 23 신규 멤버 전부 봉투 흔적 0·`<think>` 수 = assistant 턴 수(각 멤버 `RENDER_CHECK.md`). 변환 드롭은 전부 설계 사유
+(lean bad_row 455,782 = `messages=="[]"`, tool_calling render_error 21·bad_row 5, injection 7~81, too_long ≤149).
+
+### 11.4 데이터 산출물·게이트
+
+| 항목 | 내용 | 게이트 |
+|---|---|---|
+| 재다운로드 | `Agentic-v2/data/tool_calling.jsonl` 절단본(8,444행) → HF 정본 707,052행(14,941,561,688 B 일치), 절단본은 `.truncated_8444rows_20260904` | 크기·행수 일치 |
+| held-out | `Agentic-v2/splits/search_heldout300.jsonl`(seed 20260904) — 학습 금지, 검색 게이트 전용. 학습 입력은 `splits/search_train.jsonl` 5,668행 | — |
+| 변환 | `convert_sft_128k_mixed_p2b.sh`(sub1, NCORES 180) → p2 트리에 23 멤버 추가 | `verify_sft_bins --tree p2 --seq-length 131072` 전 PASS |
+| 렌더 육안(규칙 9) | `render_check.py --tree p2 --write` → 각 멤버 `RENDER_CHECK.md` | 봉투 흔적 0, `<think>` 수 = assistant 턴 수(interleaved 보존) |
+| 블렌드 | `gen_sft_128k_mixed_blend_p2.sh` → `sft_128k_mixed_blend_p2.yaml`(§1 의 보정 설계판을 대체) | 합 1.0·전 경로 idx·헤더 epoch 표 |
+| 프리셋 | `sft_128k_full_p2.yaml`: load = 교체 재개 런 ckpt, train-samples = iters×160, 나머지 §2 | G-P5 2-iter 스모크 loss ≤ phase-1 최종 +0.1 |
+
+### 11.5 평가 게이트 (G-P6 기준선 → G-P7 100 iters 마다 → 종료)
+
+| 게이트 | 내용 | 기준 |
+|---|---|---|
+| 검색 format | `eval_sft/search_agent_eval.py --gate format` — held-out 300 의 teacher-forced 접두부에 대한 tool-call/answer 파싱률 | ≥ 99% |
+| 검색 live | `--gate live --backend tavily` — held-out 문항을 실제 검색으로 풀어 ground_truth 대조. phase-1 최종 ckpt 가 기준선 | phase-2 > phase-1. Tavily 는 문항당 ≈13회 호출(무료 한도 초과 — 키·요금은 사용자) |
+| 유지 | T1(MMLU-Pro·GPQA-D·IFEval) ±1pp, **LogicKor(한국어)·IFEval 무회귀**, 에이전틱 SWE·Terminal ≥ phase-1, 제작자 프로브 ≥95%·누출 0 | 기존 G-P7 + 한국어·IF 명시 |
+
+### 11.6 일정
+
+phase-1(교체 재개) 2448 종료 ≈ 09-07 17:30 KST(iter 1692 @ 09-04 10:28 UTC, 333 s/iter) → HF 변환·G-P6 기준선(sub1 fleet, 검색 게이트 포함)
+→ G-P5 스모크 → phase-2 개시(main1) → 약 620 iters ≈ 2.4일 → ~09-10 판정. 데이터·블렌드·하니스는 09-04~05 에 sub1 CPU 로 선행.
+
+### 11.7 주의·알려진 특성
+
+- chat_v2_off·swe_v2_openhands·swe_v1_r2e 는 reasoning 이 없어 `<think></think>` no-think 타깃으로 렌더된다(opencode 선례와 동일 판단).
+  agentic_v2_ia/tc 의 빈 think 턴 6.9%도 같다.
+- finance_v1 은 trainable 4.9% — 예산 대비 신호가 작다. 0.1ep 는 도메인 노출 목적.
+- `identity_v2`·`opencode_fixed` 의 헤더 ep_p1 은 전 구간 환산 명목값이다(실제 편입은 iter 900 부터).
+- Agentic-v1 tool_calling 은 변환기가 `bool` 필드에서 크래시 — 제외했고 수정하지 않았다(편입 가치 낮음).
+- 데이터 캐시: 셋별 인덱스 캐시의 키에 요청 샘플 수(= 가중치 × 총량)가 들어가므로 가중치가 바뀐 phase-2 에서는 `_swap` 캐시를 재사용할 수
+  없다. 49 멤버 콜드 빌드(26 멤버 25분 실측 기준 ≈45분)를 첫 기동 시간에 넣는다. `distributed-timeout-minutes: 180` 유지.

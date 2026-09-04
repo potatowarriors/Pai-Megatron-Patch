@@ -166,9 +166,14 @@ def main():
         m["cum"] = m["ep1"] + m["ep2"]
 
     members.sort(key=lambda m: -m["w2"])
+    if scale_fix:
+        verb = sum(m["consume"] for m in members if m["name"] in scale_fix or m["kind"] == "replay")
+        split = f"phase-1 리플레이(verbatim, scale·replay) {verb/B2*100:.1f}% / 신규·고정(ep·share) {(B2-verb)/B2*100:.1f}%"
+    else:
+        split = f"리플레이 {R/B2*100:.1f}% / 고정 {fixed/B2*100:.1f}%"
     hdr = [f"# SFT phase-2 연속학습 블렌드 — gen_phase2_blend.py 산출물{' (DRAFT: 일부 stats 대체)' if draft else ''}, 수정 금지",
            f"# {date.today().isoformat()} | 예산 {a.iters} iters × GBS {a.gbs} × {a.seq_length} = {B2/1e9:.2f}B bin-tok = {a.iters*a.gbs:,} samples",
-           f"# 기준 {a.phase1_yaml} (phase-1 {a.phase1_iters} iters = {B1/1e9:.2f}B" + (f", 실소비 {a.phase1_consumed_iters} iters 후 교체 → ep_p1 은 {consumed_frac:.3f} 배" if a.phase1_consumed_iters else "") + f"). 리플레이 {R/B2*100:.1f}% / 고정 {fixed/B2*100:.1f}%",
+           f"# 기준 {a.phase1_yaml} (phase-1 {a.phase1_iters} iters = {B1/1e9:.2f}B" + (f", 실소비 {a.phase1_consumed_iters} iters 후 교체 → ep_p1 은 {consumed_frac:.3f} 배" if a.phase1_consumed_iters else "") + f"). {split}",
            "# 설계: docs/SFT_PHASE2_PLAN.md §1 — 집계 bin 1표라 토큰 비중 = gradient 비중"]
     if scale_fix or a.solve_iters:
         hdr.append("# 카테고리별 리플레이(§11 절충안 M): scale=f 는 phase-1 비중의 f 배, ep=E 는 절대 소비(E×real), "

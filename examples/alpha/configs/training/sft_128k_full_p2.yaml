@@ -1,21 +1,22 @@
-# SFT phase-2 — phase-1 최종(iter 2448)에서 550 iters 연속학습 (docs/SFT_PHASE2_PLAN.md)
+# SFT phase-2 "능력 추가" — phase-1 최종(교체 재개 런 iter 2448)에서 연속학습 (docs/SFT_PHASE2_PLAN.md §11, 절충안 M)
 #   bash train.sh baseline_48L sft_128k_full_p2 sft_128k_mixed_blend_p2
 #
 # phase-1(sft_128k_full.yaml)과의 차이 — 이 6개 키만 다르다 (변인 통제):
-#   train-samples 88000 (550 iters) · lr 1.0e-5 → min-lr 1.5e-6 cosine · warmup 4480 samples(28 iters, 5%)
+#   train-samples = iters × 160 (iters 는 블렌드 생성기 --solve-iters 산출값) · lr 1.0e-5 → min-lr 1.5e-6 cosine · warmup 5%
 #   save/eval 100 · load = phase-1 최종 ckpt (finetune: true → optimizer state·카운터 리셋, LC-B→phase-1 전환 관례 동일)
-# 데이터: sft_128k_mixed_blend_p2.yaml = phase-1 블렌드 리플레이 ≈84% + opencode_fixed 총 0.25ep + identity_v2 0.6%
-#   (+ chat_v3_chat_restored 조건부). 집계 bin 1표(calculate_per_token_loss=False) → 토큰 비중 = gradient 비중.
-# 게이트: G-P5 2-iter 스모크(loss ≤ phase-1 최종 +0.1) → 100 iters 마다 제작자 프로브 ≥95%·누출 0·valid →
-#   종료 시 T1 ±1pp·에이전틱 ≥ phase-1 (G-P7). 근거·심각성 판정: KNOWN_ISSUES.md 2026-09-01.
-# 생성 2026-09-01. phase-1 ckpt 는 ~09-06 종료 후 존재 — 그 전 스모크는 iter_0000900 등으로 경로 임시 교체.
+# 데이터: sft_128k_mixed_blend_p2.yaml (gen_sft_128k_mixed_blend_p2.sh 산출) = 신규 셋(Agentic-v2 3종·Chat-v2·SWE-v2/v1·
+#   Science-v1·Finance-v1·Lean·Multilingual-v1) + 카테고리별 리플레이(형제 있는 카테고리 15%·대형 무대체 50%·소형 무대체 100%).
+#   집계 bin 1표(calculate_per_token_loss=False) → 토큰 비중 = gradient 비중.
+# 게이트: G-P5 2-iter 스모크(loss ≤ phase-1 최종 +0.1) → 100 iters 마다 검색 format 게이트·제작자 프로브·valid →
+#   종료 시 T1 ±1pp·LogicKor/IFEval 무회귀·에이전틱 ≥ phase-1·검색 live 게이트 > phase-1 (§11.5).
+# 이력: 2026-09-01 생성(보정 스테이지 안, 550 iters) → 2026-09-04 능력 추가 스테이지로 재정의(보정분은 iter 900 교체 재개가 소화).
 
 train-mode: finetune
 
 # ── 예산 / LR ─────────────────────────────────────────────────────────────
-train-samples: 88000                # 550 iters @ GBS 160 = 11.53B bin-tok (sft_128k_mixed_blend_p2.yaml)
-lr-warmup-samples: 4480             # 28 iters (5%)
-lr-decay-samples: 88000
+train-samples: 96320                # 602 iters @ GBS 160 = 12.62B bin-tok — gen_sft_128k_mixed_blend_p2.sh --solve-iters 산출 (§11.3)
+lr-warmup-samples: 4800             # 30 iters (5%)
+lr-decay-samples: 96320
 lr: 1.0e-5                          # phase-1 peak 2.5e-5 의 0.4× — 연속학습 망각 방지 1차 장치
 min-lr: 1.5e-6                      # phase-1 과 동일
 lr-decay-style: cosine
@@ -103,7 +104,8 @@ cross-entropy-fusion-impl: te
 wandb-project: alpha-posttraining
 
 # ── Stage 전환 (dataset 변경 → finetune: true, 카운터 리셋) ────────────────
-# LC-B 최종 ckpt iter 320 (STATUS.md 정본). --finetune 은 optimizer state 미로드.
-load: /home/work/vidsearch/repos/project_s/Pai-Megatron-Patch/examples/alpha/outputs/alpha_baseline_48L_sft_128k_full_20260828_081911/checkpoints
+# phase-1 정본 계보 = iter 900 교체 재개 런(KNOWN_ISSUES ⑥) — 최종 iter 2448 이 이 디렉터리에 저장된다 (~09-07).
+# --finetune 은 optimizer state 미로드. 그 전 스모크는 iter_0001500 등 저장본으로 가능.
+load: /home/work/vidsearch/repos/project_s/Pai-Megatron-Patch/examples/alpha/outputs/alpha_baseline_48L_sft_128k_full_swap_20260901_101523/checkpoints
 finetune: true
 no-load-optim: true

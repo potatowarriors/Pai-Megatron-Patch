@@ -20,7 +20,9 @@ import numpy as np
 
 IGNORE = -100
 PAD_ID = 1
-ENVELOPE_PATTERNS = ("[{'type'", "{'type':", "[{\"type\": \"tool-result\"", "\\n\\n", "\\\\n")
+# repr 봉투의 결정적 흔적만 자동 플래그. JSON 문자열 안의 이스케이프 `\n` 은 정상(str tool 결과가 JSON 인 셋)이라 플래그하지
+# 않고 개수만 보고한다 — opencode_v1 사고의 리터럴 `\n` 은 repr 봉투와 함께 나타났으므로 위 패턴으로 잡힌다.
+ENVELOPE_PATTERNS = ("[{'type'", "{'type':", "[{\"type\": \"tool-result\"", "'tool-result'")
 
 
 def restore(tokens: np.ndarray) -> np.ndarray:
@@ -62,6 +64,7 @@ def inspect_doc(tok, doc: np.ndarray, width: int):
         out["kind"] = "assistant_head"
     out["block"] = block
     out["envelope"] = [p for p in ENVELOPE_PATTERNS if p in block]
+    out["literal_newlines"] = block.count("\\n")
     li = np.nonzero(labels != IGNORE)[0]
     if li.size:
         s = int(li[0]); e = s
@@ -98,7 +101,8 @@ def check_member(member_dir: str, tok, docs, width: int, write: bool) -> bool:
         flagged |= bool(r["envelope"])
         lines += [f"## doc {d}  ({r['kind']})  봉투 흔적: {env}",
                   f"tokens {r['tokens']:,} · trainable {r['trainable']:,} · assistant 턴 {r['assistant_turns']} · "
-                  f"`<think>` {r['think_open']}/{r['think_close']} · tool_call {r['tool_call']} · tool_response {r['tool_response']}",
+                  f"`<think>` {r['think_open']}/{r['think_close']} · tool_call {r['tool_call']} · tool_response {r['tool_response']}"
+                  f" · 블록 내 이스케이프 `\\n` {r['literal_newlines']}개(JSON 문자열이면 정상)",
                   "```", r["block"].rstrip(), "```",
                   "첫 학습 스팬:", "```", r["first_trainable"].rstrip(), "```", ""]
     body = "\n".join(lines)
