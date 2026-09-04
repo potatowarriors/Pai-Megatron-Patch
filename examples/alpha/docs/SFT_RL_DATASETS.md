@@ -7,7 +7,8 @@ post-training 파이프라인(SFT → Student-RLVR → 전문 교사 RL → **MO
 
 **보유고** (2026-08-01, `/home/work/Datasets/LL_datasets/posttraining/`):
 SFT 25종 988G · RL 26종 62G(블렌드 3종 포함) — Nemotron-Post-Training-v3 컬렉션
-49종 전체 + 구세대 6종. 전 항목 다운로드 검증 완료(50/50). 추가로 LongBlocks
+49종 전체 + 구세대 6종. 전 항목 다운로드 검증 완료(50/50 — **2026-09-04 정정**: 존재·파싱만 본 검증이라
+Agentic-v2 `tool_calling.jsonl` 절단(1.2% 만 수신)을 놓쳤다. 크기 검증은 HF API 의 LFS 크기와 대조해야 한다, §6). 추가로 LongBlocks
 193,894행(교사응답 3열 포함 — SFT/증류 소재, `LC_DATASETS.md` §5.1).
 
 ## 1. 재현 대상: Nemotron 3 Ultra post-training 파이프라인
@@ -69,10 +70,13 @@ SpecializedDomains-Finance-v1(30G, super 10회 표기).
 nano: Agentic-v1·IF-Chat-v1·Math-Proofs-v1·**Math-v2(192G)**·SWE-v1(11G)·Science-v1.
 → 기본적으로 상위 버전이 있으면 제외. 예외 검토: Finance-v1(대체재 없음),
 Math-v2(nano급 실증 — Math-v4와 중복도 확인 후 택1).
-**Agentic-v2 미편입 확정 (2026-08-24 사용자 결정)**: used_in=super·Agentic-v3
-부재 — ultra_v3 재현 원칙 우선. user-경계 tool reasoning 최대 질량(interactive_agent
-74.9% 행·reasoning 63%)이 이 셋에 있다는 실측은 기록으로 남김 — 에이전트 능력
-보강 필요 시 재검토 1순위. 상세: `INTERLEAVED_THINKING.md` §5.
+**Agentic-v2 — 미편입(2026-08-24) → phase-2 편입으로 번복(2026-09-04 사용자 결정)**: 미편입 근거였던
+`used_in=super_v3` 는 **생성 세대 표시이지 사용 이력이 아니다**. Ultra 기술보고서 16쪽 "Search Capabilities" 는
+Super 의 Wikidata 4~8홉 검색 트라젝토리(= 이 셋의 `search` split 5,968행, Tavily·MiniMax 2.1 교사)를 **retain**
+했다고 명시한다. `tool_calling`·`interactive_agent` 는 used_in 없음(OpenCode·SWE-v3 와 같은 지위). 세 split 전부
+phase-2 편입 — 설계·epoch 은 `SFT_PHASE2_PLAN.md` §11. 로컬 `tool_calling.jsonl` 은 절단본(8,444/707,052행,
+0.44GB/14.94GB)이었음을 2026-09-04 발견, HF 재다운로드로 정정(크기·행수 일치 확인, 절단본은 `.truncated_*` 보존).
+당시 판단의 기록은 `INTERLEAVED_THINKING.md` §5.
 
 ### 2.4 길이 실측 요약 (파일당 3k행 샘플, chars/4 근사)
 
@@ -195,6 +199,32 @@ loss: train 1.051 → 0.716(iter 1,045), valid 0.657 → 0.617 → 0.599(300/600
 reasoning 65% · **opencode list 100%·reasoning 0%**. 결함 3건의 서사는 `KNOWN_ISSUES.md`(2026-09-01), 수정 계획은
 `SFT_PHASE2_PLAN.md`.
 
+### 2.8 미사용 SFT 셋 실측 인벤토리 (2026-09-04)
+
+보유 29 디렉터리 중 phase-1 블렌드 원천은 13개. 나머지 16개 중 Identity-v1·KoChat-v1 은 v2 로 대체된 셋이고,
+13개는 **phase-1 어디에도 없는 독립 데이터**다(§2.3 의 "상위 버전이 있으면 제외"는 세대 우선 규칙이었고 포함 관계가
+아니다 — 첫 user 프롬프트 해시 겹침: Safety v1→v2 96.4%, Chat v2→v3 5.1%, Agentic v1→v2 0%, Science v1→v2 0%).
+토큰은 1,500~2,000행 표본을 실제 변환기(`--measure-only`)로 렌더해 행수로 외삽한 값.
+
+| 셋 | 추정 real 토큰 | trainable | 교사 | phase-2 처리 (§`SFT_PHASE2_PLAN.md` §11) |
+|---|---|---|---|---|
+| Math-v2 (nano) | 70.9B | 99% | gpt-oss-120b | 제외 — math_v4 가 0.86ep 로 미소진 |
+| Competitive-Programming-v1 | 54.8B | 97~100% | DeepSeek-R1-0528 | 제외 — cp_v2 가 0.45ep 로 미소진 |
+| Math-v3 | 51.4B | 99% | DeepSeek-V3.2 | 제외 — 〃 |
+| Multilingual-v1 (de/es/fr/it/ja/zh, 전부 `ALPHA_LANGS`) | 24.5B | 97~99% | Qwen 번역 백본 | 0.05ep |
+| Math-Proofs-v1 lean (`messages=="[]"` 행 ≈33% bad_row) | ≈11B 유효 | 81% | gpt-oss-120b | 0.05ep (RL `math_formal_lean` 환경 대비) |
+| Finance-v1 | 9.4B | **4.9%** | GPT-OSS-120B | 0.1ep |
+| Agentic-v2 (search 0.14B · interactive_agent 1.56B · tool_calling 3.92B) | 5.6B | 18~36% | MiniMax 2.1 / DeepSeek-V3.2 | search 2.0 · ia 0.25 · tc 0.10 |
+| SWE-v2 (openhands 2.3B reasoning 0% · agentless 1.5B) | 3.8B | 25~47% | Qwen3-Coder-480B | 0.3ep (swe_v3 리플레이 대체) |
+| Chat-v2 (reasoning_on 2.1B · reasoning_off 1.3B = no-think) | 3.4B | 76~87% | Qwen3-235B, Kimi-K2-Thinking | 0.3ep (chat_v3 리플레이 대체) |
+| SWE-v1 r2e_gym (reasoning 0%) | 2.4B | 27% | Qwen3-Coder-480B | 0.3ep |
+| Chat-v1 (nano) | 1.6B | 89% | GPT-OSS-120B | 제외 |
+| Agentic-v1 (tool_calling 변환기 크래시 — bool 필드) | ≈1.4B | 9% | Qwen3-235B | 제외 |
+| Science-v1 | 0.6B | 86~88% | GPT-OSS-120B | 1.0ep (science_v2 리플레이 대체) |
+| Safety-v1 | 0.03B | 82% | — | 제외 — v2 와 프롬프트 96% 중복 |
+
+합계 ≈240B = phase-1 예산(51.34B)의 4.7배. 편입 여부가 아니라 epoch·iters 가 결정 변수다.
+
 ## 3. RL 자산
 
 ### 3.1 훈련 블렌드 3종 (즉시 실행 가능한 레시피 — NeMo Gym 소비 포맷)
@@ -265,7 +295,10 @@ reasoning 65% · **opencode list 100%·reasoning 0%**. 결함 3건의 서사는 
 
 ## 6. 미해결/후속
 
-- SFT-OpenCode·SWE-v3·Math-Proofs-v2·CP-v1의 used_in 부재 — 전 파일 스캔으로 확정 필요
+- SFT-OpenCode·SWE-v3·Math-Proofs-v2·CP-v1의 used_in 부재 — 전 파일 스캔으로 확정 필요.
+  **`used_in` 은 생성 세대 표시다**(Agentic-v2 search 가 `super_v3` 이면서 Ultra 에 retain 됨, §2.3) — 편입 판단은
+  태그가 아니라 Ultra 기술보고서의 데이터 절과 대조한다.
+- 다운로드 50건의 **크기 검증**(HF API `/tree` 의 LFS size 대 로컬 size) 미실시 — Agentic-v2 tool_calling 절단 사고(2026-09-04).
 - Ultra SFT 자체의 블렌드 비율은 미공개(레시피는 "SFT 체크포인트에서 시작"만 명시) —
   Megatron-Bridge SFT 레시피 공개 여부 추적
 - litmus-bench 활용법(모니터링 셋) 조사

@@ -107,7 +107,11 @@ truncate_history_thinking 기본값 := not tool_scenario     # 명시 kwarg가 �
 - 블렌드: swe 1.0-epoch 앵커 재산출 w=0.188891, 잔여 20엔트리 전역 리스케일
   f=0.99985198; 128k는 bins 비 (swe 0.576167 / proofs 0.423833).
 
-## 5. 결정 3 — agentic_v2 미편입 (2026-08-24 사용자 확정)
+## 5. 결정 3 — agentic_v2 미편입 (2026-08-24 사용자 확정) → **2026-09-04 번복: phase-2 편입**
+
+> **번복 근거(2026-09-04)**: `used_in` 은 생성 세대 표시일 뿐이었다. Ultra 기술보고서 16쪽이 Super 의 Wikidata 검색
+> 트라젝토리(= `search` split)를 retain 했다고 명시한다. 세 split 전부 phase-2 편입 — `SFT_RL_DATASETS.md` §2.3·§2.8,
+> `SFT_PHASE2_PLAN.md` §11. 아래는 당시 판단의 기록이다.
 
 `used_in` 실측상 Agentic-v2는 **super** post-training 셋이고 Ultra 목록에 없다
 (Agentic-v3은 부재 — NVIDIA는 Ultra의 agentic을 SWE-v3 + RL 단계로 커버).
