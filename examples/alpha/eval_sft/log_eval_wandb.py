@@ -32,6 +32,20 @@ DIAGNOSTIC_PREFIX = (
 )
 
 
+# 학습 런 디렉토리가 갈려도 **계보가 이어지면 한 곡선**으로 본다.
+# 2026-09-01: iter900 에서 데이터 블렌드를 교체하고 새 출력 디렉토리로 재개했다
+# (`…_full_20260828_081911` → `…_full_swap_20260901_101523`). 재개 게이트에서 LR 1.901e-5 가
+# cosine 연속값과 일치하고 loss 도 이어졌으며, 블렌드 가중치는 비트 동일 · 경로 2개
+# (opencode_fixed, identity_v2)만 치환됐다 — 같은 모델의 연속이다. 런 이름이 다르다는 이유로
+# 곡선이 iter900 에서 끊기면 추이를 볼 수 없으므로 정본 이름으로 합친다.
+# 교체 지점은 run config 의 `blend_swap_at_iter` 로 남긴다 — 합쳤다는 사실을 숨기지 않는다.
+RUN_ALIASES = {
+    "alpha_baseline_48L_sft_128k_full_swap_20260901_101523":
+        "alpha_baseline_48L_sft_128k_full_20260828_081911",
+}
+BLEND_SWAP_AT_ITER = 900
+
+
 def parse_tag(tag: str) -> tuple[str, int]:
     m = re.search(r"_iter(\d+)$", tag)
     return (tag[: m.start()] if m else tag, int(m.group(1)) if m else 0)
@@ -100,14 +114,16 @@ def main() -> int:
         if not tagdir.is_dir():
             print(f"[wandb] 건너뜀 (디렉토리 없음): {tag}")
             continue
-        run_name, it = parse_tag(tag)
+        src_run, it = parse_tag(tag)
+        run_name = RUN_ALIASES.get(src_run, src_run)
         metrics = collect(tagdir)
         if not metrics:
             print(f"[wandb] 건너뜀 (지표 없음): {tag}")
             continue
 
         tasks = sorted({k.split("/")[0] for k in metrics})
-        print(f"[wandb] {run_name} iter={it} — 태스크 {len(tasks)}개, 지표 {len(metrics)}개")
+        merged = f"  (← {src_run})" if src_run != run_name else ""
+        print(f"[wandb] {run_name} iter={it} — 태스크 {len(tasks)}개, 지표 {len(metrics)}개{merged}")
         if a.dry_run:
             for k in sorted(metrics):
                 print(f"      {k} = {metrics[k]:.4g}")
@@ -119,9 +135,13 @@ def main() -> int:
         # 규약이 바뀌면 **새 run 으로 시작**해야 구 키가 섞이지 않는다
         # (2026-09-01: 한 run 에 bench/<task>, bench/<task>/<metric>, diag/ 3세대가 누적됐다).
         rid = "eval-v3-" + re.sub(r"[^a-z0-9_-]", "-", run_name.lower())[:48]
+        cfg = {"training_run": run_name, "key_schema": "task/metric"}
+        if src_run != run_name:
+            # 어느 학습 런이 이 점을 만들었는지 config 에 남긴다.
+            cfg["source_run"] = src_run
+            cfg["blend_swap_at_iter"] = BLEND_SWAP_AT_ITER
         run = wandb.init(project=a.project, name=run_name, id=rid, resume="allow",
-                         config={"training_run": run_name, "key_schema": "task/metric"},
-                         reinit=True)
+                         config=cfg, reinit=True)
         run.log({**metrics, "iteration": it}, step=it)
         # summary 에 `latest/` 사본을 만들지 않는다 — 같은 값이 두 벌 생겨
         # 패널 목록이 두 배로 늘고 섹션이 어지러워진다. 최신값은 wandb 가 자동으로
