@@ -292,7 +292,8 @@ safety 4.51 · 신규 멤버는 §11.2 의 epoch 그대로. 데이터 게이트:
 | 변환 | `convert_sft_128k_mixed_p2b.sh`(sub1, NCORES 180) → p2 트리에 23 멤버 추가 | `verify_sft_bins --tree p2 --seq-length 131072` 전 PASS |
 | 렌더 육안(규칙 9) | `render_check.py --tree p2 --write` → 각 멤버 `RENDER_CHECK.md` | 봉투 흔적 0, `<think>` 수 = assistant 턴 수(interleaved 보존) |
 | 블렌드 | `gen_sft_128k_mixed_blend_p2.sh` → `sft_128k_mixed_blend_p2.yaml`(§1 의 보정 설계판을 대체) | 합 1.0·전 경로 idx·헤더 epoch 표 |
-| 프리셋 | `sft_128k_full_p2.yaml`: load = 교체 재개 런 ckpt, train-samples = iters×160, 나머지 §2 | G-P5 2-iter 스모크 loss ≤ phase-1 최종 +0.1 |
+| 프리셋 | `sft_128k_full_p2.yaml`: load = 교체 재개 런 ckpt, train-samples 96,320(602 iters), 나머지 §2 | G-P5 = **main1 개시 시 첫 iteration 게이트**(아래) |
+| G-P5 | 2026-09-04 sub1 스모크 3회 전부 첫 스텝 SIGABRT — **sub1 compat libcuda 595 스왑 때문(`KNOWN_ISSUES` 09-04), 데이터·프리셋 무관**(phase-1 데이터도 동일 실패). 로드·49 멤버 인덱스 빌드·블렌드 인덱스는 정상 완료 → 캐시 398 파일 프리빌드. 스모크는 `scripts/launch_p2_after_phase1.sh` 가 본 런 첫 iteration 에서 대신 판정(loss 유한·Traceback 0, 실패 시 `P2_CHAIN_ALERT.txt` + HOLD) | 사용자 선택: sub1 compat 를 570 으로 되돌려 정식 2-iter 스모크(root, vLLM fleet 중단) |
 
 ### 11.5 평가 게이트 (G-P6 기준선 → G-P7 100 iters 마다 → 종료)
 
@@ -304,8 +305,10 @@ safety 4.51 · 신규 멤버는 §11.2 의 epoch 그대로. 데이터 게이트:
 
 ### 11.6 일정
 
-phase-1(교체 재개) 2448 종료 ≈ 09-07 17:30 KST(iter 1692 @ 09-04 10:28 UTC, 333 s/iter) → HF 변환·G-P6 기준선(sub1 fleet, 검색 게이트 포함)
-→ G-P5 스모크 → phase-2 개시(main1) → 약 620 iters ≈ 2.4일 → ~09-10 판정. 데이터·블렌드·하니스는 09-04~05 에 sub1 CPU 로 선행.
+phase-1(교체 재개) 2448 종료 ≈ 09-07 17:30 KST(iter 1692 @ 09-04 10:28 UTC, 333 s/iter) → **자동 연계**(`scripts/launch_p2_after_phase1.sh`,
+2026-09-04 main1 에 arm: 완주 대기 → GPU 유휴 → sanity → 본 런 → 첫 iteration 게이트) → 602 iters ≈ 2.3일 → ~09-10 판정.
+G-P6 기준선(HF 변환·T1·에이전틱·프로브·검색 게이트)은 sub1 fleet 에서 병행. 해제: `pkill -f "[l]aunch_p2_after_phase1.sh"`.
+데이터·블렌드·하니스·캐시 프리빌드는 09-04 완료.
 
 ### 11.7 주의·알려진 특성
 

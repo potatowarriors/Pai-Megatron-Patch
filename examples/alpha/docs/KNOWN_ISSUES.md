@@ -4,6 +4,39 @@
 CLAUDE.md의 "함정 표"는 이 문서의 한 줄 요약이며, 새 사고는 **여기에 서사를 쓰고 CLAUDE.md 표에는 한 줄만** 추가한다.
 날짜는 절대 표기. 두 스테이지 이상 지난 항목은 스테이지 경계에서 `archive/`로 이동.
 
+## sub1 은 Megatron 학습을 못 돌린다 — CUDA compat 595 스왑 + Backend.AI libcudahook (2026-09-04 🔶 미해결)
+
+- **증상**: SFT phase-2 스모크(sub1, `sft_128k_full_p2` CP8+offload, 2026-09-04)가 첫 스텝의 TE `apply_normalization`
+  (cuDNN norm, train.sh 의 `NVTE_NORM_FWD_USE_CUDNN=1`)에서 **전 rank `munmap_chunk(): invalid pointer` SIGABRT**.
+  `PYTHONFAULTHANDLER=1` 스택: `layernorm_linear.py:208 apply_normalization` ← 첫 GDN 층 in_proj. phase-1 데이터
+  (`sft_128k_mixed_blend_swap`)로도 동일 → 데이터·프리셋 무관.
+- **원인**: 2026-08-29 `eval_sft/restore_bench_env.sh` 가 vLLM 0.25.1(CUDA 13 빌드)용으로 sub1 의
+  `/usr/local/cuda/compat/lib.real/libcuda.so.1` 을 **570.124.06 → 595.91.07** 로 교체했다(`nvidia-smi` CUDA Version 13.2).
+  학습 스택(torch 2.7 cu12.8 · TE 2.9.0 · cuDNN 9.24 LD_PRELOAD)은 595 compat 위에서 힙을 깨뜨린다. main1 은 570 그대로라 정상.
+  라이브러리 버전은 두 노드가 전부 동일함을 대조로 확인(torch/TE/triton/fla/mamba/cuDNN/NCCL/causal-conv1d).
+- **우회 불가**: Backend.AI 의 `/opt/kernel/libcudahook.ubuntu18.04.x86_64.so` 가 libcuda 로드를 가로채 compat 경로를 강제한다.
+  `LD_LIBRARY_PATH` 앞세우기는 무시되고(595 그대로), `LD_PRELOAD=libcuda.so.570` 은 535/570/595 **3중 매핑**만 만든다.
+- **대응**: G-P5 스모크는 main1 phase-2 개시 시점의 **첫 iteration 게이트**로 대체(`scripts/launch_p2_after_phase1.sh`: loss 유한·
+  Traceback 없음, 실패 시 `outputs/P2_CHAIN_ALERT.txt`). 데이터 인덱스 캐시(`configs/data/.cache/sft_128k_mixed_blend_p2`, 398 파일)는
+  abort 전에 완성돼 본 런이 재사용한다. sub1 에서 학습이 필요하면 symlink 를 570 으로 되돌려야 하고(root, CUDA 13 vLLM fleet 중단 —
+  `restore_bench_env.sh` 로 재적용 가능). **RL 단계(mcore 학습 + vLLM 롤아웃 동일 노드)는 이 충돌을 먼저 풀어야 한다.**
+- **교훈**: 노드 시스템 라이브러리 변경은 STATUS·KNOWN_ISSUES 에 기록한다 — 08-29 스왑은 `chat/README.md` 함정 표에만 있었다.
+  실패 스모크 로그·런 디렉터리: `outputs/smoke_failed_sub1_compat_20260904/`.
+
+## SFT 데이터 인벤토리 사고 2건 — 절단 다운로드 미검출 · used_in 오독 (2026-09-04 ✅)
+
+### ① Agentic-v2 `tool_calling.jsonl` 절단본이 "다운로드 검증 50/50"을 통과했다
+
+- **증상**: 로컬 파일 0.44GB·8,444행, HF 정본 14.94GB·707,052행(1.2% 만 수신). 2026-08-01 검증은 존재·JSON 파싱만 봤다.
+- **대응**: HF 재다운로드 → 크기(14,941,561,688 B)·행수 일치 확인 후 교체, 절단본은 `tool_calling.jsonl.truncated_8444rows_20260904` 보존.
+- **교훈**: 다운로드 검증은 HF API `/tree` 의 LFS size 와 로컬 size 대조로 한다. 나머지 49건 크기 대조는 미실시(`SFT_RL_DATASETS.md` §6).
+
+### ② `used_in=super_v3` 를 사용 이력으로 읽어 Ultra 가 retain 한 검색 셋을 11일간 미편입
+
+- **증상**: 2026-08-24 "Agentic-v2 는 super 셋" 판단으로 미편입. Ultra 기술보고서 16쪽 "Search Capabilities" 는 Super 의 Wikidata
+  4~8홉 검색 트라젝토리(= `search` split)를 **retain** 했다고 명시한다. `used_in` 은 **생성 세대** 표시였다.
+- **대응**: 2026-09-04 번복, phase-2 편입(`SFT_PHASE2_PLAN.md` §11). 교훈은 `SFT_RL_DATASETS.md` §2.3·§6.
+
 ## 진행 감시 스크립트가 로컬만 봐서 정상 실행을 "중단"으로 읽었다 (2026-09-01 ✅)
 
 iter900 스위트 상태를 `progress.sh` 로 보니 **프로세스 (없음) / 백엔드 0/8 / 프록시 000** 이었다.

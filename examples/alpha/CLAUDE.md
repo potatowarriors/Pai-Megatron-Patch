@@ -166,6 +166,8 @@ submodule `tests/unit_tests/test_step_batch_size_schedule.py`, `test_muon_optimi
 
 | 날짜 | 증상 | 원인 → 대응 |
 |---|---|---|
+| 09-04 | sub1 학습 스모크가 첫 스텝 전 rank `munmap_chunk(): invalid pointer`(TE cuDNN norm) — phase-1 데이터로도 동일 | sub1 compat libcuda 570→595 스왑(08-29, vLLM CUDA13용) + Backend.AI `libcudahook` 이 compat 경로 강제 → LD_LIBRARY_PATH/PRELOAD 우회 불가. **sub1 은 현재 학습 불가 노드** — symlink 복원(root, fleet 중단) 또는 main1 에서만. `KNOWN_ISSUES` 09-04 |
+| 09-04 | Agentic-v2 `tool_calling.jsonl` 절단본(8,444/707,052행)을 "다운로드 검증 50/50"이 통과시킴 · `used_in=super_v3` 를 사용 이력으로 오독해 Ultra 가 retain 한 검색 셋을 11일간 미편입 | 존재·파싱 검증은 절단을 못 본다 → HF LFS size 대조 · used_in 은 생성 세대 표시, 편입 판단은 기술보고서 데이터 절 대조. `KNOWN_ISSUES` 09-04 |
 | 09-01 | opencode_v1 tool 결과가 `<tool_response>` 안에 Python repr(`[{'type':'tool-result',…}]`, 줄바꿈 리터럴 `\n`)로 렌더 — 블렌드 4.3%, reasoning 0% | tool content 가 list 인데 템플릿이 str() → phase-2 에서 `normalize_row` 평문화 + 규칙 9(렌더 육안). `KNOWN_ISSUES` 09-01 ① |
 | 09-01 | identity_v1 원본 기준 ≈180회 반복 (0.43% 비중 × 1.2M tok 셋) | 결정 #9 는 비중 상한만 규정. 집계는 bin 1표(`calculate_per_token_loss=False`)라 gradient 0.43% — 증폭 없음. phase-2: 카드 v1.2(제작자 명시 — 조직·팀 → 이름 한 문장) 슬라이스 재생성 + identity_v2 0.6% 연속학습 + 프로브 2종. 〃 ② |
 | 09-01 | 교체 재개 첫 기동 LR 2.17e-7(warmup 재시작) — preset 에 `no-load-optim: true` 상속 → 스케줄러·Muon 리셋 | 재개 preset 은 `finetune`·`no-load-optim`·`no-load-rng` 전부 제거. `KNOWN_ISSUES` 09-01 ⑥ |
