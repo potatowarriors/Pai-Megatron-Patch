@@ -644,3 +644,52 @@ Terminal 0/10 이 그 상태였다. 실행: `python3 eval_sft/check_agentic_gate
 - 장시간 러너·프로브는 `setsid` + NFS 로그로 분리 실행 (세션 종료에 죽지 않도록).
 - 한 번에 한 변수만 바꾼다. 길이·온도·파서·모델 디렉토리를 동시에 바꾸면 원인 분리가 불가능하다.
 - 부분 표본 결과는 기록하지 않는다 (NVIDIA 재현 문서: "Never report sub-sampled / limited runs").
+
+### 검색 에이전트 게이트 (phase-2)
+
+phase-2 에 편입한 web-search 도구 데이터(Nemotron-SFT-Agentic-v2 search split)의 능력 게이트.
+홀드아웃 300문항(`.../Nemotron-SFT-Agentic-v2/splits/search_heldout300.jsonl`, **학습 미투입**)에
+두 게이트를 건다. 하네스는 `eval_sft/search_agent_eval.py` 하나이고 vLLM 서빙만 있으면 된다.
+
+```bash
+python3 eval_sft/search_agent_eval.py --selftest                    # 서버 불요 (24 검사)
+python3 eval_sft/search_agent_eval.py --base-url http://HOST:PORT/v1 --model alpha \
+    --gate format --n 300 --seed 0 --tag <ckpt>                     # 게이트 1
+python3 eval_sft/search_agent_eval.py --base-url http://HOST:PORT/v1 --model alpha \
+    --gate live --backend replay --n 5 --tag smoke                  # 루프 스모크 (API 키 불요)
+TAVILY_API_KEY=... python3 eval_sft/search_agent_eval.py --base-url ... \
+    --gate live --backend tavily --n 300 --seed 0 --tag <ckpt>      # 게이트 2
+```
+
+| 게이트 | 재는 것 | 검색 백엔드 | 통과 기준 |
+|---|---|---|---|
+| **format** | teacher-forced 프리픽스에서 **다음 한 턴의 형식** | 불요 (오프라인) | `tool_call_parse_rate` ≥ **0.99** |
+| **live** | system+user 만 주고 실제 검색 루프를 돌린 **최종 답 정확도** | tavily / replay | phase-2 `accuracy` > **phase-1 베이스라인** (같은 300문항·같은 시드) |
+
+- **format 지표**: `tool_call_parse_rate`(생성이 유효한 `web-search` 호출 또는 `</think>` 이후
+  최종 답 중 하나로 파싱되는 비율), `malformed_rate` + 사유 분포(`think_unclosed` /
+  `unclosed_tool_call` / `unknown_tool` / `empty_query`), `think_closed_rate`,
+  `next_action_agreement`(행동 종류가 레퍼런스 다음 턴과 일치), 평균·최대 생성 토큰,
+  `truncated_rate`. 행마다 프리픽스 3건(system+user 1 + tool 턴 직후 무작위 2, `--seed` 고정)
+  → 300행 = 900건. 결과는 `cut=start` / `cut=mid` 로 쪼개 출력한다.
+- **live 지표**: `accuracy`(정규화 exact **또는** ground_truth 포함), `exact_match`,
+  `no_final_answer_rate`, `mean_calls`, `call_cap_rate`(`--max-calls` 기본 20 도달),
+  `malformed_rate`, `ctx_exhausted_rate`. 출력은
+  `eval_sft/results/search_agent/<tag>/{format,live}_gate.{json,jsonl}`.
+- **live 판정은 상대값이다.** 레퍼런스 궤적 자체가 `ground_truth` 와 어긋나는 행이 있어
+  (row 0: 레퍼런스 "Sulfide minerals" vs GT "molybdenite mineral group") 절대 정확도의 상한이
+  1 이 아니다. **phase-1 ckpt 를 같은 300문항·같은 시드로 먼저 재고 그 값을 베이스라인으로 박는다** —
+  베이스라인 없이 나온 phase-2 단독 수치는 판정에 쓰지 않는다.
+- **Tavily 쿼터.** 레퍼런스 궤적의 도구 호출은 평균 **10.6회/문항**(2~20, 300문항 합 3,171)이고
+  모델이 더 부를 수 있으므로 **문항당 ~13회, 전량 1회 ≈ 4,000 콜**로 예산을 잡는다
+  (`--max-calls 20` 상한이면 최악 6,000). 쿼터가 빠듯해도 `--n` 을 줄이지 않는다(부분 표본 무효
+  원칙) — `--backend replay`(행이 실제로 받았던 결과를 토큰 Jaccard 로 되돌리는 오프라인 목업)로
+  루프를 먼저 스모크하고 tavily 는 전량 1회만 돈다. 키는 환경변수 `TAVILY_API_KEY` 에서만 읽는다.
+- **하네스는 vLLM 툴 파서를 쓰지 않는다.** tokenizer_v5 `apply_chat_template` 로 렌더한 원문
+  프롬프트를 `/v1/completions` 로 보내고 XML `<function=…>` 을 직접 판다 — 게이트가 모델이 아니라
+  파서를 재던 2026-08-30 사고(A4)의 재발 방지이고, INTERLEAVED_THINKING §7 규칙 4·5(프롬프트
+  조립 단일화, 히스토리 `reasoning_content` 재전송)를 코드로 강제한 것이다. `skip_special_tokens:
+  false` 필수(G2) — `</think>`·`<tool_call>` 이 단일 special id 라 기본 디코드에서 사라진다.
+- tool 결과는 학습 데이터와 같은 JSON 모양(`query`/`follow_up_questions`/`answer`/`images`/
+  `results[url,title,content,score,raw_content]`/`response_time`/`request_id`, `ensure_ascii=False`)
+  으로 되돌린다. 모양이 어긋나면 `<tool_response>` 분포가 학습과 달라진다 (INTERLEAVED_THINKING §7 규칙 9 — 렌더 1건 육안 확인).
