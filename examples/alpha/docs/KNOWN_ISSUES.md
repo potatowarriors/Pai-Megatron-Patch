@@ -20,6 +20,9 @@ CLAUDE.md의 "함정 표"는 이 문서의 한 줄 요약이며, 새 사고는 *
   Traceback 없음, 실패 시 `outputs/P2_CHAIN_ALERT.txt`). 데이터 인덱스 캐시(`configs/data/.cache/sft_128k_mixed_blend_p2`, 398 파일)는
   abort 전에 완성돼 본 런이 재사용한다. sub1 에서 학습이 필요하면 symlink 를 570 으로 되돌려야 하고(root, CUDA 13 vLLM fleet 중단 —
   `restore_bench_env.sh` 로 재적용 가능). **RL 단계(mcore 학습 + vLLM 롤아웃 동일 노드)는 이 충돌을 먼저 풀어야 한다.**
+- **원인 확정(2026-09-05)**: fleet 종료 후 `scripts/sub1_compat_smoke.sh` 로 symlink 를 570 으로 되돌리자 같은 프리셋·블렌드가
+  2 iter 정상 완주(loss 0.711→0.733, 55.9GB, traceback 0) — 595 compat 단독 원인. 스크립트는 종료 시 595 를 자동 복원하므로
+  sub1 에서 학습이 필요할 때마다 이 스크립트 방식(임시 570 → 복원)으로 쓴다. RL 단계 공존 문제는 그대로 미해결.
 - **교훈**: 노드 시스템 라이브러리 변경은 STATUS·KNOWN_ISSUES 에 기록한다 — 08-29 스왑은 `chat/README.md` 함정 표에만 있었다.
   실패 스모크 로그·런 디렉터리: `outputs/smoke_failed_sub1_compat_20260904/`.
 
