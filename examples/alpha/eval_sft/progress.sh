@@ -23,9 +23,9 @@ else
 fi
 
 echo "── 프로세스 ($BENCH_HOST) ───────────────────"
-# run_suite.sh 는 오케스트레이터다 — 이게 빠져 있으면 스위트 전체가 안 보인다.
-procs=$(ON "pgrep -af 'run_suite.sh|run_tier1.sh|run_tier2.sh|run_swe.sh|run_terminal.sh|run_simpleqa|run_logickor|chain_iter600|run_convert|lm_eval' | grep -v pgrep | cut -c1-110")
-[ -n "$procs" ] && echo "$procs" | sed 's/^/  /' || echo "  (없음)"
+# 판정은 suite_running.sh 한 곳에만 둔다 — pgrep -f 문자열 매칭은 자기 자신과
+# "이름만 언급한" 남의 셸을 모두 잡는다 (그 서사는 suite_running.sh 주석).
+bash "$HERE/suite_running.sh" -v | sed 's/^/  /' || echo "  (없음)"
 
 echo "── fleet ($BENCH_HOST) ──────────────────────"
 ON 'c=0; for p in 8000 8001 8002 8003 8004 8005 8006 8007; do
