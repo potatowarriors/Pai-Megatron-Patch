@@ -47,6 +47,10 @@ def post(base_url: str, body: dict, timeout: int = 1800) -> dict:
         return json.loads(r.read())
 
 
+# G2 표본 수. 태그가 살아 있으면 보통 1회에 끝나고, 안 보일 때만 더 뽑는다.
+G2_SAMPLES = 6
+
+
 def _gen(base_url: str, prompt: str, max_tokens: int) -> dict:
     """태스크 yaml 과 **동일한** 파라미터로 생성한다 — 게이트가 실제 조건을 재야 한다."""
     return post(base_url, {
@@ -96,10 +100,28 @@ def gate_g23(base_url: str, max_tokens: int) -> tuple[bool, bool, list[str]]:
     # G2 — </think> 가 응답 어딘가에 살아있는가.
     #      reasoning parser 를 켰다면 파서가 이미 소비했을 수 있으므로,
     #      reasoning_content 가 채워진 것도 관측 성공으로 본다.
-    g2 = ("</think>" in full) or bool(reasoning)
+    #
+    # **표본을 여러 번 뽑는다 (2026-09-06).** 온도 1.0 에서 모델은 쉬운 질문에
+    # 가끔 태그 없이 바로 답한다 — 실측 19/20(95%). 단일 표본으로 판정하면 5% 가
+    # 오탐이고, 스위트당 fleet 재기동이 3회이므로 한 번이라도 헛걸릴 확률이 14% 다.
+    # 실제로 iter1500 이 이 오탐으로 T2 직전에 중단됐고 후속 체인까지 막혔다.
+    #
+    # 이 게이트가 잡아야 하는 진짜 고장은 태그가 **아예 사라지는** 것이다
+    # (tokenizer/서빙 오설정 → 0%). 그래서 표본 k 개 중 하나라도 관측되면 통과로
+    # 본다 — 정상(95%)에서 k=6 이면 오탐 확률 0.95^-... ≈ 1.6e-8, 고장(0%)이면 항상 잡힌다.
+    seen = 1 if (("</think>" in full) or bool(reasoning)) else 0
+    tried = 1
+    while seen == 0 and tried < G2_SAMPLES:
+        tried += 1
+        dx = _gen(base_url, EASY, max_tokens)
+        mx = dx["choices"][0]["message"]
+        if ("</think>" in ((mx.get("reasoning_content") or "") + (mx.get("content") or ""))
+                or mx.get("reasoning_content")):
+            seen = 1
+    g2 = seen > 0
     log.append(
         f"G2 태그 관측: {'OK' if g2 else 'FAIL'} "
-        f"(</think> 포함={'</think>' in full}, reasoning_content={'있음' if reasoning else '없음'})"
+        f"({tried}회 표본 중 {seen}회 관측, reasoning_content={'있음' if reasoning else '없음'})"
     )
 
     # G3 — 종료·비어있지 않은 답변
