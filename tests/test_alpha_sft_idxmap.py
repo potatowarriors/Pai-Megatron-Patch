@@ -641,3 +641,69 @@ def test_tool_result_unknown_shape_dropped():
     assert norm is None and why == "tool_content_shape"
     norm, why = normalize_row({"messages": _tool_conv([{"type": "tool-result", "output": {"type": "json", "value": {"a": 1}}}]), "uuid": "t"})
     assert norm is None and why == "tool_content_shape"
+
+
+# ---------------------------------------------------------------------------
+# 9. keep_history_think — Terminus 형(툴 구조 없음) 행의 보존 렌더 (sdg/terminal §1.1)
+# ---------------------------------------------------------------------------
+TERMINUS_LIKE = [
+    {"role": "system", "content": "You are an AI assistant tasked with solving command-line tasks."},
+    {"role": "user", "content": "Task: make hello.txt\n\nCurrent terminal state:\nroot@x:/app# "},
+    {"role": "assistant", "content": '{"analysis": "empty dir", "plan": "create", '
+                                     '"commands": [{"keystrokes": "touch hello.txt\\n", "duration": 0.1}]}',
+     "reasoning_content": "R1 first look"},
+    {"role": "user", "content": "New Terminal Output:\nroot@x:/app# touch hello.txt\nroot@x:/app# "},
+    {"role": "assistant", "content": '{"analysis": "done", "plan": "finish", "commands": [], '
+                                     '"task_complete": true}',
+     "reasoning_content": "R2 verify"},
+    {"role": "user", "content": "Current terminal state:\nroot@x:/app# \n\nAre you sure you want to "
+                                "mark the task as complete?"},
+    {"role": "assistant", "content": '{"analysis": "yes", "plan": "none", "commands": [], '
+                                     '"task_complete": true}',
+     "reasoning_content": "R3 confirm"},
+]
+
+
+def test_terminus_default_render_strips_history_think(tok):
+    # 구조 신호 없음 → 템플릿 기본 = 히스토리 think 제거: 학습 구간에 R1·R2 부재, R3 만
+    enc, why = render_and_mask(tok, _norm(TERMINUS_LIKE), mask_role_header=False)
+    assert enc is not None, why
+    trained = tok.decode(enc.ids[enc.trainable].tolist())
+    assert "R1 first look" not in trained and "R2 verify" not in trained
+    assert "<think>\nR3 confirm</think>" in trained
+    assert trained.count("<think></think>") == 2
+
+
+def test_terminus_keep_history_think_preserves_every_turn(tok):
+    enc, why = render_and_mask(tok, _norm(TERMINUS_LIKE), mask_role_header=False,
+                               keep_history_think=True)
+    assert enc is not None, why
+    trained = tok.decode(enc.ids[enc.trainable].tolist())
+    for r in ("R1 first look", "R2 verify", "R3 confirm"):
+        assert f"<think>\n{r}</think>" in trained
+    assert "<think></think>" not in trained
+    # 마지막 턴 렌더는 기본 렌더와 동일해야 한다 (보존은 히스토리 턴만 바꾼다)
+    enc0, _ = render_and_mask(tok, _norm(TERMINUS_LIKE), mask_role_header=False)
+    spans0 = reference_assistant_spans(enc0.ids.tolist(), tok)
+    spans1 = reference_assistant_spans(enc.ids.tolist(), tok)
+    last0 = tok.decode(enc0.ids[spans0[-1][0]:spans0[-1][1]].tolist())
+    last1 = tok.decode(enc.ids[spans1[-1][0]:spans1[-1][1]].tolist())
+    assert last0 == last1
+
+
+def test_keep_history_think_worker_end_to_end():
+    _worker_init(TOKENIZER_DIR, True, keep_history_think=True)
+    samples, drops, _dropped, _info = _worker_encode([{"messages": TERMINUS_LIKE, "uuid": "kt"}])
+    assert not drops and len(samples) == 1
+    from transformers import AutoTokenizer
+    t = AutoTokenizer.from_pretrained(TOKENIZER_DIR)
+    trained = t.decode(samples[0].ids[samples[0].trainable].tolist())
+    assert "<think>\nR1 first look</think>" in trained and "<think>\nR2 verify</think>" in trained
+
+
+def test_keep_history_think_does_not_touch_tool_scenario(tok):
+    # tool 시나리오는 이미 보존 렌더 — 플래그 유무로 결과가 달라지면 안 된다
+    a, _ = render_and_mask(tok, _norm(TOOLCONV, tools=TOOLS), mask_role_header=False)
+    b, _ = render_and_mask(tok, _norm(TOOLCONV, tools=TOOLS), mask_role_header=False,
+                           keep_history_think=True)
+    assert a.ids.tolist() == b.ids.tolist()

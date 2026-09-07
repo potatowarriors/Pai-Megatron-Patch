@@ -423,11 +423,16 @@ def render_and_mask(tok, norm: dict, mask_role_header: bool = True,
                     hdr_cache: Optional[dict] = None,
                     medium_effort: bool = False,
                     budget: Optional[dict] = None,
-                    info: Optional[Counter] = None
+                    info: Optional[Counter] = None,
+                    keep_history_think: bool = False,
                     ) -> Tuple[Optional[EncodedSample], Optional[str]]:
     """대화 1건 -> (토큰열, 학습마스크). 실패 시 (None, 드롭 사유).
 
     medium_effort: 템플릿 kwarg 로 마지막 user 턴에 effort 마커 (docstring §Effort).
+    keep_history_think: 템플릿 kwarg truncate_history_thinking=False — 모든 assistant
+      턴의 reasoning 을 보존 렌더. Terminus 형(툴 결과를 role=user 로 주입, 구조 신호
+      없음) 행 전용: 템플릿의 tool-시나리오 자동 판정을 우회하되 템플릿은 불변
+      (docs/INTERLEAVED_THINKING.md §7-5, sdg/terminal/README.md §1.1).
     budget: {"seed", "frac": (lo, hi), "min_tokens"} — truncate_reasoning 적용
       후 절단 턴의 첫 </think> 를 비학습으로 (info 에 trunc_* 카운터 누적).
     """
@@ -443,6 +448,8 @@ def render_and_mask(tok, norm: dict, mask_role_header: bool = True,
 
     try:
         kw = {"medium_effort": True} if medium_effort else {}
+        if keep_history_think:
+            kw["truncate_history_thinking"] = False
         rendered = tok.apply_chat_template(
             norm["messages"], tools=norm["tools"],
             tokenize=False, add_generation_prompt=False, **kw,
@@ -558,13 +565,14 @@ _WORKER_ARGS = None
 
 def _worker_init(tokenizer_path: str, mask_role_header: bool,
                  fanout_train_turns: bool = False, medium_effort: bool = False,
-                 budget: Optional[dict] = None):
+                 budget: Optional[dict] = None, keep_history_think: bool = False):
     global _WORKER_TOK, _WORKER_ARGS
     from transformers import AutoTokenizer
     _WORKER_TOK = AutoTokenizer.from_pretrained(tokenizer_path)
     _WORKER_ARGS = {"mask_role_header": mask_role_header, "hdr_cache": {},
                     "fanout": fanout_train_turns,
-                    "medium_effort": medium_effort, "budget": budget}
+                    "medium_effort": medium_effort, "budget": budget,
+                    "keep_history_think": keep_history_think}
 
 
 def _worker_encode(rows: List[Any]
@@ -602,6 +610,7 @@ def _worker_encode(rows: List[Any]
                 medium_effort=_WORKER_ARGS["medium_effort"],
                 budget=_WORKER_ARGS["budget"],
                 info=info,
+                keep_history_think=_WORKER_ARGS.get("keep_history_think", False),
             )
             if enc is None:
                 drops[why] += 1
@@ -640,6 +649,10 @@ def get_args():
     p.add_argument("--medium-effort", action="store_true",
                    help="마지막 user 턴에 '{reasoning effort: efficient}' 마커 "
                         "(템플릿 medium_effort=True; docstring §Effort/Budget)")
+    p.add_argument("--keep-history-think", action="store_true",
+                   help="모든 assistant 턴의 reasoning 을 보존 렌더 "
+                        "(템플릿 truncate_history_thinking=False). Terminus 형 "
+                        "터미널 에이전트 행 전용 — sdg/terminal/README.md §1.1")
     p.add_argument("--truncate-reasoning-budget", action="store_true",
                    help="학습 턴 reasoning 을 무작위 토큰 예산으로 절단 + 잘린 자리 "
                         "</think> 비학습 (budget-control 파생 셋). --medium-effort 와 배타")
@@ -750,14 +763,15 @@ def main():
 
     if args.workers <= 1:
         _worker_init(args.tokenizer, args.mask_role_header,
-                     args.fanout_train_turns, args.medium_effort, budget)
+                     args.fanout_train_turns, args.medium_effort, budget,
+                     args.keep_history_think)
         for chunk in _chunks():
             _consume(_worker_encode(chunk))
     else:
         with mp.Pool(args.workers, initializer=_worker_init,
                      initargs=(args.tokenizer, args.mask_role_header,
                                args.fanout_train_turns, args.medium_effort,
-                               budget)) as pool:
+                               budget, args.keep_history_think)) as pool:
             for result in pool.imap(_worker_encode, _chunks(), chunksize=1):
                 _consume(result)
     dropped_f.close()
@@ -779,6 +793,7 @@ def main():
             "fanout_subsamples": int(fanout_agg["fanout_subsamples"]),
             "row_stride": args.row_stride,
             "medium_effort": args.medium_effort,
+            "keep_history_think": args.keep_history_think,
             "truncate_reasoning_budget": budget,
             "truncate": {k: int(v) for k, v in sorted(fanout_agg.items())
                          if k.startswith("trunc_")},
@@ -851,6 +866,7 @@ def main():
         "fanout_subsamples": int(fanout_agg["fanout_subsamples"]),
         "row_stride": args.row_stride,
         "medium_effort": args.medium_effort,
+        "keep_history_think": args.keep_history_think,
         "truncate_reasoning_budget": budget,
         "truncate": {k: int(v) for k, v in sorted(fanout_agg.items())
                      if k.startswith("trunc_")},
