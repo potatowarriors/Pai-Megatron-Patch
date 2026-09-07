@@ -24,6 +24,19 @@ else
     $SUDO ln -sf libcuda.so.1 "$REAL/libcuda.so"
     echo "  → 595 적용: $(readlink $REAL/libcuda.so.1)"
 fi
+# libcuda 만 바꾸면 JIT 컴파일러·NVVM 이 570 으로 남아 PTX JIT 시 힙 손상 (KNOWN_ISSUES 2026-09-07).
+# root 가 되면 링크를 정정하고, 아니면 사용자 디렉토리 jit595 (LD_LIBRARY_PATH 우회, serve_glm53.sh 참조) 만 갖춘다.
+for lib in libnvidia-ptxjitcompiler.so.1:libnvidia-ptxjitcompiler.so.595.91.07 libnvidia-nvvm.so.4:libnvidia-nvvm.so.595.91.07; do
+    link=${lib%%:*}; target=${lib##*:}
+    if [ "$(readlink $REAL/$link 2>/dev/null)" != "$target" ] && [ -f "$REAL/$target" ]; then
+        $SUDO ln -sf "$target" "$REAL/$link" 2>/dev/null && echo "  → $link → $target" \
+            || echo "  ⚠️ $link 는 아직 570 (root 필요) — jit595 우회로 대체"
+    fi
+done
+JIT=$T/cuda_compat13/jit595; mkdir -p "$JIT"
+ln -sfn "$REAL/libnvidia-ptxjitcompiler.so.595.91.07" "$JIT/libnvidia-ptxjitcompiler.so.1"
+ln -sfn "$REAL/libnvidia-nvvm.so.595.91.07" "$JIT/libnvidia-nvvm.so.4"
+echo "  jit595 우회 디렉토리 준비: $JIT (다중 GPU NCCL 프로세스는 LD_LIBRARY_PATH=$JIT:… 로)"
 
 echo "== 2) ifeval leaf 의존성 (user-site, 휘발) =="
 python3 -c "import langdetect, immutabledict, wonderwords; from importlib.metadata import version; assert version('nltk')>='3.9.1'" 2>/dev/null \

@@ -4,6 +4,31 @@
 CLAUDE.md의 "함정 표"는 이 문서의 한 줄 요약이며, 새 사고는 **여기에 서사를 쓰고 CLAUDE.md 표에는 한 줄만** 추가한다.
 날짜는 절대 표기. 두 스테이지 이상 지난 항목은 스테이지 경계에서 `archive/`로 이동.
 
+## sub1 NCCL 초기화 `munmap_chunk(): invalid pointer` — compat 스왑이 절반만 적용돼 있었다 (2026-09-07 ✅ 우회, 🔶 영구 수정은 root)
+
+- **증상**: 터미널 SDG 트랙의 GLM-5.3-Flash 서빙(vLLM nightly 0.28.1rc1, torch 2.13 cu130, NCCL 2.29.7)이 EP+DP8 로 뜨다
+  워커 8개 전부 `munmap_chunk(): invalid pointer` SIGABRT. torchrun 2-GPU `all_reduce` 하나로 재현. NCCL cu13 2.27~2.31 전 버전,
+  cu129 변형 venv(nvidia-nccl-cu12 2.29.7)도 동일. `NCCL_CUMEM_ENABLE=0`·`NCCL_NVLS_ENABLE=0` 무효. 시스템 torch(2.7 cu12.8, NCCL 2.25.1)는 정상.
+  `eval_sft/serve_fleet.sh` 주석의 "vLLM DP munmap 크래시 → DP1 ×N" 도 같은 증상이었다.
+- **원인 (gdb 백트레이스, 단일 프로세스 `ncclCommInitAll` 재현기 `tools/glm53/nccl_initall.py`)**: NCCL 정적 cudart → `cuLibraryLoadData`
+  → `libcudahook` → `libcuda.so.595.91.07` → **`libnvidia-ptxjitcompiler.so.1` 의 `__cuda_CallJitEntryPoint` 에서 free() 오류**.
+  `/usr/local/cuda/compat/lib.real` 을 보면 `libcuda.so.1 → 595.91.07` 이지만 `libnvidia-ptxjitcompiler.so.1 → 570.124.06`,
+  `libnvidia-nvvm.so.4 → 570.124.06` 이다. 08-29 `restore_bench_env.sh` 가 595 파일은 복사했지만 심볼릭 링크는 libcuda 만 바꿨다.
+  PTX JIT 가 일어나는 로드(NCCL 2.29 커널, 그리고 아마 TE cuDNN norm)마다 570 JIT 가 595 드라이버 힙을 깨뜨린다.
+- **우회 (sudo 불필요, 프로세스 범위)**: 595 JIT·NVVM 을 가리키는 심볼릭 링크만 담은 사용자 디렉토리를 `LD_LIBRARY_PATH` 앞에 둔다.
+  libcuda 가 soname 으로 dlopen 하므로 이것만으로 595 가 잡힌다 (`libcudahook` 은 libcuda 경로만 강제).
+  ```bash
+  J=/home/work/vidsearch/tools/cuda_compat13/jit595; R=/usr/local/cuda/compat/lib.real; mkdir -p $J
+  ln -sfn $R/libnvidia-ptxjitcompiler.so.595.91.07 $J/libnvidia-ptxjitcompiler.so.1
+  ln -sfn $R/libnvidia-nvvm.so.595.91.07 $J/libnvidia-nvvm.so.4
+  LD_LIBRARY_PATH=$J:$LD_LIBRARY_PATH …   # → ncclCommInitAll rc 0, torchrun 8-GPU all_reduce PASS (NCCL 2.29.7)
+  ```
+  `sdg/terminal/serve/serve_glm53.sh` 가 이를 내장. `restore_bench_env.sh` 에 jit595 생성 + (root 로 돌릴 때) 링크 정정을 추가.
+- **영구 수정 (root)**: `ln -sf libnvidia-ptxjitcompiler.so.595.91.07 $R/libnvidia-ptxjitcompiler.so.1; ln -sf libnvidia-nvvm.so.595.91.07 $R/libnvidia-nvvm.so.4`.
+  자동 모드에서는 sudo 가 차단돼 사용자 실행 필요.
+- **함의 (미검증)**: 아래 09-04 "sub1 학습 불가"(TE cuDNN norm 에서 같은 munmap_chunk)도 같은 원인일 가능성이 크다. 링크 정정 후
+  `scripts/sub1_compat_smoke.sh` 방식으로 재검증하면 sub1 이 595 compat 인 채로 학습 가능해질 수 있다.
+
 ## sub1 은 Megatron 학습을 못 돌린다 — CUDA compat 595 스왑 + Backend.AI libcudahook (2026-09-04 🔶 미해결)
 
 - **증상**: SFT phase-2 스모크(sub1, `sft_128k_full_p2` CP8+offload, 2026-09-04)가 첫 스텝의 TE `apply_normalization`
