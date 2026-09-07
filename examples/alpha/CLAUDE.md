@@ -166,6 +166,7 @@ submodule `tests/unit_tests/test_step_batch_size_schedule.py`, `test_muon_optimi
 
 | 날짜 | 증상 | 원인 → 대응 |
 |---|---|---|
+| 09-07 | 에이전틱 노드 여유 592→290GB(7일), A3 임계 미달 | `docker_gc.sh` 가 docker 객체만 봄 — 실제 누적은 컨테이너 `/opt` 의 에이전트 산출물(SWE 궤적·Terminal 기록, 5일 +66GB). gc 에 산출물 회전 추가(최근 N개 유지, `--rotate-only`) |
 | 09-05 | iter1200 종료 후 iter1500 체인이 24시간 미발동 | `pgrep -f 'run_suite.sh'` 가 ssh 원격 셸(`bash -c "pgrep …"`)의 자기 명령줄을 매치 → 조건 항상 참. 브래킷 `[r]…` 도 이름만 언급한 남의 셸을 잡음 → 판정을 `eval_sft/suite_running.sh` 로 일원화, argv 구조로 판별 |
 | 09-04 | sub1 학습 스모크가 첫 스텝 전 rank `munmap_chunk(): invalid pointer`(TE cuDNN norm) — phase-1 데이터로도 동일 | sub1 compat libcuda 570→595 스왑(08-29, vLLM CUDA13용) + Backend.AI `libcudahook` 이 compat 경로 강제 → LD_LIBRARY_PATH/PRELOAD 우회 불가. **sub1 은 현재 학습 불가 노드** — symlink 복원(root, fleet 중단) 또는 main1 에서만. `KNOWN_ISSUES` 09-04 |
 | 09-04 | Agentic-v2 `tool_calling.jsonl` 절단본(8,444/707,052행)을 "다운로드 검증 50/50"이 통과시킴 · `used_in=super_v3` 를 사용 이력으로 오독해 Ultra 가 retain 한 검색 셋을 11일간 미편입 | 존재·파싱 검증은 절단을 못 본다 → HF LFS size 대조 · used_in 은 생성 세대 표시, 편입 판단은 기술보고서 데이터 절 대조. `KNOWN_ISSUES` 09-04 |
