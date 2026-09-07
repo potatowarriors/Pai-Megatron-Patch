@@ -501,6 +501,64 @@ alpha 챗 템플릿은 `enable_thinking=false` 일 때 `<|im_start|>assistant\n<
 **강제**한다(어긋나면 `_build` 가 예외). 모듈 전역에 실행 중 값을 쌓는 방식은 lm_eval 이
 모듈을 경로별로 따로 로드해 인스턴스가 갈리므로 쓸 수 없다.
 
+## 3.11 Terminal-Bench 2.0 전환 — Harbor + Terminus-2 (2026-09-07 구축)
+
+사용자 결정(2026-09-07)에 따라 Terminal 정본 게이트를 TB-1 에서 **TB 2.0** 으로 옮겼다.
+근거는 `SFT_RL_DATASETS.md` §2.9 — 학습 데이터의 Terminus 행이 Terminus-2 스키마인데
+구 하니스는 terminus **v1**(4필드)이었다. 스키마는 하니스 에이전트가 정하므로 v1 하니스에
+v2 형식을 끼워 넣을 수 없다. Ultra 공개 수치도 TB 2.0/2.1 기준이다. TB-1 은 참고치.
+
+### 설치 (컨테이너 `alpha-eval`, 2026-09-07 실측)
+
+`terminal-bench` 패키지는 PyPI 에 **0.2.18 까지만** 있다 — TB 2.x 는 `harbor` 로 배포 경로가
+바뀌었다. 기존 `/opt/terminalbench/venv`(TB-1)는 **건드리지 않고** 별도 venv 를 쓴다.
+
+```bash
+mkdir -p /opt/harbor && cd /opt/harbor
+python3 -m venv venv && ./venv/bin/pip install harbor        # 0.22.0, Python>=3.12 (컨테이너 3.12.3)
+HOME=/opt/harbor ./venv/bin/harbor download terminal-bench@2.0   # 89 tasks (TB-1 은 80)
+```
+
+### 플래그 대응 — `harbor run --help` 실측
+
+| TB-1 (`tb run`) | TB-2 (`harbor run`) |
+|---|---|
+| `--agent terminus` | `-a terminus-2` |
+| `-k api_base=…` | `--ak api_base=…` (값은 JSON/파이썬 리터럴로 파싱) |
+| `--dataset terminal-bench-core==0.1.1` | `-d terminal-bench@2.0` |
+| `--n-attempts K` | `-k K` ⚠️ TB-1 의 `-k`(agent kwarg)와 의미가 다르다 |
+| `--n-concurrent W` | `-n W` |
+| `--n-tasks N` | `-l N` |
+| `--run-id` / `--output-path` | `--job-name` / `-o` |
+
+`Terminus2.__init__` 가 노출하는 인자: `api_base` · `model_name` · **`parser_name`('json'\|'xml')** ·
+`temperature` · `max_turns` · `llm_call_kwargs`(dict) · `max_thinking_tokens`.
+**`parser_name=json`** 을 쓴다 — 학습 데이터가 Terminus-2 JSON 스키마다. (json/xml 은 파서뿐
+아니라 **프롬프트 템플릿도 다르다**.) top_p·max_tokens 는 `llm_call_kwargs` 로 넘긴다.
+
+실행 규약은 TB-1 에서 승계: 반복 8 · temp 1.0 / top_p 0.95 · max_tokens 65,536 · A1~A4 게이트 ·
+전량 실행. 러너는 `eval_sft/run_terminal_tb2.sh`.
+
+### 검증 (2026-09-07)
+
+| 단계 | 결과 |
+|---|---|
+| oracle 3태스크 (하니스 자체) | **3/3, mean reward 1.000, 예외 0**, 49초 |
+| 실모델 1태스크 스모크 (iter1800 fleet) | 예외 0, 9스텝 완주, prompt 29,851 / completion 5,986 토큰 |
+
+oracle 을 먼저 돌리는 이유: 0점이 나왔을 때 하니스 결함인지 모델 실패인지 갈라야 한다.
+2026-08-30 에 파서 오설정으로 SWE 0/20 · Terminal 0/10 을 "모델 실패" 로 읽었던 선례가 있다.
+
+**추출 명령 형태가 학습 데이터와 일치**한다:
+```json
+{"function_name": "bash_command", "arguments": {"keystrokes": "ls -la\n", "duration": 0.5}}
+```
+
+다만 그 1태스크에서 **에이전트 응답 8개 중 4개만 명령이 추출**됐다(50%). 파싱 실패한 응답은
+모델이 스스로 형식을 고치려는 내용이었다("I need to fix the command to properly output JSON",
+"there's extra text after the JSON"). 하니스를 맞춰도 형식 준수는 완전하지 않다 — 학습 블렌드에서
+Terminus 행이 토큰 기준 ≈0.3% 뿐이기 때문으로 보인다(§2.9). n=1 이므로 관측이지 측정은 아니다.
+
 ## 3.10 반복 실행 워크플로 (학습 중 체크포인트마다)
 
 학습이 진행되며 체크포인트(300 iters마다)가 나오면 반복 평가한다. 스크립트는 모두
