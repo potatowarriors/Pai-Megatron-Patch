@@ -30,7 +30,7 @@ instruct 능력을 측정한다. 참조 좌표는 DSV4 post-training 표 + Nemot
 | SimpleQA-Verified | ✅ T3 | 1,000문항, mini judge 채점 |
 | MRCR | ✅ T2 (≤256K) | openai/mrcr. 1M은 모델 창(262K, 실사용 ~256K) 초과 |
 | SWE Verified | ⚠️ 프록시→풀 | 풀 에이전틱은 docker 경로 확정 후. 그 전엔 oracle-patch + sb-cli 채점 |
-| Terminal Bench 2.0 | ⚠️ 대기 | docker 경로 확정 후 (프록시 없음) |
+| Terminal Bench 2.0 | **전환 결정 (2026-09-07 사용자)** — TB 2.x + Harbor + **Terminus-2** 를 Terminal 정본 게이트로, TB-1(core 0.1.1 + terminus v1)은 참고치 | 근거: 학습 데이터의 Terminus 행이 Terminus-2 스키마(`analysis/plan/commands{keystrokes,duration}/task_complete`)이고 Ultra 수치가 TB 2.0/2.1 기준. 유효 TB-1 수치가 아직 없어 연속성 손실 없음. 실행 규약(반복 8·temp 1.0/top_p 0.95·max_tokens 65,536·A1~A4 게이트)은 승계. docker 경로는 gpu06 DinD 로 확정됨. 데이터 실측은 `SFT_RL_DATASETS.md` §2.9 |
 | IMOAnswerBench / HLE | 후순위 | 15B-A1.8B에 변별력 낮음. HLE는 gated(HF 토큰 필요) |
 | Chinese-SimpleQA | 🔁 대체 | 중국어는 학습 언어 아님 → KMMLU 유지 + KoChat 판정(T3) |
 | Codeforces / Apex / CorpusQA-1M / BrowseComp / HLE-tools / MCPAtlas / Toolathlon / GDPval-AA / SWE Pro·Multilingual | ❌ | 실시간 저지·비공개 scaffolding·1M 창·웹서치 스택·MCP 팜·유료 서비스·docker |

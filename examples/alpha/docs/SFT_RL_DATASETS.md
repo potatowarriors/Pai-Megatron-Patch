@@ -225,6 +225,30 @@ reasoning 65% · **opencode list 100%·reasoning 0%**. 결함 3건의 서사는 
 
 합계 ≈240B = phase-1 예산(51.34B)의 4.7배. 편입 여부가 아니라 epoch·iters 가 결정 변수다.
 
+### 2.9 터미널 에이전트(Terminal-Bench 형) 데이터 실측 (2026-09-07)
+
+질문: phase-1·phase-2 에 Terminal-Bench 에 맞는 터미널 에이전트 데이터가 있는가. 답: **phase-1 에 극소량, phase-2 신규분에는 없음.**
+
+| 원천 | 하니스 (SWE-v3 전수 237,970행 분류) | 행 비중 | 블렌드 토큰 비중(추정) |
+|---|---|---|---|
+| SWE-v3 | **Terminus 형**: system "solving command-line tasks in a Linux environment", 응답 JSON `{"analysis","plan","commands":[{keystrokes,duration}],"task_complete"}`(= **Terminus-2 스키마**), 터미널 출력은 user 턴 "New Terminal Output:" 주입, reasoning 37%, 턴 중앙값 67, **과제는 전부 GitHub 이슈**(일반 터미널 과제 0) | 1.5% (≈3,540행) | ≈0.28% |
+| SWE-v3 | bash 전용 셸 에이전트(mini-SWE-agent, tool `bash` 하나) | 9.5% | ≈1.2% |
+| SWE-v3 | SWE-agent(bash+editor+submit) 20.0% · OpenHands 36.0% · opencode 6.8% · Codex CLI 1.2% · 기타 SWE 에이전트 프롬프트 25% | 89% | ≈16.7% |
+| OpenCode-v1 | `bash_only_tool` + `bash_only_tool_skills` 193k행(42%) — 도구는 bash 뿐이나 과제는 코딩 조수 질문(표본 19% 는 순수 개념 질문) | 42% | ≈1.8% |
+| phase-2 신규 | swe_v2_openhands·swe_v1_r2e = 100% OpenHands(execute_bash+str_replace_editor), agentless 도구 없음, Agentic-v2 = API 함수 호출·웹 검색 | — | Terminus 형 **0** |
+
+Ultra 는 Terminus-2(Harbor)로 **≈370K 대화**의 전용 terminal-use 셋을 만들어 SFT 했고(기술보고서 "Terminal-Use Capabilities": 시드 OpenCodeReasoning·
+OpenMathReasoning·SWE-bench·SWE-Fixer·SWE-rebench·SWE-smith, DeepSeek-V3.2 에이전트, 일반 터미널 과제 포함) 미공개다. 공개 컬렉션에 남은 것이
+SWE-v3 의 3.5k행이다.
+
+**평가 형식 불일치**: 현행 평가는 terminal-bench 0.2.18 + core 0.1.1(80 tasks) + Terminus **v1**(4필드 JSON `state_analysis/explanation/commands/
+is_task_complete`)인데 학습 데이터는 Terminus-2 스키마다. 스키마는 하니스 에이전트가 정하므로 "v1 하니스에 v2 스키마 적용"은 성립하지 않는다 →
+**결정(사용자, 2026-09-07): Terminal-Bench 2.x + Harbor + Terminus-2 로 평가 경로 전환**(학습 형식·Ultra TB 2.0/2.1 비교 조건 일치, 기존 유효
+수치 없음). 벤치 세션이 진행(`SFT_BENCHMARKS.md`).
+
+보강 선택지(미결정): ① SWE-v3 Terminus 3.5k행을 별도 멤버로 추출해 2~3ep 상향(실토큰 ≈0.14B) ② Terminus-2 형 터미널 트라젝토리 합성(gpu06 DinD +
+Harbor + 교사, Ultra 방식 축소) ③ RL 에서 Gym `terminus_judge`·`terminal_multi_harness_*` 환경으로 보강(Ultra 의 terminal 교사도 RL).
+
 ## 3. RL 자산
 
 ### 3.1 훈련 블렌드 3종 (즉시 실행 가능한 레시피 — NeMo Gym 소비 포맷)
