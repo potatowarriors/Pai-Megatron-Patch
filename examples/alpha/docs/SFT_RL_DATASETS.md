@@ -246,8 +246,25 @@ is_task_complete`)인데 학습 데이터는 Terminus-2 스키마다. 스키마�
 **결정(사용자, 2026-09-07): Terminal-Bench 2.x + Harbor + Terminus-2 로 평가 경로 전환**(학습 형식·Ultra TB 2.0/2.1 비교 조건 일치, 기존 유효
 수치 없음). 벤치 세션이 진행(`SFT_BENCHMARKS.md`).
 
-보강 선택지(미결정): ① SWE-v3 Terminus 3.5k행을 별도 멤버로 추출해 2~3ep 상향(실토큰 ≈0.14B) ② Terminus-2 형 터미널 트라젝토리 합성(gpu06 DinD +
-Harbor + 교사, Ultra 방식 축소) ③ RL 에서 Gym `terminus_judge`·`terminal_multi_harness_*` 환경으로 보강(Ultra 의 terminal 교사도 RL).
+보강 선택지: ① SWE-v3 Terminus 3.5k행을 별도 멤버로 추출해 2~3ep 상향(실토큰 ≈0.14B) ② **Terminus-2 형 터미널 트라젝토리 합성(Ultra 방식 축소
+재현) — 2026-09-07 사용자 결정으로 타당성 검토 착수**(별도 세션, H100×1노드 + GLM 5.3 open weight 교사; 상태는 `STATUS.md`) ③ RL 에서 Gym
+`terminus_judge`·`terminal_multi_harness_*` 환경으로 보강(Ultra 의 terminal 교사도 RL).
+
+**Ultra 의 terminal-use 데이터 제작 레시피 (기술보고서 §Terminal-Use Capabilities·§Software Issue Resolution·§Terminal-use Teacher·부록 A.2; 데이터 자체는 미공개)**
+
+| 단계 | Ultra | alpha 재현 시 대응물 |
+|---|---|---|
+| 시드 | OpenCodeReasoning · OpenMathReasoning · SWE-bench · SWE-Fixer-Train-110K · SWE-rebench · SWE-smith (전부 공개) | 동일 공개 셋 + 보유 Nemotron 셋 |
+| 과제 조립 | (a) Cascade 수학·코딩 SFT 데이터를 터미널 환경용으로 재포맷 (b) DeepSeek-V3.2 로 "기존 벤치에 없는 터미널 시나리오" 합성 | (a) 보유 math/code 셋 재포맷 (b) 교사 LLM 로 시나리오 합성 |
+| 트라젝토리 수집 | **Harbor 프레임워크의 Terminus-2 에이전트** 안에서 DeepSeek-V3.2 가 행동 주체, 실제 터미널 환경과 다중 에피소드 상호작용 | Harbor(오픈소스) + Terminus-2 + gpu06 DinD 컨테이너(도커 필요, `EVAL_DOCKER_NODE.md`) + 교사 = GLM 5.3(검토) |
+| 형식 | Terminus-2 JSON `{"analysis","plan","commands":[{keystrokes,duration}],"task_complete"}`, 터미널 출력은 user 턴 "New Terminal Output:" | 동일 (SWE-v3 Terminus 행과 바이트 수준 정합, 렌더 검사 규칙 9) |
+| 규모·구성 | ≈370K 다중턴 대화, reasoning·non-reasoning 혼합 | 초기 목표는 타당성 검토 후 결정 (참고: SWE-v3 Terminus 3.5k) |
+| 하니스 다양화 | 모든 과제 분포를 Stirrup·OpenHands·OpenCode·Terminus·Droid·내부 중 **≥2 하니스**로 학습 (부록 A.2) | Terminus-2 + OpenHands/opencode 병행 |
+| 품질 필터 (SWE 절에 기술) | 제출 무결성 · 금지 git 명령(push/pull/fetch/clone/cherry-pick/reflog/fsck/remote/ls-remote) · 편집-테스트 무한 반복 · 탐색만 하고 편집 없음 · 도구 호출 불량률 · 디버그 잔재(print/pdb/breakpoint) · 편집 후 테스트 미실행 | 동일 7신호 휴리스틱 + 과제 성공 판정(테스트 또는 judge) |
+| RL 교사 | 최대 1시간 타임아웃 과제의 전문가 트라젝토리 → PivotRL(arXiv 2603.21383) 반복 개선(포화 시 re-profiling) → MOPD 로 증류 | Gym `terminus_judge`·`terminal_multi_harness_*` + GRPO |
+| 평가 | Terminal-Bench 2.1 (Harbor) | TB-2 + Terminus-2 (`SFT_BENCHMARKS.md`) |
+
+미공개: 과제 합성 프롬프트, 필터 임계값, 에피소드 분할 규칙, 터미널 RL 보상 정의, 교사 크기·PivotRL 하이퍼파라미터.
 
 ## 3. RL 자산
 
