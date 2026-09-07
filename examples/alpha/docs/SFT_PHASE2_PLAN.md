@@ -311,6 +311,10 @@ phase-1(교체 재개) 2448 종료 ≈ 09-07 17:30 KST(iter 1692 @ 09-04 10:28 U
 G-P6 기준선(HF 변환·T1·에이전틱·프로브·검색 게이트)은 sub1 fleet 에서 병행. 해제: `pkill -f "[l]aunch_p2_after_phase1.sh"`.
 데이터·블렌드·하니스·캐시 프리빌드는 09-04 완료.
 
+**실행 기록**: phase-1 2448 완주 2026-09-07 07:21 UTC(final train 0.678 · valid 0.5734/PPL 1.774) → 런처가 07:34 UTC 본 런 기동
+(`outputs/alpha_baseline_48L_sft_128k_full_p2_20260907_073414`) → 첫 iteration 07:42 UTC loss 0.709 (게이트 통과, 런처 정상 종료) → iter 8 loss 0.731,
+307 s/iter, max-alloc 55.8GB. 예상 종료 09-09 ≈11:00 UTC(20:00 KST).
+
 ### 11.7 주의·알려진 특성
 
 - chat_v2_off·swe_v2_openhands·swe_v1_r2e 는 reasoning 이 없어 `<think></think>` no-think 타깃으로 렌더된다(opencode 선례와 동일 판단).
