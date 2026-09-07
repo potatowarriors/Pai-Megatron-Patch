@@ -70,6 +70,7 @@
 | 문서 | 한 줄 |
 |---|---|
 | [../sdg/ko_chat/README.md](../sdg/ko_chat/README.md) | 한국어 SFT chat 합성 — 트랙A 번역+재생성 / 트랙B 네이티브, 교사 Gemma-4-31B + OxAlpha(무료), 무인 체인·게이트·GPU 창구·함정 (2026-08-23~) |
+| [../sdg/terminal/README.md](../sdg/terminal/README.md) | 터미널 에이전트 SFT 합성 — Terminus-2 형, 교사 GLM-5.3-Flash(sub1 vLLM, EP+DP8) + Harbor(gpu06), 사용자 결정(보존 렌더·규모는 실측 후)·단계 P0~P4·게이트·기동 사고 2건 (2026-09-07~) |
 | [../sdg/identity/README.md](../sdg/identity/README.md) | 정체성 SFT/RL 데이터 생성 (DataDesigner, identity_card 단일 진실 원천) (2026-08-07~10) |
 
 ## chat/ (사람이 직접 대화 — docs 밖, 코드와 동거)
