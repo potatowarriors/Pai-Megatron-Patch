@@ -54,19 +54,30 @@ def trial_summary(tdir):
     out["exception"] = (r.get("exception_info") or {}).get("exception_type")
     t0, t1 = parse_ts(r.get("started_at") or ""), parse_ts(r.get("finished_at") or "")
     out["wall_s"] = round((t1 - t0).total_seconds(), 1) if t0 and t1 else None
-    tp = os.path.join(tdir, "agent", "trajectory.json")
-    if os.path.exists(tp):
-        t = json.load(open(tp))
-        steps = [s for s in t.get("steps", []) if s.get("source") == "agent"]
-        out["steps"] = len(steps)
-        out["json_valid"] = sum(valid_terminus(s.get("message")) for s in steps)
-        out["reasoning_chars"] = [len(s.get("reasoning_content") or "") for s in steps]
-        fm = t.get("final_metrics") or {}
-        out["prompt_tokens"] = fm.get("total_prompt_tokens")
-        out["completion_tokens"] = fm.get("total_completion_tokens")
-        out["parse_errors_observed"] = sum(
-            1 for s in steps for o in ((s.get("observation") or {}).get("results") or [])
-            if "parsing errors" in (o.get("content") or ""))
+    # 정본은 all_messages (store_all_messages=true) — trajectory.json 의 agent 스텝은 요약 서브에이전트 등
+    # 보조 스텝까지 세어 유효율·reasoning 비율이 왜곡된다 (2026-09-07 파일럿에서 43% vs 99%).
+    ar = r.get("agent_result") or {}
+    md = ar.get("metadata") or {}
+    am = md.get("all_messages") or []
+    asst = [m for m in am if m.get("role") == "assistant"]
+    if asst:
+        out["steps"] = len(asst)
+        out["json_valid"] = sum(valid_terminus(m.get("content")) for m in asst)
+        out["reasoning_chars"] = [len(m.get("reasoning_content") or m.get("reasoning") or "") for m in asst]
+        out["prompt_tokens"] = ar.get("n_input_tokens")
+        out["completion_tokens"] = ar.get("n_output_tokens")
+        out["summarizations"] = md.get("summarization_count")
+    else:
+        tp = os.path.join(tdir, "agent", "trajectory.json")
+        if os.path.exists(tp):
+            t = json.load(open(tp))
+            steps = [s for s in t.get("steps", []) if s.get("source") == "agent"]
+            out["steps"] = len(steps)
+            out["json_valid"] = sum(valid_terminus(s.get("message")) for s in steps)
+            out["reasoning_chars"] = [len(s.get("reasoning_content") or "") for s in steps]
+            fm = t.get("final_metrics") or {}
+            out["prompt_tokens"] = fm.get("total_prompt_tokens")
+            out["completion_tokens"] = fm.get("total_completion_tokens")
     return out
 
 
@@ -86,6 +97,7 @@ def main():
         "n_trials": n, "n_with_trajectory": len(ok),
         "success": succ, "success_rate": round(succ / n, 3) if n else None,
         "errors": sum(1 for t in trials if t.get("exception")),
+        "summarized_trials": sum(1 for t in trials if t.get("summarizations")),
         "agent_steps": steps,
         "json_valid": valid, "json_valid_rate": round(valid / steps, 3) if steps else None,
         "steps_per_trial": round(steps / len(ok), 1) if ok else None,

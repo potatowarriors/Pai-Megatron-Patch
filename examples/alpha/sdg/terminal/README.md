@@ -89,3 +89,30 @@ bash sdg/terminal/serve/glm_tunnel.sh start && bash sdg/terminal/serve/glm_tunne
 
 **nightly 함정**: 응답 메시지의 reasoning 필드가 `reasoning` 이다 (`reasoning_content` 는 입력 메시지에서만 하위호환 rename).
 게이트·변환기는 두 이름을 모두 읽는다.
+
+### P1 — 파일럿 1 (TB-2 10과제 × 2회, effort 기본=max, 동시 5) — G-T1 형식 PASS, 비용·지연 실측 (2026-09-07 22:13 ~ 00:06 KST)
+
+측정 전용(TB-2 = 벤치, canary GUID) — 트라젝토리는 학습에 넣지 않는다. 수치 정본 `tools/glm53/pilot/pilot1/summary.json`.
+
+| 항목 | 값 | 판정 |
+|---|---|---|
+| 형식 유효율 (assistant JSON) | **334 / 337 = 99.1%** | ≥95% PASS |
+| reasoning 보유 턴 | 337 / 337 = 100% | litellm `reasoning_content` 매핑 확인 |
+| 과제 성공률 | 11 / 20 = 55% (시간 초과 12건 중 4건은 초과 후에도 채점 통과) | 참고: 공개 84.3 은 시간 제한 없는 조건 |
+| 트라이얼당 턴 / 출력 토큰 / 누적 입력 토큰 | 평균 16.9 (중앙값 14) / 30.6k / 500k | reasoning 재전달로 문맥이 매 스텝 누적 |
+| 벽시계 | 평균 22.9분 (성공만 22.1분, 범위 1.7~63.5분) | 동시 5 → 시간당 ≈ 11 트라이얼 |
+| 스텝당 reasoning | 중앙값 2,577자 · p90 14,352자 · 최대 59,468자 | effort max 가 스텝당 3~4분을 먹는 원인 |
+| 문맥 요약 발동 | 6 / 20 트라이얼 (Terminus-2 summarization, 131k 상한) | 요약된 트라젝토리는 선형 이력이 아니다 |
+
+**변환·빌드·렌더 (규칙 9)**: `convert/traj_to_terminus.py` → reward 1 이고 마지막 턴 `task_complete` 인 7행 (드롭: reward 0 = 9, 시간 초과 후
+채점 통과라 완료 핸드셰이크 없음 = 4) → `build_alpha_sft_idxmap.py --keep-history-think`: 드롭 0, 실토큰 158,287 · 학습 93,042, 최장 행 35,856 토큰 →
+`render_check` 봉투 0, `<think>` 14/14·7/7 (모든 턴 보존). 학습 스팬은 `<think>reasoning</think>{JSON}` 형태.
+
+**SWE-v3 와의 형식 차이 (배포 하니스 = Harbor 를 따른다)**: Harbor Terminus-2 템플릿 머리 2,832자 vs SWE-v3 system 2,836자 — 33행 한 문장만 다름
+(`- You must end every command with a newline (\n) or it will not execute.` vs `- Most bash commands should end with a newline (\n) to cause them to execute`).
+첫 user 턴 라벨 `Task Description:` / `Current terminal state:` vs SWE-v3 `Task:` / `Current Terminal Screen:`. 이후 프로토콜(`New Terminal Output:`,
+완료 재확인 턴, JSON 스키마)은 동일. 정본 프롬프트는 `convert/swe_v3_terminus_system_prompt.txt`.
+
+**함의·다음 레버**: 실패는 처리량이 아니라 **스텝당 지연**(단일 스트림 64 tok/s × reasoning 10~15k 토큰)이다. P3 설계에 반영할 것:
+① `reasoning_effort=high` 로 스텝당 reasoning 축소(파일럿 2 에서 실측) ② 동시 트라이얼 5 → 10~30 ③ 스텝 상한·128k 예산으로 요약 발동 회피
+(요약된 트라젝토리는 제외 또는 `linear_history`) ④ 시간 초과 후 채점 통과 4건은 완료 핸드셰이크가 없어 드롭 — 수집 시 시간 상한을 과제 난이도에 맞춘다.

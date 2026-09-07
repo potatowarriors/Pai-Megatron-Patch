@@ -46,6 +46,6 @@ ssh -F "$SSHC" -o BatchMode=yes alpha-eval "
     -o /opt/harbor/jobs --job-name $RID -y -q 2>&1 | tail -20
 "
 echo "[pilot] 결과 회수 → $OUT"
-rsync -a -e "ssh -F $SSHC -o BatchMode=yes" "alpha-eval:/opt/harbor/jobs/$RID/" "$OUT/job/" \
-  --exclude 'recording.cast' 2>/dev/null || scp -q -r -F "$SSHC" "alpha-eval:/opt/harbor/jobs/$RID" "$OUT/job"
+# main1 에 rsync 가 없다 — scp 로 회수 (recording.cast 포함, 트라이얼당 수십 KB)
+rm -rf "$OUT/job"; scp -q -r -F "$SSHC" "alpha-eval:/opt/harbor/jobs/$RID" "$OUT/job"
 python3 "$(dirname "$0")/summarize_pilot.py" "$OUT/job" | tee "$OUT/summary.txt"
