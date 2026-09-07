@@ -116,3 +116,23 @@ bash sdg/terminal/serve/glm_tunnel.sh start && bash sdg/terminal/serve/glm_tunne
 **함의·다음 레버**: 실패는 처리량이 아니라 **스텝당 지연**(단일 스트림 64 tok/s × reasoning 10~15k 토큰)이다. P3 설계에 반영할 것:
 ① `reasoning_effort=high` 로 스텝당 reasoning 축소(파일럿 2 에서 실측) ② 동시 트라이얼 5 → 10~30 ③ 스텝 상한·128k 예산으로 요약 발동 회피
 (요약된 트라젝토리는 제외 또는 `linear_history`) ④ 시간 초과 후 채점 통과 4건은 완료 핸드셰이크가 없어 드롭 — 수집 시 시간 상한을 과제 난이도에 맞춘다.
+
+### P1b — 파일럿 2 (같은 10과제 × 1회, `reasoning_effort=high`, 동시 10) — effort·동시성 레버 실측 (2026-09-08 00:09 ~ 01:12 KST)
+
+| 항목 | 파일럿 1 (max, 동시 5) | 파일럿 2 (high, 동시 10) |
+|---|---|---|
+| 형식 유효율 | 334/337 = 99.1% | **151/151 = 100%** |
+| 성공률 | 11/20 = 55% | **7/10 = 70%** (llm-inference·write-compressor 가 성공으로 전환, pytorch-model-cli 는 실패로) |
+| 트라이얼당 턴 / 출력 토큰 / 누적 입력 | 16.9 / 30.6k / 500k | 15.1 / 23.7k / 364k |
+| 벽시계 평균 | 22.9분 | 19.3분 |
+| 스텝당 reasoning 중앙값 / p90 | 2,577 / 14,352자 | 2,000 / 11,977자 |
+| 문맥 요약 발동 | 6/20 | 2/10 (둘 다 60분 상한 과제) |
+| 서버 | 안정, 동시 10 에서 여유 | 〃 |
+
+수치 정본 `tools/glm53/pilot/pilot2_high/summary.json`. n 이 작아 성공률 차이는 참고치지만, effort high 는 reasoning 을 ≈20% 줄이면서 성공률을
+떨어뜨리지 않았다. 시간 초과는 두 파일럿 모두 같은 과제(gpt2-codegolf·largest-eigenval·reshard-c4-data·winning-avg-corewars)에서 났다 —
+과제 난이도와 시간 상한의 문제이지 effort 의 문제가 아니다.
+
+**수집 설정 확정 제안 (P3)**: `reasoning_effort=high` · Harbor 동시 24 · Terminus-2 `max_turns` 40 · 합성 과제 시간 상한 30분 · 요약 발동
+트라젝토리 제외(`linear_history` 또는 드롭) · 128k 초과 행 드롭. 처리량 추정: 트라이얼당 ≈19분 × 동시 24 → 시간당 ≈75 트라이얼, 성공 55~70%
+와 핸드셰이크·요약 필터 후 **하루 ≈900~1,000 트라젝토리**. 첫 합성 배치에서 실측 후 규모 확정.
