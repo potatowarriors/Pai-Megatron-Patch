@@ -20,7 +20,7 @@ echo "[collect] $TAG: tasks=$N W=$W effort=$EFFORT max_turns=$MAX_TURNS start=$(
 ssh -F "$SSHC" -o BatchMode=yes alpha-eval "curl -s -o /dev/null -w '%{http_code}' localhost:8299/v1/models" | grep -q 200 \
   || { echo "[collect] ❌ 컨테이너에서 GLM 역터널(8299) 응답 없음"; exit 1; }
 ssh -F "$SSHC" -o BatchMode=yes alpha-eval "rm -rf $REMOTE /opt/harbor/jobs/$RID; mkdir -p /opt/harbor/synth"
-tar -C "$TASKS" --exclude='*.txt' --exclude='GEN_MANIFEST.jsonl' -czf - . | ssh -F "$SSHC" -o BatchMode=yes alpha-eval "mkdir -p $REMOTE && tar -C $REMOTE -xzf -"
+tar -C "$TASKS" --exclude='./GEN_MANIFEST.jsonl' --exclude='./VALID.txt' --exclude='./INVALID.txt' --exclude='./PRECHECK_FAIL.txt' --exclude='./.*.txt' -czf - . | ssh -F "$SSHC" -o BatchMode=yes alpha-eval "mkdir -p $REMOTE && tar -C $REMOTE -xzf -"
 
 T0=$(date +%s)
 ssh -F "$SSHC" -o BatchMode=yes alpha-eval "

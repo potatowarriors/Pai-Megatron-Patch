@@ -29,7 +29,7 @@ Terminus 는 터미널 출력을 role=user 평문으로 주입하고 명령을 c
 ## 2. 파이프라인
 
 ```
-시드 (OpenCodeReasoning 31G · OpenMathReasoning 156G · 교사 시나리오 합성)
+시드 (OpenCodeReasoning 재포맷 · OpenMathReasoning 재포맷(정답 파일형, 교사 호출 0) · 교사 시나리오 합성)
  → 과제 조립: Harbor task dir (task.toml / instruction.md / environment/Dockerfile / tests/test.sh / solution/solve.sh)   [main1 CPU]
  → 과제 검증: oracle(solve.sh) reward 1 AND 빈 환경 reward 0 인 과제만 채택                                          [gpu06 Harbor]
  → 트라젝토리 수집: harbor run -a terminus-2, 교사 = GLM-5.3-Flash(sub1 vLLM :8300, 역터널 8299), 과제당 k회          [gpu06 ↔ sub1]
@@ -136,3 +136,27 @@ bash sdg/terminal/serve/glm_tunnel.sh start && bash sdg/terminal/serve/glm_tunne
 **수집 설정 확정 제안 (P3)**: `reasoning_effort=high` · Harbor 동시 24 · Terminus-2 `max_turns` 40 · 합성 과제 시간 상한 30분 · 요약 발동
 트라젝토리 제외(`linear_history` 또는 드롭) · 128k 초과 행 드롭. 처리량 추정: 트라이얼당 ≈19분 × 동시 24 → 시간당 ≈75 트라이얼, 성공 55~70%
 와 핸드셰이크·요약 필터 후 **하루 ≈900~1,000 트라젝토리**. 첫 합성 배치에서 실측 후 규모 확정.
+
+### P2·P3 진행 기록 (2026-09-08)
+
+**과제 원천 3종과 수율**
+
+| 원천 | 생성기 | 교사 비용/과제 | 유효 과제 수율 | 비고 |
+|---|---|---|---|---|
+| OpenCodeReasoning 재포맷 (`oc-*`) | `tasks/gen_opencode_tasks.py` | ≈1.8k 토큰 (입력 생성기) | 83~86% | 숨은 테스트 = 정답 코드 실행. HARD/VERY_HARD 제외(배치 1 실측 성공 32%) |
+| OpenMathReasoning 재포맷 (`om-*`) | `tasks/gen_openmath_tasks.py` | 0 | 100% (스모크 20/20 oracle 1·nop 0) | 정수·소수·분수 정답만(56%), 채점기 동치 검사 9/9. `/app/answer.txt` 한 줄 |
+| 교사 시나리오 (`sc-*`) | `tasks/gen_scenario_tasks.py` (effort low + JSON 강제) → `precheck_setup.sh` → `validate_tasks.sh` → `repair_scenario_tasks.py` | ≈5k + 수리 5k | 명세 80% × 검증 30~45% (+수리 회수 30%) | 다양성 담당, 비중 ≈5% |
+
+**수집 배치 (Harbor terminus-2, GLM-5.3-Flash TP8)**
+
+| 배치 | 과제 | 설정 | 결과 |
+|---|---|---|---|
+| oc_b1_high | 1,240 | 동시 64 · 상한 15분 · effort high | 성공 ≈70% (easy 97%, medium 76%, hard 32%), 시간당 ≈217 트라이얼, 성공 소요 중앙값 3.0분·p75 6.3분 |
+| oc_b2 (low 40% / high 60%) | ≈2,300 (hard 제외) | 동시 96 · 상한 10분 | 자동 체인 |
+| sc_m1 (sc-b0 17 + sc-b1 52+수리) | ≈80~100 | 동시 48 · high | 자동 체인 |
+| oc_b3 (low/high) | ≈5,000 (중복 제거) | 동시 96 · 상한 10분 | 자동 체인 |
+| om_b1 (low/high 50:50) | 2,000 | 동시 96 · 상한 10분 · max_turns 20 | 자동 체인 |
+
+**사고 3건 (전부 `docs/KNOWN_ISSUES.md` 2026-09-08)**: ① Docker 주소 풀 고갈(동시 64 즉사) → daemon.json 풀 확장 ② 과제 이미지 940 MB 미공유 → 베이스 이미지
+`alpha-terminal-base:1` ③ 교사 setup.sh 가 2.36 TB 파일 생성 → `precheck_setup.sh` 샌드박스. 운영 교훈: **실행 중인 스크립트를 편집하지 않는다**
+(bash 가 파일을 점진적으로 읽어 두 번 검증이 깨졌다) · `pkill -f` 패턴은 자기 명령줄과 매치되지 않게 `[x]` 브래킷과 별도 호출로.

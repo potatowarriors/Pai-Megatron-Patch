@@ -12,14 +12,14 @@ REMOTE=/opt/harbor/synth/$TAG
 N=$(ls -d "$ROOT"/*/ 2>/dev/null | wc -l)
 echo "[validate] $N tasks → alpha-eval:$REMOTE (W=$W)"
 ssh -F "$SSHC" -o BatchMode=yes alpha-eval "rm -rf $REMOTE /opt/harbor/jobs/val-$TAG-oracle /opt/harbor/jobs/val-$TAG-nop; mkdir -p /opt/harbor/synth"
-tar -C "$ROOT" --exclude='GEN_MANIFEST.jsonl' --exclude='*.txt' -czf - . | ssh -F "$SSHC" -o BatchMode=yes alpha-eval "mkdir -p $REMOTE && tar -C $REMOTE -xzf -"
+tar -C "$ROOT" --exclude='./GEN_MANIFEST.jsonl' --exclude='./VALID.txt' --exclude='./INVALID.txt' --exclude='./PRECHECK_FAIL.txt' --exclude='./.*.txt' -czf - . | ssh -F "$SSHC" -o BatchMode=yes alpha-eval "mkdir -p $REMOTE && tar -C $REMOTE -xzf -"
 
 run_agent() {  # $1 = agent name
   ssh -F "$SSHC" -o BatchMode=yes alpha-eval "
     export HOME=/opt/harbor; cd /opt/harbor
     ./venv/bin/harbor run -p $REMOTE -a $1 -n $W -k 1 -o /opt/harbor/jobs --job-name val-$TAG-$1 -y -q 2>&1 | tail -3
     for d in /opt/harbor/jobs/val-$TAG-$1/*__*/; do
-      t=\$(basename \$d); t=\${t%%__*}; r=\$(cat \$d/verifier/reward.txt 2>/dev/null || echo NA)
+      t=\$(basename \$d); t=\${t%%__*}; r=\$(head -c 16 \$d/verifier/reward.txt 2>/dev/null | tr -d "[:space:]"); case \"\$r\" in 0|1) ;; *) r=NA;; esac
       e=\$(python3 -c \"import json,sys; print((json.load(open('\$d/result.json')).get('exception_info') or {}).get('exception_type') or '')\" 2>/dev/null)
       echo \"\$t \$r \$e\"
     done"
@@ -33,8 +33,14 @@ else
   python3 - "$ROOT" <<'PY'
 import sys, os
 root = sys.argv[1]
-orc = {l.split()[0]: l.split()[1:] for l in open(os.path.join(root, ".oracle.txt")) if l.strip()}
-nop = {l.split()[0]: l.split()[1:] for l in open(os.path.join(root, ".nop.txt")) if l.strip()}
+import re
+def load(p):
+    d = {}
+    for l in open(p, errors="replace"):
+        m = re.match(r"^((?:sc|oc|om)-\S+)\s+(\S+)(?:\s+(\S+))?", l)
+        if m: d[m.group(1)] = [m.group(2)] + ([m.group(3)] if m.group(3) else [])
+    return d
+orc = load(os.path.join(root, ".oracle.txt")); nop = load(os.path.join(root, ".nop.txt"))
 valid, invalid = [], []
 for t in sorted(set(orc) | set(nop)):
     o = orc.get(t, ["NA"])[0]; n = nop.get(t, ["NA"])[0]
