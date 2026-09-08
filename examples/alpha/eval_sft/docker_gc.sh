@@ -3,8 +3,8 @@
 #
 # 무엇을 지우고 무엇을 남기는가 (2026-08-31 실측 근거):
 #   지움: build cache, 미사용 볼륨, 정지 컨테이너, dangling 이미지
-#   남김: **sweb.eval 태스크 이미지** (500개 = **2,386GB** — 2026-09-08 `docker images` 합산 실측; 08-31 의 479.7GB 는
-#         공유 레이어 가정의 과소 집계였다). SWE-bench Verified 인스턴스별
+#   남김: **sweb.eval 태스크 이미지** (500개, 실제 저장소 점유 ≈430GB — `docker images` 의 Size 합산 2.4TB 는 공유
+#         레이어를 이미지마다 중복 집계한 값, 2026-09-08 `du /var/lib/docker/containerd` 로 확인). SWE-bench Verified 인스턴스별
 #         전용 이미지로 다음 체크포인트에서 그대로 재사용된다. 지우면 500 × 4.77GB 를
 #         Docker Hub 에서 다시 받아야 하고 그 시간이 디스크보다 비싸다.
 #

@@ -166,7 +166,8 @@ submodule `tests/unit_tests/test_step_batch_size_schedule.py`, `test_muon_optimi
 
 | 날짜 | 증상 | 원인 → 대응 |
 |---|---|---|
-| 09-08 | 수집 3시간에 gpu06 여유 291→124 GB (사용자 긴급 정리로 1.8 TB 확보) | 과제 Dockerfile 이 apt·pip 를 반복, containerd 저장소가 레이어를 미공유 → 트라이얼당 940 MB. 베이스 이미지 `alpha-terminal-base:1` + COPY 로 교체(재구축 시 재빌드). 디스크 대부분(2.4 TB)은 SWE-bench 평가 이미지 — 삭제 여부는 사용자 판단. `KNOWN_ISSUES` 09-08 |
+| 09-08 | sc_b1 검증 중 gpu06 여유 2.1 TB → 519 MB (20분) | 교사가 쓴 setup.sh 가 `fallocate -l $(df 기반)` 으로 2.36 TB 파일 생성 — 이미지 빌드에는 storage 상한 없음. 빌드 kill·prune 으로 회수, 생성기 DISK_DANGER 금지 + `precheck_setup.sh`(tmpfs/fsize/timeout 샌드박스) 를 validate 전 필수로. `KNOWN_ISSUES` 09-08 |
+| 09-08 | 수집 3시간에 gpu06 여유 291→124 GB (사용자 긴급 정리로 1.8 TB 확보) | 과제 Dockerfile 이 apt·pip 를 반복, containerd 저장소가 레이어를 미공유 → 트라이얼당 940 MB. 베이스 이미지 `alpha-terminal-base:1` + COPY 로 교체(재구축 시 재빌드). SWE-bench 평가 이미지 실제 점유 ≈430 GB(`docker images` 합산은 중복 집계). `KNOWN_ISSUES` 09-08 |
 | 09-08 | 터미널 SDG 수집 동시 64 에서 트라이얼 263/275 즉사 (`all predefined address pools have been fully subnetted`) | DinD 기본 주소 풀 ≈30개 — Harbor 가 트라이얼마다 compose 네트워크 생성. `daemon.json` default-address-pools 768개로 확장 + dockerd 재기동 (`EVAL_DOCKER_NODE.md` §4, 재구축 시 복원 필수) |
 | 09-07 | sub1 NCCL 2.29 초기화 전 rank `munmap_chunk` (GLM-5.3-Flash EP+DP8 서빙, torchrun 2-GPU all_reduce 로 재현) | compat 스왑이 절반만 적용 — `libcuda.so.1` 만 595, `libnvidia-ptxjitcompiler.so.1`·`libnvidia-nvvm.so.4` 는 570 → PTX JIT 시 힙 손상(gdb 확정). 595 JIT 링크 디렉토리를 `LD_LIBRARY_PATH` 앞에(sudo 불필요, `serve_glm53.sh` 내장). 09-04 학습 불가도 같은 원인 유력(미검증). `KNOWN_ISSUES` 09-07 |
 | 09-07 | 에이전틱 노드 여유 592→290GB(7일), A3 임계 미달 | `docker_gc.sh` 가 docker 객체만 봄 — 실제 누적은 컨테이너 `/opt` 의 에이전트 산출물(SWE 궤적·Terminal 기록, 5일 +66GB). gc 에 산출물 회전 추가(최근 N개 유지, `--rotate-only`) |

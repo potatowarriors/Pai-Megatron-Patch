@@ -4,13 +4,23 @@
 CLAUDE.md의 "함정 표"는 이 문서의 한 줄 요약이며, 새 사고는 **여기에 서사를 쓰고 CLAUDE.md 표에는 한 줄만** 추가한다.
 날짜는 절대 표기. 두 스테이지 이상 지난 항목은 스테이지 경계에서 `archive/`로 이동.
 
+## 교사가 만든 setup.sh 가 빌드 중 2.36 TB 파일을 써서 gpu06 디스크 고갈 (2026-09-08 ✅)
+
+- **증상**: 시나리오 배치 sc_b1 검증(oracle·nop) 중 gpu06 `/var/lib/docker` 여유 2.1 TB → 519 MB (20분). `/tmp/containerd-mount…/app/vault.bin` 2,358,518,644,736 바이트.
+- **원인**: 과제 `sc-packaging-arch-chunk-split-me…`(큰 파일 분할·병합 주제, "성능 제약" 트위스트)의 setup.sh 가
+  `fallocate -l $(df 기반 여유-900MiB) /app/vault.bin` — 컨테이너의 df 가 호스트 전체를 보므로 호스트 디스크를 채우도록 설계됨.
+  이미지 빌드(`RUN setup.sh`)에는 task.toml 의 `storage` 상한이 적용되지 않는다. oracle·nop 두 빌드가 동시에 실행돼 2배.
+- **대응**: 빌드 kill + `docker builder prune` 로 2.4 TB 회수. 생성기에 금지 패턴(`DISK_DANGER`: df 기반 크기, 대용량 fallocate/dd/truncate)과
+  프롬프트 규칙(setup.sh ≤ 50 MB·60초) 추가. **`tasks/precheck_setup.sh`**: setup.sh 를 tmpfs 512 MB·fsize 200 MB·120초 샌드박스
+  컨테이너에서 먼저 실행해 실패·300 MB 초과 과제를 격리 — validate 전 필수 단계.
+- **교훈**: 교사가 쓴 스크립트는 빌드 단계에서도 신뢰하지 않는다. 자원 상한이 없는 곳(이미지 빌드)에 교사 코드를 넣기 전에 상한이 있는 곳에서 먼저 돌린다.
+
 ## 합성 과제 이미지가 과제마다 940 MB — 베이스 레이어 미공유 (2026-09-08 ✅)
 
 - **증상**: 터미널 SDG 수집 배치 1(동시 64) 3시간 동안 gpu06 `/var/lib/docker` 여유 291 → 124 GB. 사용자가 긴급히 다른 파일을 정리해 1.8 TB 확보.
 - **원인**: 과제 Dockerfile 이 `python:3.12-slim` 위에 apt·pip 설치를 과제마다 반복했고, 이 호스트의 Docker(containerd 스냅샷 저장소)는
   그 레이어를 과제 간에 공유하지 않았다 → 트라이얼마다 940 MB 이미지 + 빌드 중간 레이어. 파일럿(10과제)에서는 안 보였다.
-  **디스크의 대부분(2.4 TB)은 이 트랙 이전부터 있던 SWE-bench 평가 이미지 500개**였고(`docker_gc.sh` 주석의 480 GB 는 과소 집계),
-  이 트랙의 항구 점유는 트라이얼당 ≈1 MB 다.
+  SWE-bench 평가 이미지 500개의 실제 점유는 ≈430 GB 다(`docker images` Size 합산 2.4 TB 는 공유 레이어 중복 집계). 이 트랙의 항구 점유는 트라이얼당 ≈1 MB.
 - **대응**: 베이스 이미지 `alpha-terminal-base:1` 을 한 번 빌드(`sdg/terminal/tasks/base/Dockerfile`)하고 모든 과제 Dockerfile 을
   `FROM alpha-terminal-base:1` + COPY 로 교체(원격 1,493 · NFS 3,550). 과제 이미지 = 16 KB 레이어, 빌드 1초. `common.py` 기본값 변경.
 - **교훈**: 과제 수천 개를 돌리는 하니스에서는 이미지 레이어 공유를 **가정하지 말고 측정**한다 (`docker system df`, 여유 공간 추이).

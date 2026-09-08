@@ -72,7 +72,7 @@ Return ONLY a JSON object with these fields:
 - "test_sh": bash script content for /tests/test.sh. It must be robust: check deliverables precisely (exact values, file formats, exit codes), be deterministic, finish within 60 seconds, and ALWAYS write /logs/verifier/reward.txt. Put helper checkers in "test_files" and call them (e.g. python3 /tests/check.py).
 - "test_files": object mapping relative paths under /tests to contents (may be empty object).
 - "solve_sh": bash script content that a correct solver would run from /app to produce the deliverables so that test_sh passes. It must be complete and non-interactive.
-Rules: no network, no interactive prompts, no destructive system changes, no reliance on the current date/time unless files provide it, no git push/pull/fetch/clone. The task must be genuinely solvable by reading /app and must not be solvable by doing nothing (tests must fail on the untouched environment)."""
+Rules: no network, no interactive prompts, no destructive system changes, no reliance on the current date/time unless files provide it, no git push/pull/fetch/clone. setup.sh (if any) must finish in under 60 seconds and create at most 50 MB of data in total; never size anything from `df`/free space, never use fallocate/dd/truncate to make files larger than 50 MB, never fill the disk. The task must be genuinely solvable by reading /app and must not be solvable by doing nothing (tests must fail on the untouched environment)."""
 
 TWISTS = ["an edge case hidden in the data that a naive solution misses", "a second deliverable that summarizes what was done",
           "output must be sorted deterministically with a tie-breaker", "one of the provided files is a red herring",
@@ -81,6 +81,8 @@ TWISTS = ["an edge case hidden in the data that a naive solution misses", "a sec
           "the starting state contains a partially completed, wrong attempt that must be corrected", "none"]
 
 FORBIDDEN = re.compile(r"\b(git\s+(push|pull|fetch|clone)|curl\s+https?://|wget\s+https?://|pip\s+install\s+[^-]|apt-get\s+install)\b")
+# 디스크 폭주 방지 (2026-09-08 vault.bin 2.36 TB 사고): 호스트 여유 공간 기반 크기, 대용량 fallocate/dd/truncate
+DISK_DANGER = re.compile(r"\bdf\b[^\n]*(avail|free)|fallocate\s+-l\s*\S*[GT]|dd\s+[^\n]*bs=[0-9]+[GM][^\n]*count=[0-9]{3,}|truncate\s+-s\s*\S*[GT]|head\s+-c\s*[0-9.]+[GT]|seq\s+1\s+[0-9]{8,}", re.I)
 
 
 def bash_ok(script):
@@ -118,6 +120,8 @@ def build_one(spec_seed, out_root, effort):
         blob = spec["instruction"] + spec["test_sh"] + spec["solve_sh"] + "".join(files.values())
         if FORBIDDEN.search(blob) or "BENCHMARK DATA SHOULD NEVER" in blob:
             rec["drop"] = "forbidden"; return rec
+        if DISK_DANGER.search(files.get("setup.sh", "") + spec["solve_sh"] + (spec.get("dockerfile_extra") or "")):
+            rec["drop"] = "disk_danger"; return rec
         if not bash_ok(spec["test_sh"]) or not bash_ok(spec["solve_sh"]):
             rec["drop"] = "bash_syntax"; return rec
         if "reward.txt" not in spec["test_sh"]:
