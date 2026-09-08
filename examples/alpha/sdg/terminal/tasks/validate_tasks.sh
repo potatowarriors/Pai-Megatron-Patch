@@ -45,6 +45,11 @@ open(os.path.join(root, "INVALID.txt"), "w").write("\n".join(invalid) + ("\n" if
 print(f"[validate] valid={len(valid)} invalid={len(invalid)}")
 PY
 fi
+# Harbor 는 트라이얼 이름을 과제명 앞 32자로 자른다 → 접두 일치로 원래 디렉토리를 찾는다
 VALID_DIR="$(dirname "$ROOT")/${TAG}_valid"; mkdir -p "$VALID_DIR"
-while read -r t; do [ -n "$t" ] && cp -r "$ROOT/$t" "$VALID_DIR/" ; done < "$ROOT/VALID.txt"
+while read -r t; do
+  [ -n "$t" ] || continue
+  src=$(find "$ROOT" -maxdepth 1 -mindepth 1 -type d -name "${t}*" | head -1)
+  [ -n "$src" ] && cp -r "$src" "$VALID_DIR/" || echo "[validate] ⚠️ 원본 못 찾음: $t"
+done < "$ROOT/VALID.txt"
 echo "[validate] 채택 $(wc -l < "$ROOT/VALID.txt")/$N → $VALID_DIR ; 사유는 $ROOT/INVALID.txt"

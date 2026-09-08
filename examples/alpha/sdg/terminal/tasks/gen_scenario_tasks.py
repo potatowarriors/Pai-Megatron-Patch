@@ -127,7 +127,8 @@ def build_one(spec_seed, out_root, effort):
             extra = extra.rstrip() + "\nCOPY app/ /app/\nRUN bash /app/setup.sh && rm -f /app/setup.sh\n"
             # write_task 는 files 가 있으면 마지막에 COPY 를 또 넣는다 — setup 후 재복사돼도 setup.sh 만 되살아나므로 지운다
             extra += "COPY app/ /app/\nRUN rm -f /app/setup.sh\n"
-        name = f"sc-{slug(cat, 14)}-{slug(spec['name'], 30)}-{short_hash(str(rnd) + spec['instruction'], 6)}"
+        # Harbor 는 트라이얼 이름을 과제명 앞 32자로 자른다 → 이름을 32자 이내로 (검증 매핑 충돌 방지)
+        name = f"sc-{slug(cat, 8)}-{slug(spec['name'], 13)}-{short_hash(str(rnd) + spec['instruction'], 6)}"
         write_task(out_root, name, spec["instruction"], files, spec["test_sh"], test_files, spec["solve_sh"],
                    category=cat, difficulty=diff, agent_timeout=1200, dockerfile_extra=extra,
                    tags=["scenario", cat, diff], meta={"seed": "teacher-scenario", "theme": theme, "twist": twist,

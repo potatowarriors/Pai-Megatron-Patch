@@ -94,6 +94,9 @@ def load_problems(shard_files, offset, need, seed=0):
                 continue
             if not ("input(" in s or "stdin" in s):
                 continue
+            # 배치 1 실측(2026-09-08): HARD/VERY_HARD 는 성공 32%, 성공도 15분 상한 직전이라 핸드셰이크 없이 끝남 → 제외
+            if (row["difficulty"] or "") in ("HARD", "VERY_HARD"):
+                continue
             if re.search(r"https?://|\.png|\.jpg|<image", p, re.I):
                 continue
             out.append({"hash": h, "problem": p, "solution": s, "difficulty": row["difficulty"] or "UNKNOWN",
@@ -141,7 +144,7 @@ def build_one(prob, out_root, k_cases, effort, min_cases):
         if len(cases) < min_cases:
             rec["drop"] = "too_few_valid_cases"; rec["valid_cases"] = len(cases); return rec
         samples, hidden = cases[:2], cases[2:]
-        name = f"oc-{slug(prob['problem'][:60])}-{prob['hash'][:6]}"
+        name = f"oc-{slug(prob['problem'][:60], 22)}-{prob['hash'][:6]}"   # ≤32자 (Harbor 트라이얼 이름 절단 대비)
         files = {"problem.md": prob["problem"].rstrip() + "\n"}
         for i, (ci, co) in enumerate(samples, 1):
             files[f"samples/{i}.in"] = ci; files[f"samples/{i}.out"] = co
@@ -154,7 +157,7 @@ def build_one(prob, out_root, k_cases, effort, min_cases):
         diff = {"EASY": "easy", "MEDIUM": "medium", "MEDIUM_HARD": "medium", "HARD": "hard", "VERY_HARD": "hard"}.get(
             prob["difficulty"], "medium")
         write_task(out_root, name, instr, files, TEST_SH, test_files, solve, category="programming",
-                   difficulty=diff, agent_timeout=900, tags=["opencode-reasoning", "stdin-stdout", prob["source"] or ""],
+                   difficulty=diff, agent_timeout=600, tags=["opencode-reasoning", "stdin-stdout", prob["source"] or ""],
                    meta={"seed": "OpenCodeReasoning", "seed_id": prob["id"], "seed_license": prob["license"],
                          "hidden_cases": len(hidden), "generator_tokens": rec["teacher_tokens"]})
         rec.update({"task": name, "hidden_cases": len(hidden), "sec": round(time.time() - t0, 1)})
