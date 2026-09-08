@@ -54,6 +54,7 @@
 
 | 문서 | 한 줄 |
 |---|---|
+| [../study/terminal_sdg_study.md](../study/terminal_sdg_study.md) | 터미널 에이전트 증강 데이터 스터디 — 흐름·도구(Harbor/Terminus-2/vLLM, Data Designer 미사용 이유)·기능·데이터 형태·4층 검증 (2026-09-08) |
 | [../study/gradient_reduce.md](../study/gradient_reduce.md) | gradient reduction 스터디 노트 |
 | [../study/2node_project_report.md](../study/2node_project_report.md) | 2노드 프로젝트 종합 보고 (2026-07-12~15) |
 | [../study/diloco_pilot.md](../study/diloco_pilot.md) | DiLoCo 파일럿 전체 실측·검증 (2026-07-14) |
