@@ -17,15 +17,12 @@ TEACHER_BASE = os.environ.get("TEACHER_BASE", "http://localhost:8300/v1")
 TEACHER_MODEL = "glm53-flash"
 
 # 학습 데이터 오염 방지: 합성 과제에는 이 문자열을 넣지 않는다 (TB-2 canary 와 구분). 변환기가 canary 를 검출해 드롭한다.
-BASE_DOCKERFILE = """FROM python:3.12-slim
-ENV DEBIAN_FRONTEND=noninteractive PIP_NO_CACHE_DIR=1 PYTHONUNBUFFERED=1
-RUN apt-get update && apt-get install -y --no-install-recommends \\
-    bash coreutils findutils grep sed gawk curl wget git jq tree less vim-tiny nano procps \\
-    build-essential make unzip zip tar gzip bzip2 xz-utils sqlite3 tmux \\
-    && rm -rf /var/lib/apt/lists/*
-RUN pip install --no-cache-dir pytest==8.4.1 numpy==2.3.3 pyyaml==6.0.2 requests==2.32.4 pandas==2.3.2
-WORKDIR /app
-"""
+# 과제 이미지 정책 (2026-09-08 사고 후 확정): 과제 Dockerfile 은 미리 빌드한 베이스 이미지 위에 과제 파일만 COPY 한다.
+# 처음에는 과제마다 apt·pip 를 반복하는 Dockerfile 을 썼는데, gpu06 의 containerd 스냅샷 저장소는 그 레이어를 과제 간에
+# 공유하지 않아 동시 64 트라이얼이 각각 940 MB 를 점유했다(여유 291 → 124 GB). 베이스 레시피는 base/Dockerfile,
+# 빌드는 컨테이너에서 `docker build -t alpha-terminal-base:1 base/` (README §P2 이미지 정책). 컨테이너 재구축 시 재빌드.
+BASE_IMAGE = "alpha-terminal-base:1"
+BASE_DOCKERFILE = f"FROM {BASE_IMAGE}\nWORKDIR /app\n"
 
 
 def slug(s: str, n: int = 40) -> str:
