@@ -77,17 +77,18 @@ sys.exit(0 if fail == 0 else 1)
 """
 
 
-def load_problems(shard_files, offset, need, seed=0):
+def load_problems(shard_files, offset, need, seed=0, exclude_prefixes=None):
     import pyarrow.parquet as pq
     fs = sorted(glob.glob(SEED_GLOB, recursive=True))
     fs = [fs[i] for i in shard_files if i < len(fs)]
     seen, out = set(), []
+    excl = exclude_prefixes or set()   # 이미 과제로 만든 문제의 해시 앞 6자 (과제명 끝 6자) — 배치 간 중복 방지
     for f in fs:
         t = pq.read_table(f, columns=["id", "input", "solution", "difficulty", "source", "dataset", "license"])
         for row in t.to_pylist():
             p, s = (row["input"] or "").strip(), (row["solution"] or "").strip()
             h = hashlib.md5(p.encode()).hexdigest()
-            if h in seen:
+            if h in seen or h[:6] in excl:
                 continue
             seen.add(h)
             if not (300 <= len(p) <= 4000 and 30 <= len(s) <= 4000):
@@ -176,9 +177,14 @@ def main():
     ap.add_argument("--k-cases", type=int, default=10)
     ap.add_argument("--min-cases", type=int, default=6)
     ap.add_argument("--effort", default="high")
+    ap.add_argument("--exclude-task-roots", default="", help="콤마 목록: 이 디렉토리들의 oc-* 과제명 끝 6자 해시를 제외")
     a = ap.parse_args()
     os.makedirs(a.out, exist_ok=True)
-    probs = load_problems([int(x) for x in a.shard_files.split(",")], a.offset, a.n)
+    excl = set()
+    for root in [r for r in a.exclude_task_roots.split(",") if r]:
+        excl |= {d[-6:] for d in os.listdir(root) if d.startswith("oc-") and os.path.isdir(os.path.join(root, d))}
+    probs = load_problems([int(x) for x in a.shard_files.split(",")], a.offset, a.n, exclude_prefixes=excl)
+    print(f"[gen] excluded hashes: {len(excl)}", flush=True)
     print(f"[gen] problems loaded: {len(probs)} (offset {a.offset}) → {a.out}", flush=True)
     t0 = time.time(); recs = []
     with ThreadPoolExecutor(a.workers) as ex:
