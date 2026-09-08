@@ -166,6 +166,7 @@ submodule `tests/unit_tests/test_step_batch_size_schedule.py`, `test_muon_optimi
 
 | 날짜 | 증상 | 원인 → 대응 |
 |---|---|---|
+| 09-08 | 터미널 SDG 수집 동시 64 에서 트라이얼 263/275 즉사 (`all predefined address pools have been fully subnetted`) | DinD 기본 주소 풀 ≈30개 — Harbor 가 트라이얼마다 compose 네트워크 생성. `daemon.json` default-address-pools 768개로 확장 + dockerd 재기동 (`EVAL_DOCKER_NODE.md` §4, 재구축 시 복원 필수) |
 | 09-07 | sub1 NCCL 2.29 초기화 전 rank `munmap_chunk` (GLM-5.3-Flash EP+DP8 서빙, torchrun 2-GPU all_reduce 로 재현) | compat 스왑이 절반만 적용 — `libcuda.so.1` 만 595, `libnvidia-ptxjitcompiler.so.1`·`libnvidia-nvvm.so.4` 는 570 → PTX JIT 시 힙 손상(gdb 확정). 595 JIT 링크 디렉토리를 `LD_LIBRARY_PATH` 앞에(sudo 불필요, `serve_glm53.sh` 내장). 09-04 학습 불가도 같은 원인 유력(미검증). `KNOWN_ISSUES` 09-07 |
 | 09-07 | 에이전틱 노드 여유 592→290GB(7일), A3 임계 미달 | `docker_gc.sh` 가 docker 객체만 봄 — 실제 누적은 컨테이너 `/opt` 의 에이전트 산출물(SWE 궤적·Terminal 기록, 5일 +66GB). gc 에 산출물 회전 추가(최근 N개 유지, `--rotate-only`) |
 | 09-05 | iter1200 종료 후 iter1500 체인이 24시간 미발동 | `pgrep -f 'run_suite.sh'` 가 ssh 원격 셸(`bash -c "pgrep …"`)의 자기 명령줄을 매치 → 조건 항상 참. 브래킷 `[r]…` 도 이름만 언급한 남의 셸을 잡음 → 판정을 `eval_sft/suite_running.sh` 로 일원화, argv 구조로 판별 |

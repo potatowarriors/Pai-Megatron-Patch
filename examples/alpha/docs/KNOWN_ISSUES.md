@@ -4,6 +4,17 @@
 CLAUDE.md의 "함정 표"는 이 문서의 한 줄 요약이며, 새 사고는 **여기에 서사를 쓰고 CLAUDE.md 표에는 한 줄만** 추가한다.
 날짜는 절대 표기. 두 스테이지 이상 지난 항목은 스테이지 경계에서 `archive/`로 이동.
 
+## 에이전틱 노드 Docker 주소 풀 고갈 — 동시 64 수집에서 트라이얼 즉사 (2026-09-08 ✅)
+
+- **증상**: 터미널 SDG 수집 배치 1(과제 1,240, Harbor 동시 64)에서 완료 275건 중 263건이 1분 안에 `RuntimeError`.
+  job.log: `failed to create network …: all predefined address pools have been fully subnetted`. 성공 12건은 전부 보상 1 — 파이프라인은 정상.
+- **원인**: Harbor 는 트라이얼마다 docker compose 프로젝트(전용 브리지 네트워크)를 만든다. DinD dockerd 의 기본 주소 풀은
+  172.17~31/16 + 192.168/20 로 약 30개뿐이라 동시 64 에서 고갈됐고, 죽은 트라이얼의 네트워크(22개)가 남아 더 좁아졌다.
+  파일럿(동시 5~10)에서는 드러나지 않았다.
+- **대응**: `/etc/docker/daemon.json` 에 `default-address-pools` 10.100~10.102.0.0/16 (size 24, 768 네트워크) 설정 후 dockerd 재기동,
+  `docker network prune -f`. `EVAL_DOCKER_NODE.md` §4 에 기록 — 컨테이너 재구축 시 daemon.json 도 복원해야 한다.
+- **교훈**: 동시성을 올릴 때는 GPU·KV 뿐 아니라 컨테이너 호스트의 네트워크·포트·파일 디스크립터 한도도 같이 확인한다.
+
 ## sub1 NCCL 초기화 `munmap_chunk(): invalid pointer` — compat 스왑이 절반만 적용돼 있었다 (2026-09-07 ✅ 우회, 🔶 영구 수정은 root)
 
 - **증상**: 터미널 SDG 트랙의 GLM-5.3-Flash 서빙(vLLM nightly 0.28.1rc1, torch 2.13 cu130, NCCL 2.29.7)이 EP+DP8 로 뜨다

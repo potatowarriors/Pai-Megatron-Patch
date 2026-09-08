@@ -67,6 +67,12 @@ sleep 8
 ssh -F /home/work/vidsearch/.ssh-keys/config alpha-eval 'docker info --format "{{.ServerVersion}} {{.Driver}}"'
 ```
 
+**주소 풀 (2026-09-08 추가, 필수)**: `/etc/docker/daemon.json` 에 `default-address-pools` 를 넓혀 두었다
+(10.100~10.102.0.0/16 을 /24 로 → 768 네트워크). Harbor 는 트라이얼마다 compose 네트워크를 만드는데 기본 풀은
+약 30개라 동시 64 수집에서 `all predefined address pools have been fully subnetted` 로 트라이얼이 즉사했다
+(터미널 SDG 수집 배치 1, 275건 중 263건). 컨테이너가 재생성되면 daemon.json 도 사라지므로 §5 재구축 시 함께 복원할 것.
+죽은 트라이얼이 네트워크를 남기면 `docker network prune -f` 로 회수.
+
 ## 5. 재구축 절차 (컨테이너가 삭제된 경우)
 
 gpu06 호스트에서 (한 줄씩; 긴 값은 변수로 빼 붙여넣기 안전하게):
