@@ -18,6 +18,11 @@ DS=/home/work/Datasets/LL_datasets/posttraining/SFT/$NAME
 BINS=/home/work/Datasets/LL_preprocessed/v5/sft_packed_128k_terminal_pad16/terminal_terminus2_synth
 TOK=$REPO/examples/alpha/tokenizer_v5
 mkdir -p "$DS"
+echo "[assemble] 0) job 디렉토리 재변환 (--repair-json-escapes: LaTeX 역슬래시 구제, 2026-09-08 수학 배치 ≈+15% 행)"
+for J in "$CROOT"/*/job; do
+  [ -d "$J" ] || continue; T=$(basename "$(dirname "$J")"); R="$(dirname "$J")/rows"
+  python3 "$HERE/traj_to_terminus.py" "$J" --out "$R" --tag "$T" --min-reward 1.0 --repair-json-escapes | grep traj_to | cut -c1-160
+done
 ROWS=$(ls "$CROOT"/*/rows/*.jsonl 2>/dev/null | grep -v DONOTTRAIN)
 [ -n "$ROWS" ] || { echo "[assemble] rows 없음 ($CROOT)"; exit 1; }
 echo "[assemble] 입력 $(echo "$ROWS" | wc -l) 파일, 총 $(cat $ROWS | wc -l) 행"

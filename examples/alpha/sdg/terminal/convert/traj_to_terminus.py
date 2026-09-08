@@ -29,7 +29,15 @@ INJECT = ("<|im_start|>", "<|im_end|>", "<|endoftext|>")
 REQUIRED = ("analysis", "plan", "commands")
 
 
-def extract_json(text):
+BAD_ESCAPE = re.compile(r'\\(?!["\\/bfnrtu])')   # JSON 문자열 안에서 허용되지 않는 역슬래시 (LaTeX \frac 등)
+
+
+def repair_escapes(text: str) -> str:
+    """유효하지 않은 역슬래시 이스케이프를 \\ 로 — 수학 과제에서 analysis 에 LaTeX 를 쓴 응답 구제 (2026-09-08, 배치당 ≈10%)."""
+    return BAD_ESCAPE.sub(r"\\\\", text)
+
+
+def extract_json(text, repair=False):
     text = re.sub(r"^```(?:json)?\s*|\s*```$", "", (text or "").strip())
     i, j = text.find("{"), text.rfind("}")
     if i < 0 or j <= i:
@@ -37,6 +45,11 @@ def extract_json(text):
     try:
         return json.loads(text[i:j + 1])
     except json.JSONDecodeError:
+        if repair:
+            try:
+                return json.loads(repair_escapes(text[i:j + 1]))
+            except json.JSONDecodeError:
+                return None
         return None
 
 
@@ -49,7 +62,7 @@ def load_trial(tdir):
     return r, reward, am, ar
 
 
-def convert_trial(tdir, tag, min_reward, allow_canary, drops):
+def convert_trial(tdir, tag, min_reward, allow_canary, drops, repair_json=False):
     r, reward, am, ar = load_trial(tdir)
     name = os.path.basename(tdir.rstrip("/"))
     if not am:
@@ -72,6 +85,8 @@ def convert_trial(tdir, tag, min_reward, allow_canary, drops):
         all_text.append(c)
         if m["role"] == "assistant":
             j = extract_json(c)
+            if j is None and repair_json and extract_json(c, repair=True) is not None:
+                c = repair_escapes(c); j = extract_json(c); drops["json_repaired_turns"] += 1
             if j is None or not all(k in j for k in REQUIRED) or not isinstance(j["commands"], list):
                 drops["json_invalid"] += 1; return None
             row_m = {"role": "assistant", "content": c}
@@ -81,7 +96,7 @@ def convert_trial(tdir, tag, min_reward, allow_canary, drops):
             msgs.append(row_m)
         else:
             msgs.append({"role": "user", "content": c})
-    last = extract_json(msgs[-1]["content"])
+    last = extract_json(msgs[-1]["content"], repair=repair_json)
     if reward >= 1.0 and not (last and last.get("task_complete") is True):
         drops["not_completed"] += 1; return None
     blob = "\n".join(all_text)
@@ -109,6 +124,8 @@ def main():
     ap.add_argument("--tag", required=True)
     ap.add_argument("--min-reward", type=float, default=1.0)
     ap.add_argument("--allow-canary", action="store_true")
+    ap.add_argument("--repair-json-escapes", action="store_true",
+                    help="LaTeX 역슬래시 등 무효 이스케이프를 \\\\ 로 고쳐 JSON 을 구제 (content 가 수정됨, 카운트 기록)")
     a = ap.parse_args()
     os.makedirs(a.out, exist_ok=True)
     fname = f"{a.tag}{'.DONOTTRAIN' if a.allow_canary else ''}.jsonl"
@@ -116,7 +133,7 @@ def main():
     trials = [d for j in a.jobs for d in sorted(glob.glob(os.path.join(j, "*__*"))) if os.path.isdir(d)]
     for d in trials:
         try:
-            row = convert_trial(d, a.tag, a.min_reward, a.allow_canary, drops)
+            row = convert_trial(d, a.tag, a.min_reward, a.allow_canary, drops, a.repair_json_escapes)
         except Exception as e:  # noqa: BLE001
             drops["exception:" + type(e).__name__] += 1; row = None
         if row:
