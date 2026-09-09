@@ -4,7 +4,7 @@
 입력: traj_to_terminus.py 산출 jsonl (여러 개). 출력: 통과 행 jsonl + FILTER_STATS.json.
 신호 (Ultra 기술보고서 §Software Issue Resolution 의 목록을 우리 과제 형태에 맞게 구현):
   forbidden_git     git push/pull/fetch/clone/cherry-pick/reflog/fsck/remote/ls-remote 실행
-  repeat_loop       같은 keystrokes 가 N(기본 4)회 이상 반복 (편집-테스트 무한 반복·제자리걸음)
+  repeat_loop       같은 keystrokes 가 **연속** N(기본 4)회 이상 (제자리걸음). 2026-09-10: 총 횟수→연속 횟수, cd/ls/pwd/clear 제외 (코퍼스 보정)
   no_edit           전체 트라젝트리에 파일을 쓰는 명령이 없음 (heredoc/리다이렉트/sed -i/tee/python 파일쓰기)
   parse_error_rate  하니스가 "parsing errors/warnings" 를 돌려준 스텝 비율 > 임계 (기본 0.34)
   debug_residue     작성 코드에 pdb/breakpoint()/print("DEBUG 잔재
@@ -18,6 +18,10 @@ import argparse, json, os, re, sys
 from collections import Counter
 
 GIT_FORBIDDEN = re.compile(r"\bgit\s+(push|pull|fetch|clone|cherry-pick|reflog|fsck|remote|ls-remote)\b")
+# 2026-09-10 공개 코퍼스(Nemotron-Terminal-Corpus) 보정: DeepSeek 에이전트가 턴마다 `cd /app` 을 앞세우고(반복 ≥4 가 표본 21%), 의존성·질의형
+# synthetic 과제는 파일 쓰기 없이 끝나므로(no_edit 5%) — 사소한 명령은 반복 집계에서 제외하고 no_edit 는 코드·SWE 과제에만 적용한다.
+TRIVIAL_CMD = re.compile(r"^(cd(\s+\S+)?|ls(\s+-\w+)*(\s+\S+)?|pwd|clear)?$")
+CODE_SPLITS = ("adapters:code", "adapters:swe")
 WRITE_CMD = re.compile(r"<<\s*['\"]?\w+|>\s*/?\S+\.(py|txt|sh|json|c|cpp|md|csv|yaml|yml|ini|cfg)\b|\bsed\s+-i\b|\btee\b|open\([^)]*['\"]w|\bcat\s*>|\bprintf\b[^\n]*>|\becho\b[^\n]*>")
 RUN_SOLUTION = re.compile(r"python3?\s+(/app/)?solution\.py|<\s*/?app/?samples/|samples/\d\.in|answer\.txt")
 DEBUG = re.compile(r"\bimport pdb\b|\bpdb\.set_trace\(|\bbreakpoint\(\)|print\(\s*[\"']DEBUG")
@@ -45,9 +49,16 @@ def signals(row, repeat_n, parse_thr, max_turns):
     allcmd = "\n".join(flat)
     sig = {}
     sig["forbidden_git"] = bool(GIT_FORBIDDEN.search(allcmd))
-    cnt = Counter(k.strip() for k in flat if k.strip())
-    sig["repeat_loop"] = any(v >= repeat_n for v in cnt.values())
-    sig["no_edit"] = not WRITE_CMD.search(allcmd)
+    # repeat_loop = 같은 keystrokes 가 **연속으로** repeat_n 회 이상 (정체 루프). 총 횟수 기준은 `df -h`·`cat patch`·`sleep 2` 같은
+    # 반복 점검을 루프로 오인한다 (코퍼스 표본 818 플래그 중 연속 ≥4 는 4행뿐, 2026-09-10).
+    seq = [k.strip() for k in flat if k.strip() and not TRIVIAL_CMD.match(k.strip())]
+    best = run = 0; prev = None
+    for c in seq:
+        run = run + 1 if c == prev else 1; prev = c; best = max(best, run)
+    sig["repeat_loop"] = best >= repeat_n
+    md = row.get("metadata") or {}
+    code_task = str(md.get("task", "")).startswith(("oc-", "sc-")) or md.get("split") in CODE_SPLITS
+    sig["no_edit"] = code_task and not WRITE_CMD.search(allcmd)
     users = [m["content"] for m in row["messages"] if m["role"] == "user"]
     n_err = sum(1 for u in users if PARSE_ERR.search(u))
     n_asst = sum(1 for m in row["messages"] if m["role"] == "assistant")
@@ -82,7 +93,7 @@ def main():
                 if not line.strip():
                     continue
                 row = json.loads(line); stats["rows_in"] += 1
-                task = (row.get("metadata") or {}).get("task") or row["uuid"]
+                md = row.get("metadata") or {}; task = f"{md.get('split', '')}:{md.get('task') or row['uuid']}"   # 분할별 키 (코퍼스 task id 는 파일마다 겹침)
                 if task in seen_tasks:
                     stats["drop:dup_task"] += 1; continue
                 sig, n_asst = signals(row, a.repeat_n, a.parse_thr, a.max_turns)
