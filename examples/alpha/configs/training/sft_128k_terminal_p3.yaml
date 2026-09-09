@@ -1,28 +1,107 @@
-# SFT phase-3 — 터미널 에이전트 보정 스테이지 (phase-2 완주 ckpt 위 연속학습)
+# SFT phase-3 "터미널 에이전트 보정 스테이지" — phase-2 완주 ckpt(iter 602) 위 짧은 연속학습 (sdg/terminal/README.md §P4)
+#   bash train.sh baseline_48L sft_128k_terminal_p3 sft_128k_terminal_blend_p3
 #
-# 설계 (사용자 결정 2026-09-09, examples/alpha/sdg/terminal/README.md §P4):
-#   블렌드 configs/data/sft_128k_terminal_blend_p3.yaml — phase-2 49종 리플레이 80% (비중 × 0.8) + 신규 20%
-#   (terminal_terminus2_synth 4 epoch + swe_v3_terminus_keephist 1 epoch), 예산은 gen_phase2_blend.py --solve-iters 산출.
-#   LR: 1e-5 → 1.5e-6 cosine, warmup 5% (phase-2 와 동일 — 사용자 결정 2026-09-09: constant 1.5e-6 은 누적 갱신량이 phase-2 의 2% 라 효과 부족).
-#   리플레이 비율은 phase-2 가중치가 아니라 **phase-1+2 누적 소비 분포**를 기준으로 재설정 (README §P4 표, 에이전틱·SWE 이웃 ×2).
-#   구조·병렬·offload 는 sft_128k_full_p2.yaml 과 동일 (CP8 + chunked offload, GBS 160, seq 128k).
-# 실행: cd examples/alpha && bash train.sh baseline_48L sft_128k_terminal_p3 sft_128k_terminal_blend_p3
+# phase-2(sft_128k_full_p2.yaml)와의 차이 — 이 키만 다르다 (변인 통제; 프리셋은 평면 YAML 이라 상속이 없으므로 전체를 복제한다):
+#   train-samples 14400 (90 iters) · warmup 640 (4 iters, 5%) · decay 14400 · save/eval 20 · load = phase-2 완주 ckpt · no-load-rng
+#   LR 1e-5 → 1.5e-6 cosine 은 phase-2 와 동일 (사용자 결정 2026-09-09: constant 1.5e-6 은 누적 갱신량이 phase-2 의 2% 라 효과 부족).
+# 데이터: sft_128k_terminal_blend_p3.yaml (gen_sft_128k_terminal_blend_p3.sh --solve-iters 산출) = phase-2 49종 리플레이 80%
+#   (phase-1+2 누적 소비 분포 기준 재설정, terminal_p3_replay_shares.tsv) + 신규 20% (terminal_terminus2_synth 4 epoch +
+#   swe_v3_terminus_keephist 1 epoch). 집계 bin 1표(calculate_per_token_loss=False) → 토큰 비중 = gradient 비중.
+# 게이트: G-P5 2-iter 스모크(scripts/sub1_jit595_smoke.sh) → 첫 iteration 게이트(scripts/launch_p3_after_phase2.sh) →
+#   TB-2 before/after(phase-2 ckpt 대비) · LogicKor/IFEval/identity 무회귀.
+# 이력: 2026-09-09 생성. 첫 판은 차이 키만 담아 `micro_batch_size is None` 으로 기동 실패(sub1 스모크가 잡음) → 전체 복제로 교체.
+
 train-mode: finetune
-train-samples: 14400               # 90 iters @ GBS 160 = 1.89B bin-tok — gen_sft_128k_terminal_blend_p3.sh --solve-iters 산출
-lr-warmup-samples: 640               # 5% (4 iters)
+
+# ── 예산 / LR ──────────────────────────────────────────────────────
+train-samples: 14400                # 90 iters @ GBS 160 = 1.89B bin-tok — gen_sft_128k_terminal_blend_p3.sh --solve-iters 산출
+lr-warmup-samples: 640              # 4 iters (5%)
 lr-decay-samples: 14400
-lr: 1.0e-5
+lr: 1.0e-5                          # phase-2 와 동일 — 연속학습 망각 방지 1차 장치
 min-lr: 1.5e-6
 lr-decay-style: cosine
+
+# ── 병렬화 (128K = CP8 강제; offload 로 GO — MUON_OFFLOAD_BACKPORT S5) ────
+tensor-model-parallel-size: 1
+pipeline-model-parallel-size: 1
+expert-model-parallel-size: 8
+expert-tensor-parallel-size: 1
+context-parallel-size: 8
+
 chunked-optimizer-state-offload: true
 optimizer-state-offload-chunk-size-mb: 256
+
+# ── 배치 / 시퀀스 (THD는 MBS 1 필수 — helper assert) ──────────────────────
 seq-length: 131072
-global-batch-size: 160
+micro-batch-size: 1
+global-batch-size: 160              # 20.97M tok/iter, phase-1·2 와 동일
+
+# ── THD 문서 격리 플래그셋 (SFT 경로: 음수 마커 기반 리셋, EOD 무관) ──────
+reset-position-ids: true
 no-create-attention-mask-in-dataloader: true
+reset-attention-mask: false
+eod-mask-loss: false
+
+# ── 리컴퓨트 ─────────────────────────────────────────────────────
+recompute-granularity: selective
+recompute-modules: "layernorm moe"
+
+# ── MoE 라우팅 (DSV3-strict, 전 스테이지 동일) ────────────────────────────
 moe-router-load-balancing-type: seq_aux_loss
+moe-router-score-function: sigmoid
+moe-router-enable-expert-bias: true
+moe-router-bias-update-rate: 0.001
+moe-token-dispatcher-type: alltoall
+
+# ── Optimizer (전 스테이지 연속성: Muon 유지) ─────────────────────────────
+optimizer: dist_muon
+weight-decay: 0.1
+adam-beta1: 0.9
+adam-beta2: 0.95
+muon-momentum: 0.95
+muon-use-nesterov: true
+muon-num-ns-steps: 5
+muon-scale-mode: spectral
+muon-fp32-matmul-prec: medium
+muon-tp-mode: blockwise
+muon-extra-scale-factor: 0.2
+init-method-std: 0.008
+
+clip-grad: 8.0                    # ×cp 산식 (lc_a.yaml 실측), CP8
+
+# ── LayerNorm WD ─────────────────────────────────────────────────────
+no-weight-decay-cond-type: apply_wd_to_qk_layernorm
+
+# ── Precision ──────────────────────────────────────────────────────
+bf16: true
+
+# ── 체크포인트 / 평가 (90 iters 규모 — 20 iters 마다) ──────────────────────
 save-interval: 20
+# optimizer state 저장 기본 (63c466f) — 무봉합 재개
+ckpt-format: torch_dist
 eval-iters: 4
 eval-interval: 20
+
+# ── 로깅 / 런타임 ───────────────────────────────────────────────────
+log-interval: 1
+log-timers-to-tensorboard: true
+log-memory-to-tensorboard: true
+log-validation-ppl-to-tensorboard: true
+log-throughput: true
+tensorboard-queue-size: 1
+# 51종 128k 콜드 캐시 빌드 대비 여유 (phase-2 26종 25분 실측; sub1 스모크가 캐시를 미리 만들면 본 런은 웜)
+distributed-timeout-minutes: 180
+manual-gc: true
+manual-gc-interval: 5
+overlap-grad-reduce: true
+attention-backend: auto
+cross-entropy-loss-fusion: true
+cross-entropy-fusion-impl: te
+wandb-project: alpha-posttraining
+
+# ── Stage 전환 (dataset 변경 → finetune: true, 카운터 리셋) ────────────────
+# phase-2 본 런(20260907_073414) 완주 ckpt iter_0000602 — launch_p3_after_phase2.sh 가 latest==602 를 확인하고 기동.
+# --finetune 은 optimizer state 미로드. 스모크는 그 전 저장본(iter_0000500 등)으로 가능.
 load: /home/work/vidsearch/repos/project_s/Pai-Megatron-Patch/examples/alpha/outputs/alpha_baseline_48L_sft_128k_full_p2_20260907_073414/checkpoints
 finetune: true
 no-load-optim: true
