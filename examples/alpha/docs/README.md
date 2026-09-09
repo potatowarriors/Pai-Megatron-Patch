@@ -78,7 +78,7 @@
 
 | 문서 | 한 줄 |
 |---|---|
-| [../chat/README.md](../chat/README.md) | SFT ckpt 채팅 서빙 (vLLM :8001 + OpenWebUI :8080, main1 GPU3) — 벤치 fleet 과의 설정 차이·G2 의도적 FAIL 사유·접속 경로 (2026-08-31~) |
+| [../chat/README.md](../chat/README.md) | SFT ckpt 채팅 서빙 (vLLM :8001 + LibreChat :8080, main1 GPU3) — 벤치 fleet 과의 설정 차이·G2 의도적 FAIL 사유·LibreChat 설정이 지키는 것·UI 프롬프트 게이트·설치/재빌드·함정 (2026-08-31~, 2026-09-09 OpenWebUI→LibreChat) |
 
 ## 리포 루트 docs/
 

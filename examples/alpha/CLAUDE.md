@@ -167,6 +167,7 @@ submodule `tests/unit_tests/test_step_batch_size_schedule.py`, `test_muon_optimi
 | 날짜 | 증상 | 원인 → 대응 |
 |---|---|---|
 | 09-09 | phase-3 프리셋 기동 실패 2건 — `micro_batch_size None` · valid 블렌드 `IndexError`(436 요청 > 434 보유). sub1 사전 스모크가 검출 | ① 차이 키만 담은 프리셋(평면 YAML, 상속 없음) → 전체 복제 후 diff ② 51 멤버 valid 크기가 Σceil(w×N) 로 +1.3% 부풀어 버퍼 여유 0.5% 초과 + `--mid-level-dataset-surplus` 가 데이터 제공자에서 미배관 → 배관 + 0.05. **자동 런처 전 2-iter 스모크 생략 금지**. `KNOWN_ISSUES` 09-09 |
+| 09-09 | 채팅 UI 응답 이상 (영어 답변·빈 답변·유령 도구 호출) | OpenWebUI 0.11 이 UI 발 요청마다 내장 도구 25종을 주입 → 템플릿 tool 분기, 프롬프트 17→5,440 토큰. **LibreChat(MIT) 교체** + `smoke_chat.sh` §6 프롬프트 토큰 게이트(실측 17). `KNOWN_ISSUES` 09-09 |
 | 09-08 | sc_b1 검증 중 gpu06 여유 2.1 TB → 519 MB (20분) | 교사가 쓴 setup.sh 가 `fallocate -l $(df 기반)` 으로 2.36 TB 파일 생성 — 이미지 빌드에는 storage 상한 없음. 빌드 kill·prune 으로 회수, 생성기 DISK_DANGER 금지 + `precheck_setup.sh`(tmpfs/fsize/timeout 샌드박스) 를 validate 전 필수로. `KNOWN_ISSUES` 09-08 |
 | 09-08 | 수집 3시간에 gpu06 여유 291→124 GB (사용자 긴급 정리로 1.8 TB 확보) | 과제 Dockerfile 이 apt·pip 를 반복, containerd 저장소가 레이어를 미공유 → 트라이얼당 940 MB. 베이스 이미지 `alpha-terminal-base:1` + COPY 로 교체(재구축 시 재빌드). SWE-bench 평가 이미지 실제 점유 ≈430 GB(`docker images` 합산은 중복 집계). `KNOWN_ISSUES` 09-08 |
 | 09-08 | 터미널 SDG 수집 동시 64 에서 트라이얼 263/275 즉사 (`all predefined address pools have been fully subnetted`) | DinD 기본 주소 풀 ≈30개 — Harbor 가 트라이얼마다 compose 네트워크 생성. `daemon.json` default-address-pools 768개로 확장 + dockerd 재기동 (`EVAL_DOCKER_NODE.md` §4, 재구축 시 복원 필수) |

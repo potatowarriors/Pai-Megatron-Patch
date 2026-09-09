@@ -1,90 +1,129 @@
-# alpha 채팅 서빙 (vLLM + OpenWebUI)
+# alpha 채팅 서빙 (vLLM + LibreChat)
 
 SFT 체크포인트와 **사람이 직접 대화**하기 위한 최소 구성. 벤치 스위트(`../eval_sft/`)와는
-목적이 달라 설정이 다르다 — 아래 §3 이 그 차이의 근거다.
+목적이 달라 설정이 다르다 — §3 이 그 차이의 근거다.
 
-구성: 브라우저 → OpenWebUI(:8080) → vLLM OpenAI 호환 API(:8001) → alpha (main1 GPU 3, 40GB A100 슬라이스).
+구성: 브라우저 → LibreChat(:8080, Node 20 + MongoDB 8.0) → vLLM OpenAI 호환 API(:8001) → alpha (main1 GPU 3, 40GB A100 슬라이스).
 창 128K, KV 캐시 1,311,257 토큰, 가중치 29.9GiB.
+
+**2026-09-09 OpenWebUI → LibreChat 교체.** 이유 둘: ① Open WebUI License 는 사용자 50명 초과 시 브랜딩 변경을
+금지한다, LibreChat 은 MIT. ② OpenWebUI 0.11 이 UI 발 요청마다 내장 도구 25종을 주입해 모델이 에이전트 모드로
+흘렀다 (`../docs/KNOWN_ISSUES.md` 2026-09-09). 구 런처(`run_openwebui.sh`, `init_openwebui_db.py`)는 커밋 `ca8ada7` 이력에 있다.
 
 ## 1. 기동
 
 ```bash
 cd examples/alpha
-bash chat/serve_chat.sh                       # vLLM  (기본: 최신 hfmodel, 128K, :8001, GPU3)
-bash chat/run_openwebui.sh                    # UI    (기본: :8080)
+bash chat/serve_chat.sh                       # vLLM  (기본: phase-2 iter500, 128K, :8001, GPU3)
+bash chat/run_librechat.sh                    # UI    (기본: :8080, MongoDB 자동 기동·재사용)
 ```
 
-체크포인트를 바꾸려면 첫 인자로 준다: `bash chat/serve_chat.sh outputs/<run>/hfmodel_<iter>`.
+데몬화는 호출 측에서: `nohup bash chat/run_librechat.sh > /home/work/vidsearch/tools/chat_logs/librechat_8080.log 2>&1 &`.
+체크포인트를 바꾸려면 `serve_chat.sh` 첫 인자로 준다. vLLM 주소를 바꾸려면 `run_librechat.sh` 둘째 인자.
 
-## 2. 접속
+| 경로 | 내용 |
+|---|---|
+| `/home/work/vidsearch/tools/librechat/` | 설치본 (소스 @`8da4ae7` v0.8.8-rc2 + 빌드 산출물). `.env` 는 런처가 매번 다시 쓴다 |
+| `/home/work/vidsearch/tools/librechat_data/` | MongoDB dbpath · `logs/` · `secrets`(JWT/CREDS) · `smoke_credentials`. NFS 라 컨테이너 재생성에도 남는다 |
+| `/home/work/vidsearch/tools/mongodb-8.0.16/` | MongoDB 공식 tarball 바이너리 (ubuntu2404). docker 없음 |
+| `chat/librechat.yaml` | 설정 정본 (리포에서 버전 관리). 왜 각 항목이 있는지는 파일 상단 주석 |
 
-포트 8080 은 이 컨테이너의 `BACKENDAI_SERVICE_PORTS` 중 `nniboard` preopen 슬롯과 겹친다.
-Backend.AI 앱 프록시로 열리지 않으면 SSH 터널을 쓴다:
+## 2. 접속·계정
+
+포트 8080 은 이 컨테이너의 `BACKENDAI_SERVICE_PORTS` 중 `nniboard` preopen 슬롯이다. Backend.AI 앱 프록시로
+열리지 않으면 SSH 터널을 쓴다:
 
 ```bash
 ssh -N -L 8080:localhost:8080 main1     # ~/.ssh/config 의 Host main* (포트 2200)
 ```
+
+LibreChat 은 **로그인 필수**다 (auth-off 옵션 없음). 첫 접속에서 Sign up 으로 계정을 만든다. `ALLOW_REGISTRATION=true`
+이므로 포트에 닿는 누구나 가입할 수 있다 — OpenWebUI `WEBUI_AUTH=false` 와 같은 노출 수준이다.
+스모크 계정 `smoke@alpha.local` 은 게이트가 자동 생성한다 (`librechat_data/smoke_credentials`).
 
 ## 3. 벤치 fleet 과 무엇이 다른가
 
 | 항목 | 벤치 (`eval_sft/serve_alpha.sh`) | 채팅 (`chat/serve_chat.sh`) | 이유 |
 |---|---|---|---|
 | reasoning 파서 | off | **`nemotron_v3`** | UI 가 사고 과정을 접어서 보여주려면 별도 필드로 분리돼야 한다 |
-| tool 파서 | `qwen3_xml` (TOOLS=1 일 때만) | **`qwen3_xml` 상시** | OpenWebUI 가 `tool_choice="auto"` 를 항상 보낸다 |
+| tool 파서 | `qwen3_xml` (TOOLS=1 일 때만) | `qwen3_xml` 상시 | 벤치와 같은 플래그. LibreChat 은 도구를 보내지 않으므로 발동하지 않는다 |
 | 레플리카 | DP 8 (H100 fleet) | 단일 GPU | 1인 사용 |
 | GPU | sub1 H100 | main1 GPU3 (40GB A100 슬라이스) | 벤치와 자원 분리 |
 | `--max-num-seqs` | 기본 | 8 | 1인 사용. KV 여유는 충분하다(창의 10배) |
 | 모델명 | `alpha` | `alpha-v2-sft` + 별칭 `alpha` | UI 표시는 구체적으로, 게이트 호환은 별칭으로 |
 
-**게이트 G2 는 채팅 fleet 에서 의도적으로 FAIL 한다.** 이유가 둘이다:
-① reasoning 파서가 `</think>` 를 본문에서 떼어간다, ② `check_gates.py` 는 `reasoning_content`
-필드를 보는데 vLLM 0.25.1 이 실제로 내보내는 이름은 **`reasoning`** 이다. 벤치는 파서를 끄고
-돌리므로 그쪽에서는 문제가 되지 않는다. 채팅 fleet 의 검증은 G1 + G3 + `smoke_chat.sh` 다 (§5).
+**게이트 G2 는 채팅 fleet 에서 의도적으로 FAIL 한다.** ① reasoning 파서가 `</think>` 를 본문에서 떼어간다,
+② `check_gates.py` 는 `reasoning_content` 를 보는데 vLLM 0.25.1 이 내보내는 이름은 **`reasoning`** 이다.
+채팅 fleet 의 검증은 G1 + G3 + `smoke_chat.sh` 다 (§6).
 
 ## 4. chat template
 
-`hfmodel_*/tokenizer_config.json` 의 `chat_template` 필드에 내장되어 있다 — vLLM 이 자동으로
-집어가므로 `--chat-template` 플래그가 필요 없고, 학습·평가·서빙이 같은 렌더러를 쓴다.
-템플릿 자체의 규약(think 히스토리, tool 분기)은 `../docs/INTERLEAVED_THINKING.md`,
-검증은 `../tools/verify_chat_template.py`.
+`hfmodel_*/tokenizer_config.json` 의 `chat_template` 필드에 내장되어 있다 — vLLM 이 자동으로 집어가므로
+`--chat-template` 플래그가 필요 없고, 학습·평가·서빙이 같은 렌더러를 쓴다. 템플릿 규약(think 히스토리, tool 분기)은
+`../docs/INTERLEAVED_THINKING.md`, 검증은 `../tools/verify_chat_template.py`.
 
-## 5. 검증
+## 5. LibreChat 설정이 지키는 것
+
+UI 가 vLLM 에 보내는 본문은 `model` · `stream` · `messages` 뿐이다 (2026-09-09 PoC 요청 로그). 그래서 "안녕?" 의
+프롬프트가 학습 렌더와 같은 17 토큰이다. 이를 지키는 항목:
+
+| `librechat.yaml` | 역할 |
+|---|---|
+| `customParams.reasoningKey: reasoning` | vLLM 0.25.1 의 사고 과정 필드명. 기본값 `reasoning_content` 면 사고 과정이 본문에 섞인다 |
+| `customParams.includeReasoningHistory: true` | tool 호출 턴에만 reasoning 을 히스토리에 복원 — 템플릿의 DSV4 분기와 동일 규칙. 일반 대화의 think 는 버린다 |
+| `dropParams` | `stop`·`user`·penalty 를 보내지 않는다. temperature/top_p 는 사용자가 안 건드리면 아예 안 보내 vLLM `generation_config`(1.0/0.95) 적용 |
+| `titleConvo: false` | 제목 생성(영어 메타 프롬프트)을 같은 모델에 보내지 않는다 |
+| `interface.*: false` | 코드실행·웹검색·파일검색·에이전트 UI 를 감춘다. 도구가 하나라도 붙으면 템플릿이 tool 시나리오로 분기한다 |
+
+알아둘 것: 미등록 모델명의 컨텍스트 창은 LibreChat 기본 **32,000 토큰**이다 (vLLM 의 `max_model_len` 을 읽지 않는다).
+더 긴 대화가 필요하면 파라미터 패널의 Max Context Tokens 로 올린다.
+
+## 6. 검증
 
 ```bash
 python3 tools/emit_generation_config.py <CKPT> --check                  # G1
-bash chat/smoke_chat.sh                                                 # 7항목 (엔드포인트·종료·reasoning 분리·멀티턴)
-python3 eval_sft/check_gates.py --base-url http://localhost:8001/v1     # G3 (G2 는 위 사유로 FAIL 정상)
+bash chat/smoke_chat.sh                                                 # vLLM 5항목 + UI 게이트 (LC_URL 기본 :8080)
+python3 eval_sft/check_gates.py --base-url http://localhost:8001/v1     # G3 (G2 는 §3 사유로 FAIL 정상)
 ```
 
-2026-08-31 iter600 실측: G1 PASS, smoke **9/9 PASS**, G3 PASS.
+§6 UI 게이트(`smoke_ui_gate.py`)는 vLLM `/metrics` 의 `vllm:prompt_tokens_total` 을 요청 전후로 읽어 **UI 경유 프롬프트
+크기**를 잰다 (≤64 토큰, 학습 렌더 17). UI 가 무엇을 보내는지 UI 를 믿지 않고 서버 카운터로 확인하는 장치다.
+1인 사용 중에 돌린다 — 동시에 다른 대화가 있으면 증분이 오염된다. UI 없는 fleet 은 `LC_URL=none` 으로 명시 스킵.
 
-## 6. 종료
+2026-09-09 실측 (8080 이관 직후): smoke vLLM **9/9 PASS** · UI 게이트 **7/7 PASS**, 프롬프트 증분 **17 토큰**.
+
+## 7. 설치·재빌드 (컨테이너 재생성 등으로 설치본이 없을 때)
 
 ```bash
-pkill -TERM -f "openwebui_venv/bin/open-webui"
+T=/home/work/vidsearch/tools
+node --version                                              # v20 이상
+git clone https://github.com/danny-avila/LibreChat.git $T/librechat && cd $T/librechat && git checkout 8da4ae7
+npm ci --no-audit --no-fund                                 # ≈5분, node_modules 2.3 GB
+npm install --no-save unrun                                 # tsdown 이 요구하는데 npm ci 가 안 깔아 준다
+npm run frontend                                            # 패키지 + 클라이언트 빌드 ≈30초
+curl -sL https://fastdl.mongodb.org/linux/mongodb-linux-x86_64-ubuntu2404-8.0.16.tgz | tar xz -C $T && mv $T/mongodb-linux-x86_64-ubuntu2404-8.0.16 $T/mongodb-8.0.16
+```
+
+데이터(`librechat_data/`)는 그대로 남으므로 재설치 후 대화·계정이 유지된다. 버전을 올릴 때는 `librechat.yaml` 스키마
+검증이 엄격하다는 점(§9)을 감안해 3080 등 다른 포트로 먼저 띄우고 §6 을 통과시킨다.
+
+## 8. 종료
+
+```bash
+kill -TERM $(pgrep -f "node api/server/index.js")                                     # UI
+kill -TERM $(pgrep -f "mongod --dbpath /home/work/vidsearch/tools/librechat_data")    # DB (보통 유지)
 pkill -TERM -f "alpha_serve_venv/bin/vllm"      # GPU 메모리 회수 확인은 eval_sft/stop_fleet.sh 3,7 절 참조
 ```
 
-## 7. 구축하며 밟은 함정 (2026-08-31)
+## 9. 구축하며 밟은 함정 (2026-09-09)
 
 | 증상 | 원인 | 대응 |
 |---|---|---|
-| `driver too old (found version 12080)` | vllm 0.25.1 은 CUDA 13 빌드, main1 compat lib 은 570(=12.8) | `eval_sft/restore_bench_env.sh` 로 570→595 교체. 실행 중이던 Gemma 서빙은 무영향 |
-| open-webui `no such table: config` | `config.py` 80행 `run_migrations()` 가 순환 import 로 실패하는데 예외를 **삼킨다**. 되돌아온 import 가 같은 파일 1103행 `ENABLE_LOCAL_WEB_FETCH` 를 요구 | `init_openwebui_db.py` 로 분리 — config 를 끝까지 로드한 뒤 alembic 실행 |
-| `.webui_secret_key` 가 리포에 생성 | 키를 안 주면 **현재 작업 디렉토리**에 떨군다 | 런처가 `DATA_DIR/secret_key` 를 만들어 `WEBUI_SECRET_KEY` 로 주입 |
-| `/api/models` 가 빈 배열 | 인증 세션 없이 호출 | 브라우저는 자동 로그인. CLI 확인은 `/api/v1/auths/signin` 토큰으로 |
-| 게이트가 404 | `check_gates.py` 가 모델명 `alpha` 를 하드코딩 | `--served-model-name` 에 별칭 `alpha` 추가 |
-| `"auto" tool choice requires --enable-auto-tool-choice and --tool-call-parser to be set` | OpenWebUI 는 도구를 안 쓰는 대화에도 `tool_choice="auto"` 를 보낸다. 파서가 없으면 vLLM 이 요청 자체를 거절한다 | `--enable-auto-tool-choice --tool-call-parser qwen3_xml` 상시 부착. **XML 계열이어야 한다** — 템플릿이 `<function=…>` XML 을 지시하는데 hermes 계열은 JSON 을 기대한다 |
-| `Using default MoE config ... E=192,N=512` | 192-expert 튜닝 설정 부재 + Backend.AI 가 GPU 이름을 `CUDA_GPU` 로 마스킹 | 정확성 무관, MoE 처리량만 손해. 1인 채팅에서는 무시 |
-
-## 8. 도구 호출 — 인프라는 정상, 모델은 아직 (iter600)
-
-파서 검증(벤치 게이트 A4 와 같은 취지)은 통과했다. `tool_choice="required"` 로 강제하면
-`name=get_weather, arguments={"city": "서울"}` 로 정확히 구조화된다.
-
-다만 **모델이 스스로 도구를 부르지는 않는다**. `tool_choice="auto"` 에서 서울 날씨를
-물으면 도구를 호출하는 대신 날씨를 **지어낸다**. `required` 로 강제하면 같은 호출을
-42번 반복하다 토큰 한도에 걸린다. 둘 다 SFT 24% 지점의 미성숙 신호이지 설정 문제가 아니다.
-
-판별법: 본문에 `<tool_call>`·`<function=` 원문이 새어 나오면 **파서 문제**,
-호출이 아예 없거나 반복되면 **모델 문제**다.
+| `npm run frontend` 가 `Failed to import module "unrun"` | `tsdown` 의 선택 의존성을 `npm ci` 가 설치하지 않음 | `npm install --no-save unrun` |
+| 기동 거부 `ZodError … interface.mcpServers Expected object` | 설정 스키마가 엄격. 키 하나만 틀려도 종료 | 해당 키 삭제. 새 키는 `librechat.example.yaml` 로 형식 확인 |
+| 스크립트 요청이 `Illegal request` | `uaParser` 미들웨어가 브라우저 User-Agent 만 통과 | 게이트가 Chrome UA 를 흉내 낸다 |
+| `npm run create-user` 가 사용자를 만들지 않음 | 미확인 | UI 회원가입 또는 `POST /api/auth/register` |
+| `/api/models` 에 openAI·google 등 미설정 제공자가 섞임 | 정적 기본 목록 | 설정된 엔드포인트는 `/api/endpoints` 로 고른다 |
+| 채팅 POST 응답에 본문이 없음 | 재개 가능 스트림: POST 는 `streamId` 만 반환 | 이벤트는 `GET /api/agents/chat/stream/{streamId}` (SSE, `final` 후 닫힘) |
+| 긴 스크립트가 도중 `401` | 액세스 토큰 15분 만료 | 재로그인 |
+| 첫 턴 "안녕?" 에 영어 답변 | 프레임워크 아님 — tools 없는 vLLM 직접 호출도 4샘플 중 1건 영어 | 모델(SFT 진행 중) 문제로 기록 |

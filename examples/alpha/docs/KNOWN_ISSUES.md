@@ -4,6 +4,28 @@
 CLAUDE.md의 "함정 표"는 이 문서의 한 줄 요약이며, 새 사고는 **여기에 서사를 쓰고 CLAUDE.md 표에는 한 줄만** 추가한다.
 날짜는 절대 표기. 두 스테이지 이상 지난 항목은 스테이지 경계에서 `archive/`로 이동.
 
+## OpenWebUI 0.11 이 UI 발 요청마다 내장 도구 25종을 주입 — 채팅 응답 이상 (2026-09-09 ✅, LibreChat 으로 교체)
+
+- **증상**: 한국어 질문에 영어 답변("I'm your AI assistant. I can … create notes, set up automations"), 빈 답변, 존재하지 않는 도구 호출
+  (`create_note` → `Tool not found`), reasoning 에 "I should use the search_knowledge_files tool" · "Looking at the system prompt".
+  08-31 의 `"auto" tool choice requires --enable-auto-tool-choice…` 도 같은 원인 — OpenWebUI 는 `tool_choice` 가 아니라 **`tools` 배열**을 보냈고
+  vLLM 이 `tool_choice=auto` 를 기본 적용했다 (README 의 옛 서술은 부정확).
+- **원인**: `utils/middleware.py` `use_builtin_tools` = session_id 존재 ∧ `function_calling != legacy` ∧ 모델 capability `builtin_tools`(기본 True) →
+  `get_builtin_tools` 25종(time 2 · ask_user · knowledge 7 · chats 2 · notes 4 · automations 5 · calendar 4, 저장된 채팅은 tasks 2 추가) →
+  alpha 템플릿이 `tools | length > 0` 로 tool 시나리오 분기 → "안녕?" 프롬프트 **17 → 5,440 토큰**, 시스템 프롬프트에 영어 도구 명세.
+  일반 chat·IF·identity·ko_chat 학습 데이터는 tools 0% 이므로 모델은 매 대화를 에이전트 세션으로 인식했다.
+  템플릿·토크나이저·렌더러(transformers 4.57 vs 5.16)·샘플링(1.0/0.95)·eos 는 학습과 일치함을 실측으로 확인 — 문제는 이 주입 하나였다.
+- **실측** (같은 6질문 × 4샘플, 서버 기본 샘플링): tools 없음 → 도구 호출 0/24 · 빈 답변 0/24 · 한글 정상. 도구 25종 주입 → 도구 호출 **9/24** ·
+  빈 답변 **9/24** · "너는 누구야?" **4/4 영어**("I'm your AI assistant … create notes, set up automations" — 정체성 상실) · "세탁기 추천해줘" 3/4 `ask_user` 호출.
+- **대응**: 라이선스 문제(Open WebUI License 브랜딩 조항)와 겹쳐 **LibreChat(MIT) 으로 교체**. vLLM 에 도착하는 본문이 model/stream/messages 뿐임을
+  요청 로그로 확인. `customParams.reasoningKey: reasoning`(vLLM 0.25.1 필드) · `includeReasoningHistory`(tool 턴만 reasoning 복원 = DSV4 분기)로 정합.
+  `chat/smoke_chat.sh` §6 UI 게이트 — vLLM `/metrics` `prompt_tokens_total` 증분 ≤64 (실측 17). OpenWebUI 로 되돌린다면 최소 조치는 모델 capability
+  "Builtin Tools" 해제와 제목·태그·후속질문 생성 off. 상세: `chat/README.md`.
+- **부수 관찰**: OpenWebUI 제목·후속질문 생성이 같은 모델에 영어 메타 프롬프트 + `max_tokens 1000` 을 보내 영어 제목·assistant 말투 후속질문이 생겼다.
+  도구 호출 없는 빈 답변 3건(reasoning 안에 완성 답)은 tools 없는 조건 24샘플에서 재현 0 — 원인 미확정(사용자 중단 가능성).
+- **교훈**: UI 가 vLLM 에 무엇을 보내는지는 UI 를 믿지 말고 **서버 카운터로 잰다**. 파서 게이트(A1)는 도구를 받아들이는지만 보지, 도구가 주입되는지는
+  `prompt_tokens` 로만 보인다. 템플릿의 시나리오 분기는 도구 "선언"만으로 발동하므로 클라이언트가 몰래 붙이는 도구 하나가 학습 분포 전체를 바꾼다.
+
 ## phase-3 프리셋·데이터 결함 2건 — 차이 키만 담은 평면 프리셋 · 51 멤버 valid 블렌드 surplus 미배관 (2026-09-09 ✅, sub1 사전 스모크가 검출)
 
 - **증상 ①**: `sft_128k_terminal_p3.yaml` 1판이 20초 만에 `validate_args: assert args.micro_batch_size is not None`. 프리셋을 "phase-2 와의 차이 6키"만으로
