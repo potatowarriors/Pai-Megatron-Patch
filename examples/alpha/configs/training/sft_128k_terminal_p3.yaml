@@ -3,13 +3,14 @@
 #
 # phase-2(sft_128k_full_p2.yaml)와의 차이 — 이 키만 다르다 (변인 통제; 프리셋은 평면 YAML 이라 상속이 없으므로 전체를 복제한다):
 #   train-samples 14400 (90 iters) · warmup 640 (4 iters, 5%) · decay 14400 · save/eval 20 · load = phase-2 완주 ckpt · no-load-rng
+#   mid-level-dataset-surplus 0.05 (기본 0.005) — 51 멤버 valid 블렌드 크기가 Σceil(w×3200) 로 1.4% 부풀어 기본 여유분을 넘침 (아래 주석)
 #   LR 1e-5 → 1.5e-6 cosine 은 phase-2 와 동일 (사용자 결정 2026-09-09: constant 1.5e-6 은 누적 갱신량이 phase-2 의 2% 라 효과 부족).
 # 데이터: sft_128k_terminal_blend_p3.yaml (gen_sft_128k_terminal_blend_p3.sh --solve-iters 산출) = phase-2 49종 리플레이 80%
 #   (phase-1+2 누적 소비 분포 기준 재설정, terminal_p3_replay_shares.tsv) + 신규 20% (terminal_terminus2_synth 4 epoch +
 #   swe_v3_terminus_keephist 1 epoch). 집계 bin 1표(calculate_per_token_loss=False) → 토큰 비중 = gradient 비중.
 # 게이트: G-P5 2-iter 스모크(scripts/sub1_jit595_smoke.sh) → 첫 iteration 게이트(scripts/launch_p3_after_phase2.sh) →
 #   TB-2 before/after(phase-2 ckpt 대비) · LogicKor/IFEval/identity 무회귀.
-# 이력: 2026-09-09 생성. 첫 판은 차이 키만 담아 `micro_batch_size is None` 으로 기동 실패(sub1 스모크가 잡음) → 전체 복제로 교체.
+# 이력: 2026-09-09 생성. 1차 스모크: 차이 키만 담아 `micro_batch_size is None` 기동 실패 → 전체 복제. 2차 스모크: valid 블렌드 IndexError → surplus 0.05.
 
 train-mode: finetune
 
@@ -81,6 +82,11 @@ save-interval: 20
 ckpt-format: torch_dist
 eval-iters: 4
 eval-interval: 20
+# valid 샘플 = (90//20+1)×4×160 = 3,200. BlendedMegatronDatasetBuilder 는 블렌드 크기를 멤버별 ceil(w×3200) 의 합으로 잡아
+# 51 멤버면 최대 +51(1.6%) 부풀지만, 멤버별 버퍼는 ceil(w×3200×(1+surplus)) 라 기본 0.5% 로는 큰 멤버가 2~4 샘플 모자란다
+# (sub1 스모크 2차: terminal_terminus2_synth 436 요청 > 434 보유 → IndexError). train 은 같은 부풀림이 14,400 에 분산(≤0.35%)돼 무관.
+# 0.05 는 helpers.build_blending_indices 재현으로 두 split 모두 통과 확인. 재개 시 값 고정(멤버 epoch 수 → 셔플 순열에 영향).
+mid-level-dataset-surplus: 0.05
 
 # ── 로깅 / 런타임 ───────────────────────────────────────────────────
 log-interval: 1

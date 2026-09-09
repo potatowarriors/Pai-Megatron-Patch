@@ -80,6 +80,11 @@ def core_gpt_dataset_config_from_args(args):
         tokenizer=tokenizer,
         create_attention_mask=args.create_attention_mask_in_dataloader,
     )
+    # --mid-level-dataset-surplus (기본 0.005) 를 config 로 전달. 멤버가 많은 블렌드는 top-level 크기가 Σceil(w×N) 으로
+    # 부풀어(51 멤버 valid 3,200 → 3,241) 기본 여유분을 넘긴다 — 2026-09-09 phase-3 스모크 IndexError. 인자·필드가 있는 버전에서만.
+    _surplus = getattr(args, "mid_level_dataset_surplus", None)
+    if _surplus is not None and "mid_level_dataset_surplus" in getattr(GPTDatasetConfig, "__dataclass_fields__", {}):
+        kwargs["mid_level_dataset_surplus"] = _surplus
     try:
         return GPTDatasetConfig(
             num_dataset_builder_threads=args.num_dataset_builder_threads,
@@ -176,6 +181,11 @@ def _build_progressive_blend_dataset(args, train_val_test_num_samples, dataset_m
         tokenizer=tokenizer,
         create_attention_mask=args.create_attention_mask_in_dataloader,
     )
+    # --mid-level-dataset-surplus (기본 0.005) 를 config 로 전달. 멤버가 많은 블렌드는 top-level 크기가 Σceil(w×N) 으로
+    # 부풀어(51 멤버 valid 3,200 → 3,241) 기본 여유분을 넘긴다 — 2026-09-09 phase-3 스모크 IndexError. 인자·필드가 있는 버전에서만.
+    _surplus = getattr(args, "mid_level_dataset_surplus", None)
+    if _surplus is not None and "mid_level_dataset_surplus" in getattr(GPTDatasetConfig, "__dataclass_fields__", {}):
+        kwargs["mid_level_dataset_surplus"] = _surplus
 
     def _make_config(data_path_list):
         kwargs = dict(common_kwargs)
