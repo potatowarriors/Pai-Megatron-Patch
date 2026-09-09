@@ -318,7 +318,9 @@ G-P6 기준선(HF 변환·T1·에이전틱·프로브·검색 게이트)은 sub1
 ### 11.7 주의·알려진 특성
 
 - chat_v2_off·swe_v2_openhands·swe_v1_r2e 는 reasoning 이 없어 `<think></think>` no-think 타깃으로 렌더된다(opencode 선례와 동일 판단).
-  agentic_v2_ia/tc 의 빈 think 턴 6.9%도 같다.
+  agentic_v2_ia/tc 의 빈 think 턴 6.9%도 같다. **규모(2026-09-09 실측)**: 도구 영역 학습 토큰 중 무사고 타깃이 phase-1 ≈35% → phase-2
+  **43.6%** → phase-3 22.9% (평가 하니스는 전부 thinking ON). 같은 검토에서 chat_v2_on 이 train_turns 부재로 히스토리 턴을 빈 think 로
+  학습하고 있었음(gradient 0.7%)·SWE-v3 도구 선언 부재·opencode 스키마 렌더 파손이 확인돼 phase-3 에서 교정 — `KNOWN_ISSUES.md` 2026-09-09.
 - finance_v1 은 trainable 4.9% — 예산 대비 신호가 작다. 0.1ep 는 도메인 노출 목적.
 - `identity_v2`·`opencode_fixed` 의 헤더 ep_p1 은 전 구간 환산 명목값이다(실제 편입은 iter 900 부터).
 - Agentic-v1 tool_calling 은 변환기가 `bool` 필드에서 크래시 — 제외했고 수정하지 않았다(편입 가치 낮음).

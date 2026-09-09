@@ -266,6 +266,12 @@ is_task_complete`)인데 학습 데이터는 Terminus-2 스키마다. 스키마�
 
 미공개: 과제 합성 프롬프트, 필터 임계값, 에피소드 분할 규칙, 터미널 RL 보상 정의, 교사 크기·PivotRL 하이퍼파라미터.
 
+### 2.10 SFT 데이터 일관성 검토 (2026-09-09) — 정본은 `KNOWN_ISSUES.md` 2026-09-09
+
+51 멤버의 원본 구조(400행/멤버)와 packed bins 토큰열(40문서/멤버)을 스캔했다. 결함 5건(SWE-v3 도구 선언 부재·opencode 스키마 렌더 파손·
+Chat-v2 on 히스토리 think 학습·identity fan-out 누락·agentless user 프롬프트 특수토큰)과 도구 영역 무사고 타깃 비중(p1 ≈35% → p2 43.6% →
+p3 22.9%)은 그 항목에, 교정 멤버 4종은 `convert_sft_128k_terminal_fix.sh`. 스캔 스크립트·산출물: `/home/work/vidsearch/tools/sft_consistency/`.
+
 ## 3. RL 자산
 
 ### 3.1 훈련 블렌드 3종 (즉시 실행 가능한 레시피 — NeMo Gym 소비 포맷)

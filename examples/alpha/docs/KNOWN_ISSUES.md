@@ -4,6 +4,67 @@
 CLAUDE.md의 "함정 표"는 이 문서의 한 줄 요약이며, 새 사고는 **여기에 서사를 쓰고 CLAUDE.md 표에는 한 줄만** 추가한다.
 날짜는 절대 표기. 두 스테이지 이상 지난 항목은 스테이지 경계에서 `archive/`로 이동.
 
+## SFT 데이터 일관성 검토 — chat template 기준 결함 5건·도구 영역 무사고 비중 (2026-09-09 🔶 phase-3 데이터 교정, 롤백 없음)
+
+**계기**: 사용자 요청으로 phase-2(진행 중)·phase-3(대기) 블렌드 51 멤버의 도구호출·추론 데이터 일관성을 검토했다. 방법은 둘:
+원본 400행/멤버(랜덤 시크 표본, SWE-v3 는 parquet 3파일 450행)의 구조 스캔 + packed bins 40문서/멤버의 실제 토큰열 스캔. 비율·게이트·마스킹은
+전부 설계대로였고(user/system 스팬 학습 토큰 0, 비표준 role 0, reasoning 은 전 셋 `reasoning_content` 필드라 `<think>\n…</think>` 렌더 균일),
+결함은 모두 **"렌더된 토큰열이 배포와 같은가"** 축에서 나왔다 — 09-01 opencode repr 결함과 같은 뿌리다.
+
+| # | 셋 | 실측 | 비중 p1 / p2 / p3 | 배포와의 차이 | 판정 |
+|---|---|---|---|---|---|
+| ① | swe_v3_keepthink | `tools` 컬럼 자체가 없음(행 키 = messages·uuid·license). 전수 237,970행 중 232,057행(97.5%)이 구조화 tool_call 을 쓰고 도구명 64종. system·첫 user 어디에도 정의 없음 | 18.7 / 2.8 / 14.2 % | 배포(mini-swe-agent·OpenHands·TB-2)는 API 로 tools 를 선언 → `# Tools` 블록이 항상 있음. 학습은 "선언 없이 호출" | **높음** |
+| ② | opencode_fixed | 도구 스키마 키가 `id`/`inputSchema.jsonSchema`(MCP 형) → 템플릿이 `<name></name>`·`<parameters>\n</parameters>` 빈값으로 렌더, 스키마는 `<inputSchema>` JSON 덤프. `render_check` 는 `<tool_response>` 만 봐서 미검출 | 4.3 / 0.6 / 2.5 % | 배포 tools 블록은 name·parameters 가 채워짐 | **높음** |
+| ③ | chat_v2_on | metadata 에 train_turns 없음 → 전 턴 학습. 멀티 user 행 25.5%, 이전 assistant 턴이 `<think></think>` 로 렌더된 채 **학습 타깃**(학습 턴의 21.7%, reasoning 22.7% 소실) = 08-24 IF 결함 재발. `--fanout-train-turns` 는 train_turns 리스트가 있을 때만 전개하므로 플래그로도 안 잡힘 | — / 5.0 / 1.0 % | 무사고 오신호 | 중간 (phase-2 88% 소비 시점 발견) |
+| ④ | identity_v2 | multi-True train_turns 23.8% 인데 `--fanout-train-turns` 미적용 (`INTERLEAVED_THINKING.md` §7 규칙 1 위반) | 0.4 % (누적 19.8 ep) | 〃 | 낮음~중간 |
+| ⑤ | swe_v2_agentless | user 프롬프트 43% 행에 리터럴 `<think>`/`</think>`("reasoning 을 <think> 블록에") → user 스팬 안에 특수토큰 14/15 (bins 697 표본 중 297건). injection 가드는 im_start/im_end/eod 만 | — / 2.9 / 1.3 % | 비학습 스팬이라 loss 오염 없음. 서빙(vLLM)도 같은 토큰화라 분포는 일치 — 구조 토큰 누출로 기록만 | 낮음 |
+| ⑥ | ml_ultra-v3_code_ja | Terminus **v1** 스키마 행 2.5%(`state_analysis`…, system 이 user 턴에, reasoning 0) | 0.02 % | phase-3 Terminus-2 와 상이 | 무시 |
+
+도구 영역 추론 일관성(설계상 수용됐으나 규모가 문서에 없던 것):
+
+| 항목 | 실측 |
+|---|---|
+| 도구 영역 학습 토큰 중 `<think></think>` 타깃 비중 | p1 ≈35% → **p2 43.6%** → p3 22.9% (평가 하니스는 전부 thinking ON) |
+| 100% 무사고 셋 | swe_v1_r2e·swe_v2_openhands·opencode (p2 도구 영역 학습 토큰의 38.4%); 부분 무사고 swe_v3 38.5%·terminus_keephist 50.2%·cuda 64.4% |
+| agentic_v2_ia 사용자 경계 reasoning 보존 학습 행 | 75%. TB-2·search 하니스는 재전달하나 채팅 서빙(`--reasoning-parser`)은 분리 후 미재전송 — DSV4 결정의 알려진 한계 |
+| tool_call 인자 non-string 값 | agentic_v2_tc 28.5% 호출(bool 81·int 162·list 61) — 템플릿이 bool 을 Python `True/False` 로 렌더(upstream 동일). 서빙 파서 복원 미검증 |
+| `</think>` 뒤 공백 | swe_v3 22% 만 `</think>\n\n답`, 나머지 `</think>답`; reasoning 끝 개행은 agentless 100%·swe_v3 72%·arc 50% vs 나머지 0 |
+| phase-3 Terminus 이중 렌더 | 같은 3.5k 대화가 swe_v3_keepthink(제거 렌더 3.4M tok)·terminus_keephist(보존 122M tok)에 공존 — 무시 가능. phase-1 은 122M 전량을 제거 렌더로 1ep 학습 |
+
+**판정 — 롤백 없음, phase-3 데이터 교정(사용자 결정 2026-09-09)**: ①②는 비학습 스팬(context)의 결함이라 학습된 트라젝토리 자체는 옳고,
+빠진 것은 "선언된 tools 블록을 보고 호출하는" 조건부뿐이다 → 교정 데이터로 이어서 학습하면 붙는다. 롤백하려면 SWE-v3 가 iter 0 부터 든
+phase-1 시작점(LC-B)까지 12일을 버려야 한다. ③은 phase-2 gradient 의 0.7%(5.0% × 14.4%)가 무사고 오신호였고 LR 은 1e-5→1.5e-6 구간이라
+정상 데이터 리플레이로 되돌릴 수 있는 규모. phase-3 iteration 은 늘리지 않고(설계 비율 유지, 90 iters) TB-2·SWE-bench before/after 로 회귀가
+보이면 phase-3b(swe_v3 교정본 ≈0.3ep ≈140 iters ≈12h)를 붙인다.
+
+**교정(커밋 5cd4392, `convert_sft_128k_terminal_fix.sh` → P3 트리 실제 디렉터리 4종, 구 멤버 symlink 보존)**
+
+| 결함 | 조치 | 교정 멤버 |
+|---|---|---|
+| ① | `build_swe_v3_tools_sidecar.py`: 전수 스캔(19 패밀리 = system 앞 200자 md5). 실제 하니스 6 패밀리(OpenHands 85.7k·SWE-agent 47.6k·mini-swe-agent 20.1k·opencode 16.1k·Codex 2.9k)는 도구 집합이 고정 → **합집합 선언**, 합성 11 패밀리(≈50k)는 같은 프롬프트 아래 행마다 별칭(bash_exec/run_bash/shell…)이 바뀜 → **호출된 별칭만 선언**. 스키마는 인자 서명으로 클래스 판정(18종)하고 설명문은 SWE-v2(OpenHands 4종)·OpenCode-v1(opencode 10종) 실제 스키마에서. 64 도구명 전부 판정, 표본 2,000행 미선언 0. 변환기 `--tools-sidecar` 가 주입(호출 없는 Terminus 행 불변) | swe_v3_tools_keepthink |
+| ② | `normalize_tool_schema`: MCP 형·Anthropic 형을 name/parameters 로(정상 형태는 객체 동일 → 기존 셋 렌더 불변). `render_check` 에 `<tools>` 검사(선언 없는 tool_call·빈 name·빈 parameters) | opencode_tools |
+| ③ | `--fanout-implicit-turns`: train_turns 없는 **일반** 시나리오 ∧ user ≥2 ∧ 마지막 user 이전 assistant 에 reasoning → 전 턴 True 로 전개(tool 시나리오는 템플릿이 보존하므로 제외, no-think 셋은 loss 등가라 제외) | chat_v2_on_fanout |
+| ④ | `--fanout-train-turns` 적용 | identity_v2_fanout |
+| ⑤ | `count_special_literals` 로 stats 집계(`special_literals`), 드롭은 `--drop-special-literals` 옵션 — 드롭하면 agentless 43% 를 잃고 서빙 토큰화와도 어긋나므로 기본은 기록만 | (재변환 없음) |
+
+**산출물·게이트 (2026-09-09 14:52~15:14 KST sub1 160 core, `sft_packed_128k_terminal_pad16/`)**
+
+| 멤버 | rows → samples | bins | real / trainable (M) | 구본 대비 | 게이트 |
+|---|---|---|---|---|---|
+| swe_v3_tools_keepthink | 237,970 → 236,600 (too_long 1,369, 구본 1,193 — tools 블록 ≈2.5k tok 만큼 길어짐) | 77,416 | 10,102 / 2,761 | real +5.1%, 주입 232,025행(합집합 172,355·호출별 59,670), 합성 폴백 0 | verify PASS · render 클린 · bins 60문서 tool_call 샘플 173 중 미선언 0 · 학습 토큰 think 66.2% |
+| opencode_tools | 460,254 → 460,254 | 53,638 | 6,939 / 1,206 | 스키마 정규화 2.3M건, `<tools>` 빈 name/parameters 0 | verify PASS · render 클린 |
+| chat_v2_on_fanout | 929,237 → 1,199,847 (implicit fan-out 행 ≈25%) | 21,252 | 2,776 / 2,115 | real +32%, 학습 토큰 think 비율 85.6% → **100%** | verify PASS · render 클린 |
+| identity_v2_fanout | 86,640 → 107,076 | 133 | 16.5 / 8.7 | fan-out 행 23% | verify PASS · render 클린 |
+
+블렌드 `sft_128k_terminal_blend_p3.yaml` 재생성(가중치 동일, 경로 4개만 교체, 90 iters 불변) → 런처 sanity 51 경로 OK → sub1 jit595 2-iter 스모크
+**PASS**(15:15~15:30 KST: loss 0.828→0.832, 321 s/iter·270 TFLOP/s, max-alloc 55.5 GB, 오류 0, 데이터 캐시 667 파일 선빌드 — 직전 스모크 0.832→0.831 과 동급).
+sub1 벤치 스위트(iter500 T1 48%)는 이 작업을 위해 중단됐다(사용자 결정, 벤치 세션이 TRACKING.md 에 기록).
+
+**왜 못 잡았나**: `verify_sft_bins` 는 EOD·%16·리터럴 special-token 만, `render_check` 는 `<tool_response>` 블록만 봤다. "tools 선언이 있는가·
+name/parameters 가 채워졌는가"는 어느 게이트도 묻지 않았고, fan-out 규칙은 `train_turns` 리스트의 존재를 전제했다.
+**규칙(`INTERLEAVED_THINKING.md` §7 규칙 1·9·10 갱신)**: 새 셋은 `<tools>` 블록까지 눈으로 보고, tool_call 이 있는데 tools 가 없으면 사이드카로
+선언을 복원하며, train_turns 가 없어도 멀티 user + reasoning 이면 `--fanout-implicit-turns` 다.
+
 ## OpenWebUI 0.11 이 UI 발 요청마다 내장 도구 25종을 주입 — 채팅 응답 이상 (2026-09-09 ✅, LibreChat 으로 교체)
 
 - **증상**: 한국어 질문에 영어 답변("I'm your AI assistant. I can … create notes, set up automations"), 빈 답변, 존재하지 않는 도구 호출

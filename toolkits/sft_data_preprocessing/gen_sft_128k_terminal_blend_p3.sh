@@ -7,6 +7,8 @@
 #     swe_v3_terminus_keephist  — SWE-v3 의 Terminus 행 3.5k 을 보존 렌더로 재변환한 멤버 (기존 swe_v3_keepthink 와 중복 — 그쪽은 scale 로 축소) ep=SWE_EP (기본 1.0)
 #   리플레이 80% = terminal_p3_replay_shares.tsv (phase-1+2 누적 소비 분포 기준, 사용자 결정 2026-09-09), 신규 20% → --solve-iters 로 예산을 푼다.
 # 전제: P3 트리에 두 멤버의 bins 와 data.stats.json 이 있어야 한다 (assemble_dataset.sh, extract_swe_v3_terminus.py + build).
+#   2026-09-09 교정(docs/KNOWN_ISSUES.md 09-09): 결함 멤버 4종을 교정 변환본으로 교체(--map, convert_sft_128k_terminal_fix.sh 산출) —
+#   swe_v3_tools_keepthink(도구 선언 주입)·opencode_tools(스키마 정규화)·chat_v2_on_fanout·identity_v2_fanout. 비중은 tsv 그대로.
 # 사용: TERM_EP=4.0 SWE_EP=1.0 bash gen_sft_128k_terminal_blend_p3.sh   (리플레이 80% = tsv 합, 신규 20%)
 set -euo pipefail
 REPO=$(cd "$(dirname "$0")/../.." && pwd)
@@ -14,7 +16,7 @@ P2=/home/work/Datasets/LL_preprocessed/v5/sft_packed_128k_mixed_p2_pad16
 P3=/home/work/Datasets/LL_preprocessed/v5/sft_packed_128k_terminal_pad16
 OUT=${OUT:-$REPO/examples/alpha/configs/data/sft_128k_terminal_blend_p3.yaml}
 TERM_EP=${TERM_EP:-4.0}; SWE_EP=${SWE_EP:-1.0}
-for m in terminal_terminus2_synth swe_v3_terminus_keephist; do
+for m in terminal_terminus2_synth swe_v3_terminus_keephist swe_v3_tools_keepthink opencode_tools chat_v2_on_fanout identity_v2_fanout; do
   [ -f "$P3/$m/data.stats.json" ] || { echo "❌ $P3/$m/data.stats.json 없음 — 먼저 bins 를 만들 것"; exit 1; }
 done
 # 리플레이 비중은 terminal_p3_replay_shares.tsv (49종, 합 0.80) — phase-1+2 누적 소비 분포 기준 (README §P4)
@@ -24,6 +26,8 @@ echo "replay members: ${#SHARE[@]}"
 python3 "$REPO/toolkits/sft_data_preprocessing/gen_phase2_blend.py" \
   --phase1-yaml "$REPO/examples/alpha/configs/data/sft_128k_mixed_blend_p2.yaml" \
   --phase1-tree "$P2" --tree "$P3" --solve-iters \
+  --map swe_v3_keepthink=swe_v3_tools_keepthink opencode_fixed=opencode_tools \
+        chat_v2_on=chat_v2_on_fanout identity_v2=identity_v2_fanout \
   --add terminal_terminus2_synth swe_v3_terminus_keephist \
   --ep terminal_terminus2_synth=$TERM_EP swe_v3_terminus_keephist=$SWE_EP \
   --share "${SHARE[@]}" \

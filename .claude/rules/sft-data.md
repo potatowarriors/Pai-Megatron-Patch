@@ -18,5 +18,8 @@ paths:
   입력을 늘려 회피.
 - 한국어 합성 트랙(`examples/alpha/sdg/ko_chat/`)의 함정 5건은 그 README에 있다.
 - 블렌드 예산·epoch 원칙: SWE 1-pass 앵커, chat E_max 4~5. 근거는 `SFT_RL_DATASETS.md`.
+- 새 셋은 `render_check.py` 로 `<tool_response>` 와 **`<tools>` 선언부**를 본다. tool_call 이 있는데 tools 가 없으면 사이드카로
+  선언을 복원(`--tools-sidecar`), 도구 스키마가 MCP 형이면 `normalize_tool_schema` 가 정규화한다. `train_turns` 없는 멀티 user
+  reasoning 셋은 `--fanout-implicit-turns`. 근거·실측은 `docs/KNOWN_ISSUES.md` 2026-09-09.
 - effort 마커 `{reasoning effort: efficient}` 는 데이터에 없고 렌더 플래그(`--medium-effort`)로 붙는다.
   IF split 은 항상 이 플래그로 변환. 근거·RL `effort_levels` 요건은 `SFT_RL_DATASETS.md` §2.6.

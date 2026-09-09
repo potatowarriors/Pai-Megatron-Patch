@@ -198,6 +198,8 @@ bash sdg/terminal/serve/glm_tunnel.sh start && bash sdg/terminal/serve/glm_tunne
 - 게이트: 2-iter 스모크(G-P5 상당) → 첫 iteration 게이트 → TB-2 before/after(Terminus-2 `interleaved_thinking=true`, 89과제×8) · LogicKor·IFEval·정체성 프로브 무회귀.
   형식 준수율 개선 +15pp 미만이면 LR 재검토.
 - 실행: `cd examples/alpha && bash train.sh baseline_48L sft_128k_terminal_p3 sft_128k_terminal_blend_p3` (phase-2 완주 09-09 ≈21:00 KST 이후, load = phase-2 ckpt).
+- **2026-09-09 데이터 교정(`docs/KNOWN_ISSUES.md` 09-09)**: 리플레이 멤버 4종을 교정본으로 교체 — swe_v3_keepthink→swe_v3_tools_keepthink(도구 선언 주입),
+  opencode_fixed→opencode_tools(스키마 정규화), chat_v2_on→chat_v2_on_fanout, identity_v2→identity_v2_fanout. 비중·iters 불변(90), 블렌드 재생성.
 
 ### P4 사전 게이트 — sub1 2-iter 스모크 PASS, 자동 런처 대기 (2026-09-09 12:00 ~ 12:38 KST)
 

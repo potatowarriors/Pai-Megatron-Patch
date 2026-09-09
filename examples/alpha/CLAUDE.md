@@ -166,6 +166,7 @@ submodule `tests/unit_tests/test_step_batch_size_schedule.py`, `test_muon_optimi
 
 | 날짜 | 증상 | 원인 → 대응 |
 |---|---|---|
+| 09-09 | SFT 데이터 일관성 검토: SWE-v3 는 `tools` 컬럼이 없어 232k 행이 도구 선언 없이 `<tool_call>`(phase-1 18.7%) · opencode 스키마가 MCP 형이라 `<name></name>`·`<parameters>` 빈값 렌더 · Chat-v2 on 은 train_turns 부재로 히스토리 턴을 빈 `<think></think>` 로 학습(IF 결함 재발) · identity_v2 fan-out 누락 · agentless user 프롬프트에 `<think>` 특수토큰 43% · 도구 영역 학습 토큰의 무사고 타깃 43.6%(p2) | 비학습 스팬 결함이라 **롤백 없이 phase-3 데이터 교정**(사용자): `normalize_tool_schema`·`--tools-sidecar`(하니스별 선언 복원)·`--fanout-implicit-turns`·`render_check` `<tools>` 검사. 게이트가 "tools 선언·name/parameters" 를 묻지 않았고 fan-out 은 train_turns 리스트를 전제했다. `KNOWN_ISSUES` 09-09, `INTERLEAVED_THINKING` §7 규칙 1·9·10 |
 | 09-09 | phase-3 프리셋 기동 실패 2건 — `micro_batch_size None` · valid 블렌드 `IndexError`(436 요청 > 434 보유). sub1 사전 스모크가 검출 | ① 차이 키만 담은 프리셋(평면 YAML, 상속 없음) → 전체 복제 후 diff ② 51 멤버 valid 크기가 Σceil(w×N) 로 +1.3% 부풀어 버퍼 여유 0.5% 초과 + `--mid-level-dataset-surplus` 가 데이터 제공자에서 미배관 → 배관 + 0.05. **자동 런처 전 2-iter 스모크 생략 금지**. `KNOWN_ISSUES` 09-09 |
 | 09-09 | 채팅 UI 응답 이상 (영어 답변·빈 답변·유령 도구 호출) | OpenWebUI 0.11 이 UI 발 요청마다 내장 도구 25종을 주입 → 템플릿 tool 분기, 프롬프트 17→5,440 토큰. **LibreChat(MIT) 교체** + `smoke_chat.sh` §6 프롬프트 토큰 게이트(실측 17). `KNOWN_ISSUES` 09-09 |
 | 09-08 | sc_b1 검증 중 gpu06 여유 2.1 TB → 519 MB (20분) | 교사가 쓴 setup.sh 가 `fallocate -l $(df 기반)` 으로 2.36 TB 파일 생성 — 이미지 빌드에는 storage 상한 없음. 빌드 kill·prune 으로 회수, 생성기 DISK_DANGER 금지 + `precheck_setup.sh`(tmpfs/fsize/timeout 샌드박스) 를 validate 전 필수로. `KNOWN_ISSUES` 09-08 |

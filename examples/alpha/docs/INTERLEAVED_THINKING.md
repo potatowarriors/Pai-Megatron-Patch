@@ -125,7 +125,7 @@ keepthink 렌더 + agentic 카테고리 5% 내부 재비례가 경로).
 | 계층 | 정본 | 비고 |
 |---|---|---|
 | 템플릿 | `examples/alpha/tokenizer_v5/chat_template.jinja` (+config json 동기화) | 분기 주석 상단 |
-| 변환기 | `build_alpha_sft_idxmap.py` (`--fanout-train-turns`, `--medium-effort`, `--truncate-reasoning-budget`) | docstring 의도적 차이 #2, §Effort/Budget |
+| 변환기 | `build_alpha_sft_idxmap.py` (`--fanout-train-turns`, `--fanout-implicit-turns`, `--medium-effort`, `--truncate-reasoning-budget`, `--keep-history-think`, `--tools-sidecar`, `--drop-special-literals`) | docstring 의도적 차이 #2, §Effort/Budget; 2026-09-09 추가분은 `KNOWN_ISSUES.md` 09-09 |
 | bins 64k | `sft_packed_64k_pad16/{chat_v3_if_fanout_me, budget_trunc_v1_{if,math}, swe_v3_keepthink, arc_agi_v1_keepthink}` | 구 디렉토리 보존. `_me`·`budget_trunc` 변환 완료 (2026-08-25) |
 | bins 128k | `sft_packed_128k_pad16/{swe_v3_keepthink, arc_agi_v1_keepthink}` | 〃 |
 | 블렌드 | `configs/data/sft_40b_blend.yaml`, `sft_128k_blend.yaml` | 헤더에 재산출 근거 |
@@ -137,6 +137,9 @@ keepthink 렌더 + agentic 카테고리 5% 내부 재비례가 경로).
 1. **새 SFT 셋 추가 시**: tool 흔적이 있으면 새 템플릿이 자동으로 보존 렌더 —
    별도 조치 불요. `train_turns` multi-True가 있으면 `--fanout-train-turns` 필수
    (전수 스캔으로 확인 — 파일 앞 30k행은 last-only라 샘플 검사가 오판함, §2.5).
+   **`train_turns` 가 없는 셋(전 턴 학습)도 같다** — 일반 시나리오에 멀티 user 행이 있고 이전 턴에 reasoning 이 있으면
+   `--fanout-implicit-turns`(2026-09-09; Chat-v2 reasoning_on 25.5% 가 빈 `<think></think>` 를 학습하고 있었다,
+   `KNOWN_ISSUES.md` 09-09 ③). 판정식은 변환기 `needs_implicit_fanout`.
 2. **템플릿 수정 시**: `tokenizer_config.json` 동기화 + verify 34종 통과 필수.
    비-tool 렌더를 바꾸는 수정은 기존 bins 전체를 무효화하므로 각별 주의.
 3. **64k/128k 버킷은 항상 같은 템플릿 세대로 쌍 변환** (§4 여집합 규칙).
@@ -152,10 +155,14 @@ keepthink 렌더 + agentic 카테고리 5% 내부 재비례가 경로).
    생성분)은 항상 `--medium-effort` 로 변환. 같은 원본을 번역한 셋(ko_chat IF 트랙)도
    동일 적용. 절단-예산 셋은 `--truncate-reasoning-budget` 전용(두 플래그 배타).
    근거·RL 측 요건은 `SFT_RL_DATASETS.md` §2.6.
-9. **새 셋은 렌더 1건을 눈으로 본다 — 특히 `<tool_response>`.** 비율·epoch·게이트가 맞아도 토큰열이 배포와 다를 수
+9. **새 셋은 렌더 1건을 눈으로 본다 — `<tool_response>` 와 `<tools>` 둘 다.** 비율·epoch·게이트가 맞아도 토큰열이 배포와 다를 수
    있다. tool content 가 str 이 아니면(list/dict) 템플릿이 str() 로 뭉개므로 `normalize_row` 에서 평문화하고,
    `apply_chat_template` 출력에서 tool_response 한 건을 육안 확인해 stats 옆에 기록한다. 선례: opencode_v1 Python repr
-   렌더(`KNOWN_ISSUES.md` 2026-09-01 ①).
+   렌더(`KNOWN_ISSUES.md` 2026-09-01 ①). `<tools>` 선언부는 name·parameters 가 채워졌는지 본다 — 도구 스키마가 MCP 형
+   (`id`/`inputSchema`)이면 템플릿이 빈값으로 렌더했다(〃 2026-09-09 ②; `normalize_tool_schema` 가 정규화, `render_check` 가 자동 플래그).
+10. **tool_call 이 있는데 `tools` 가 없는 셋은 선언을 복원해서 넣는다.** 배포는 항상 tools 를 선언하므로 "선언 없이 호출"은
+   존재하지 않는 조건부다. SWE-v3(232k 행)가 그랬다 — `build_swe_v3_tools_sidecar.py` 로 하니스별 스키마를 복원하고
+   변환기 `--tools-sidecar` 로 주입(`KNOWN_ISSUES.md` 2026-09-09 ①). 새 셋은 `render_check` 의 `undeclared_tool_call` 플래그로 잡힌다.
 
 ## 8. 검증 명령
 

@@ -1,13 +1,14 @@
 # phase-3(터미널 보정) 리플레이 비중 — 스테이지 예산의 80% (합 0.800). 근거: examples/alpha/sdg/terminal/README.md §P4
 # 기준 = phase-1+2 누적 소비 분포(union) → 조정: cp 축소(합성 코드와 동일 원천), SWE·에이전틱 이웃 ×2, 정체성·안전·한국어·IF 는 게이트 바닥 유지
+# 2026-09-09: swe_v3_keepthink→swe_v3_tools_keepthink(도구 선언 주입)·opencode_fixed→opencode_tools(스키마 정규화)·chat_v2_on→chat_v2_on_fanout·identity_v2→identity_v2_fanout — gen 스크립트 --map 과 쌍
 # member	share	group	note
 cp_v2	0.147	code	union 22.2% → 합성 코드(OpenCodeReasoning 동일 원천)와 중복이라 축소
-swe_v3_keepthink	0.1418	swe	union 16.4%; tool 시나리오 think 보존 규약의 최대 원천 (Terminus 행은 별도 keephist 멤버)
+swe_v3_tools_keepthink	0.1418	swe	union 16.4%; tool 시나리오 think 보존 규약의 최대 원천 (Terminus 행은 별도 keephist 멤버) — 2026-09-09 교정본(KNOWN_ISSUES 09-09)으로 교체, 비중 불변
 math_v4	0.080	math	union 10.5%
 science_v2	0.070	science	union 10.1%
 chat_v3_chat	0.050	chat	union 7.3%
 chat_v3_if_fanout_me	0.035	if	union 4.0%, IFEval 게이트
-opencode_fixed	0.025	code	union 3.8%, bash 도구 코딩 조수
+opencode_tools	0.025	code	union 3.8%, bash 도구 코딩 조수 — 2026-09-09 교정본(KNOWN_ISSUES 09-09)으로 교체, 비중 불변
 arc_agi_v1_keepthink	0.020	reasoning	union 3.0%
 kochat_chat_t2	0.022	korean	union 2.6%, 사용자 우선순위 유지
 kochat_if_fanout_me_t2	0.021	korean	union 2.5%
@@ -22,11 +23,11 @@ swe_v2_agentless	0.013	swe	union 0.8% ×1.7
 agentic_v2_ia	0.012	agentic	union 0.6% ×1.9 — 멀티턴 도구 세션
 agentic_v2_tc	0.010	agentic	union 0.6% ×1.6
 agentic_v2_search	0.008	agentic	union 0.4% ×1.8 — 검색 게이트
-chat_v2_on	0.010	chat	union 1.0%
+chat_v2_on_fanout	0.010	chat	union 1.0% — 2026-09-09 교정본(KNOWN_ISSUES 09-09)으로 교체, 비중 불변
 chat_v2_off	0.007	chat	union 0.7%
 budget_trunc_v1_if	0.004	if	union 0.5%
 budget_trunc_v1_math	0.004	math	union 0.4%
-identity_v2	0.005	identity	정체성 프로브 게이트 바닥 (phase-2 0.43%)
+identity_v2_fanout	0.005	identity	정체성 프로브 게이트 바닥 (phase-2 0.43%) — 2026-09-09 교정본(KNOWN_ISSUES 09-09)으로 교체, 비중 불변
 safety_v2	0.003	safety	안전 상한·바닥 유지
 cuda_v1	0.0005	code	union 0.01%
 ml_ultra-v3_math_ja_translated_final	0.00125	ml	24종 합 3.0% (union ≈3%)
