@@ -136,5 +136,6 @@ pkill -TERM -f "alpha_serve_venv/bin/vllm"      # GPU 메모리 회수 확인은
 | 채팅 POST 응답에 본문이 없음 | 재개 가능 스트림: POST 는 `streamId` 만 반환 | 이벤트는 `GET /api/agents/chat/stream/{streamId}` (SSE, `final` 후 닫힘) |
 | 긴 스크립트가 도중 `401` | 액세스 토큰 15분 만료 | 재로그인 |
 | 브라우저 회원가입 무응답 (로그에 register 요청 자체가 없음) | 요청이 서버에 미도달 — 앱 프록시 경로 의심 | SSH 터널로 접속. 계정은 `npm run create-user` 로 생성 |
+| `npm run reset-password` 가 멈춤 | readline 대화형 스크립트 — 인자를 줘도 확인 입력을 기다린다 | 비대화 재설정은 `bcryptjs` 해시(salt 10)를 `users.password` 에 직접 기록 (2026-09-09 실측, 로그인 확인) |
 | 스모크 계정이 ADMIN | LibreChat 은 첫 가입자를 ADMIN 으로 승격 | `users` 컬렉션 role 을 직접 교정 (admin@alpha.local=ADMIN, smoke=USER) |
 | 첫 턴 "안녕?" 에 영어 답변 | 프레임워크 아님 — tools 없는 vLLM 직접 호출도 4샘플 중 1건 영어 | 모델(SFT 진행 중) 문제로 기록 |
