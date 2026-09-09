@@ -15,6 +15,7 @@ phase-2 신규 23셋에는 0이다. Ultra 는 Harbor + Terminus-2 안에서 Deep
 |---|---|
 | 교사 | **GLM-5.3-Flash** (321B 총량 / 18B 활성, FP8 305.8 GiB, MIT, TB 2.1 공개 84.3). 사용자 제공 vLLM 레시피의 플래그 승계 |
 | 규모·투입 방식 | P1 파일럿의 **처리량 실측 후** 결정 |
+| **공개 코퍼스 채택 (2026-09-10)** | NVIDIA 가 `nvidia/Nemotron-Terminal-Corpus`(366,154행, 8.2 GB, cc-by-4.0, TB 2.0 대상, arXiv 2602.21193)를 Post-Training-v3 컬렉션 밖에 별도 공개 — Ultra 의 ~370K 와 규모 일치. **직접 합성을 중단하고 공개 코퍼스를 B안 블렌드의 터미널 멤버로 채택**. 다운로드·렌더 스키마 검증(§2.9 규칙 9)은 phase-2 세션 담당. 이미 만든 `alpha-SFT-Terminal-v1`·`swe_v3_terminus_keephist` 는 폐기하지 않고 대조·보강용으로 보존 — 공개 코퍼스가 Terminus-2 스키마인지 검증 후 채택 또는 부족분 보강으로 확정. §5 마지막 절 |
 | think 렌더 | **보존 렌더** — Terminus 행의 모든 assistant 턴에 reasoning 을 남긴다 (DeepSeek V4·GLM-5.3 방식). 합성 데이터와 SWE-v3 Terminus 3.5k행을 같은 규약으로 변환. 템플릿은 불변, 변환기 명시 kwarg(`--keep-history-think`)로 렌더하고 평가 하니스는 reasoning 재전달(`interleaved_thinking=true` + `chat_template_kwargs`)로 학습 조건과 맞춘다. 근거는 §1.1 |
 
 ### 1.1 think 렌더 결정의 근거
@@ -235,3 +236,17 @@ bash sdg/terminal/serve/glm_tunnel.sh start && bash sdg/terminal/serve/glm_tunne
   다르다(도구 선언 없음). 4 epoch 근거는 §P4 표. 멤버 50+ 블렌드는 `mid-level-dataset-surplus: 0.05` 가 필요하다(위 사전 게이트 2차).
 - main1 GPU 는 회수돼 한국어 chat 재합성에 쓰인다. TB-2 before/after 는 B안 phase-2 완주 후로 이월. `scripts/launch_p3_after_phase2.sh` 는
   첫 iteration 게이트 후 exit 0 으로 끝나 재발동하지 않는다.
+
+### 트랙 전환 — 공개 코퍼스 채택, 합성 중단 (2026-09-10 00:30 KST, 사용자 결정)
+
+- NVIDIA 공개 릴리스 `nvidia/Nemotron-Terminal-Corpus`(366,154행, 8.2 GB, cc-by-4.0) 및 형제 셋 `Nemotron-Terminal-Synthetic-Tasks`, RL 셋
+  `Nemotron-RL-Agentic-Terminal-Pivot-v1`; `Nemotron-Cascade-2-SFT-Data` 의 Terminal Agent 스플릿(~324k)에도 포함. §2.9 조사 당시 Post-Training-v3
+  컬렉션 밖이라 놓쳤다. 규모가 Ultra 기술보고서의 ~370K 와 일치한다.
+- **결정**: 직접 합성 중단(진행 중 작업 없음 — GLM 교사 서버·수집은 09-09 12:00 이전에 이미 종료). 공개 코퍼스를 B안 블렌드의 터미널 멤버로 채택.
+  다운로드(`/home/work/Datasets/LL_datasets/posttraining/SFT/Nemotron-Terminal-Corpus`)와 tokenizer_v5 렌더 스키마 검증은 phase-2 세션이 맡는다.
+- **보존**: `alpha-SFT-Terminal-v1`(8,596행)·bins `terminal_terminus2_synth`·`swe_v3_terminus_keephist` 는 대조·보강용. 검증 결과에 따라
+  (a) 공개 코퍼스 단독 채택 또는 (b) 부족분(예: 한국어·수학 재포맷·특정 카테고리)만 우리 합성으로 보강.
+- 검증 시 대조 기준(이 트랙의 정본 스키마): Terminus-2 JSON 응답 `{analysis, plan, commands[{keystrokes,duration}], task_complete}`, 사용자 턴
+  `New Terminal Output:` 접두, 완료 재확인 핸드셰이크, system prompt(SWE-v3 Terminus 계열 md5 fa616539·2,836자), assistant 턴마다 `reasoning_content`,
+  tool-시나리오 아님(`tools` 없음) → 보존 렌더는 `--keep-history-think`. 품질 신호 7종(`convert/filter_rows.py`)·canary 제외·JSON 이스케이프 수리는 그대로 적용 가능.
+- 이 트랙의 파이프라인·도구·실측(P0~P4)은 공개 코퍼스가 부족할 때의 보강 경로로 유지한다. 스터디 문서 `study/terminal_sdg_study.md` 는 공부용으로 유효.
