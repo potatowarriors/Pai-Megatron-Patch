@@ -84,6 +84,14 @@ ENV
   cat "$SEC"
 } > "$LC_HOME/.env"
 
+# 4. 웹검색 키 — examples/alpha/.env(gitignored) 의 TAVILY_API_KEY 만 뽑아 넘긴다 (source 하지 않음: 다른 줄의 형식 오류에 안 걸리게)
+TAVILY_API_KEY="$(grep -m1 '^TAVILY_API_KEY=' "$HERE/../.env" 2>/dev/null | cut -d= -f2- | tr -d '"'"'"' \r')"
+if [ -n "$TAVILY_API_KEY" ]; then
+  echo "TAVILY_API_KEY=$TAVILY_API_KEY" >> "$LC_HOME/.env"
+else
+  echo "[librechat] 경고: TAVILY_API_KEY 없음 — 웹검색 토글이 비활성 (examples/alpha/.env 확인)"
+fi
+
 cd "$LC_HOME"
-echo "[librechat] port=$PORT vllm=$VLLM_URL home=$LC_HOME data=$LC_DATA"
+echo "[librechat] port=$PORT vllm=$VLLM_URL home=$LC_HOME data=$LC_DATA websearch=$([ -n "$TAVILY_API_KEY" ] && echo tavily || echo off)"
 exec env NODE_ENV=production node api/server/index.js

@@ -10,8 +10,12 @@
 #   - dropParams: 학습에 없는 샘플링 항목을 보내지 않는다. temperature/top_p 는 사용자가 건드리지
 #     않으면 아예 보내지 않으므로 vLLM 의 generation_config(1.0 / 0.95) 가 적용된다.
 #   - titleConvo: false — 제목 생성이 같은 모델에 영어 메타 프롬프트를 보내는 것을 막는다.
-#   - interface: 도구를 켤 수 있는 UI 를 모두 감춘다. 도구가 하나라도 붙으면 템플릿이 tool
-#     시나리오로 분기해 시스템 프롬프트에 도구 명세가 들어간다 (OpenWebUI 사고의 재발 방지).
+#   - interface: 웹검색 토글만 남기고 나머지 도구 UI(코드실행·파일검색·에이전트)는 감춘다. 도구는 대화별
+#     opt-in — 토글을 켜지 않은 대화는 도구 없이 렌더돼 프롬프트가 학습 렌더와 같다 (smoke §6 가 잠금).
+#     토글을 켜면 템플릿이 tool 시나리오로 분기해 `web_search` 명세가 시스템 프롬프트에 들어간다 (smoke §7).
+#   - webSearch: Tavily 하나로 검색·본문추출, 리랭커 없음. 학습 데이터의 검색 도구(`web-search(query)`)와
+#     벤치 하니스(eval_sft/search_agent_eval.py)가 모두 Tavily 라 결과 형식이 가장 가깝다. 키는 런처가
+#     examples/alpha/.env 의 TAVILY_API_KEY 를 .env 로 옮긴다 (2026-09-09).
 #   - baseURL 의 ${ALPHA_VLLM_URL} 은 런처가 .env 에 써 넣는다 (기본 http://localhost:8001/v1).
 #   - 컨텍스트 창: 미등록 모델명은 LibreChat 기본 32,000 토큰. vLLM 의 max_model_len 은 읽지 않는다.
 #     더 긴 창이 필요하면 UI 파라미터 패널의 Max Context Tokens 로 지정.
@@ -21,7 +25,7 @@ cache: true
 interface:
   customWelcome: 'alpha v2'
   fileSearch: false
-  webSearch: false
+  webSearch: true
   runCode: false
   modelSelect: true
   parameters: true
@@ -46,3 +50,11 @@ endpoints:
       customParams:
         reasoningKey: 'reasoning'
         includeReasoningHistory: true
+
+webSearch:
+  searchProvider: 'tavily'
+  scraperProvider: 'tavily'        # 스크레이퍼는 필수 카테고리 — Tavily extract 로 통일
+  rerankerType: 'none'
+  tavilyApiKey: '${TAVILY_API_KEY}'
+  safeSearch: 1
+  scraperTimeout: 10000

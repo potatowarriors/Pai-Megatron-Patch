@@ -82,10 +82,30 @@ UI 가 vLLM 에 보내는 본문은 `model` · `stream` · `messages` 뿐이다 
 | `customParams.includeReasoningHistory: true` | tool 호출 턴에만 reasoning 을 히스토리에 복원 — 템플릿의 DSV4 분기와 동일 규칙. 일반 대화의 think 는 버린다 |
 | `dropParams` | `stop`·`user`·penalty 를 보내지 않는다. temperature/top_p 는 사용자가 안 건드리면 아예 안 보내 vLLM `generation_config`(1.0/0.95) 적용 |
 | `titleConvo: false` | 제목 생성(영어 메타 프롬프트)을 같은 모델에 보내지 않는다 |
-| `interface.*: false` | 코드실행·웹검색·파일검색·에이전트 UI 를 감춘다. 도구가 하나라도 붙으면 템플릿이 tool 시나리오로 분기한다 |
+| `interface.*: false` | 코드실행·파일검색·에이전트 UI 를 감춘다. 도구가 하나라도 붙으면 템플릿이 tool 시나리오로 분기한다 |
+| `interface.webSearch: true` + `webSearch:` | 웹검색 도구만 **대화별 opt-in** 으로 연다 (§5.1). 토글이 꺼진 대화는 위 규칙 그대로 도구 없이 렌더된다 |
 
 알아둘 것: 미등록 모델명의 컨텍스트 창은 LibreChat 기본 **32,000 토큰**이다 (vLLM 의 `max_model_len` 을 읽지 않는다).
-더 긴 대화가 필요하면 파라미터 패널의 Max Context Tokens 로 올린다.
+더 긴 대화가 필요하면 파라미터 패널의 Max Context Tokens 로 올린다. 웹검색은 도구 결과가 크므로(호출당 1~3만 자) 검색을
+많이 쓰는 대화는 이 값을 올리는 편이 안전하다.
+
+### 5.1 도구 (웹검색, 2026-09-09)
+
+alpha 의 도구 규약은 템플릿이 소유한다 — 도구 선언은 시스템 프롬프트의 `<tools>` XML, 호출은 `<tool_call><function=…>`,
+결과는 `<tool_response>` (`../docs/INTERLEAVED_THINKING.md` §4). LibreChat 은 OpenAI `tools` 필드로 선언하고 `role=tool` 로
+결과를 돌려주며, vLLM 의 `qwen3_xml` 파서가 모델의 XML 을 `tool_calls` 로 구조화한다. 그래서 LibreChat 쪽에서는 **도구를 붙이기만**
+하면 된다. 켠 것은 내장 웹검색 하나다:
+
+| 항목 | 값 | 이유 |
+|---|---|---|
+| 검색·본문추출 | Tavily (`searchProvider`·`scraperProvider`), 리랭커 없음 | 학습 데이터의 검색 도구 `web-search(query)` 와 벤치 하니스(`eval_sft/search_agent_eval.py`)가 Tavily 라 결과 형식이 가장 가깝다. 스크레이퍼는 LibreChat 필수 카테고리 |
+| 키 | `examples/alpha/.env` 의 `TAVILY_API_KEY` | 런처가 그 줄만 뽑아 `.env` 로 옮긴다 (`source` 하지 않는다 — 파일의 다른 줄 형식 오류를 피함) |
+| 사용법 | 채팅 입력창의 **Web Search** 토글을 켠다 | 대화별 opt-in. 끄면 도구 없는 렌더 |
+| 모델이 보는 것 | 도구 `web_search(query, date, country, images, videos, news)` + LibreChat 의 인용 형식 지시문(영어) | 이름이 학습의 `web-search` 와 한 글자 다르고 결과가 가공 텍스트라 분포 차이는 있다. 실측으로는 호출·답변 정상 |
+
+실측 (`smoke_ui_gate.py` §7, 2026-09-09): "web_search 도구로 오늘 코스피 지수를 검색해서 알려줘" → `web_search` 2회 호출
+(`{"query":"KOSPI index today","date":"h"}`), 결과 28,500·18,068 자, 본문 467 자에 지수 7,075.74 와 출처. 프롬프트 증분 32,055 토큰
+(선언 + 결과 재투입 누적). 답변이 영어로 나온 것은 도구 지시문이 영어인 영향으로 보이며 모델 쪽 관찰 사항이다.
 
 ## 6. 검증
 
@@ -97,9 +117,10 @@ python3 eval_sft/check_gates.py --base-url http://localhost:8001/v1     # G3 (G2
 
 §6 UI 게이트(`smoke_ui_gate.py`)는 vLLM `/metrics` 의 `vllm:prompt_tokens_total` 을 요청 전후로 읽어 **UI 경유 프롬프트
 크기**를 잰다 (≤64 토큰, 학습 렌더 17). UI 가 무엇을 보내는지 UI 를 믿지 않고 서버 카운터로 확인하는 장치다.
+§7 은 같은 스크립트가 웹검색 토글을 켠 대화로 도구 경로 전체(선언 → XML 호출 구조화 → 실행 → 본문)를 확인한다.
 1인 사용 중에 돌린다 — 동시에 다른 대화가 있으면 증분이 오염된다. UI 없는 fleet 은 `LC_URL=none` 으로 명시 스킵.
 
-2026-09-09 실측 (8080 이관 직후): smoke vLLM **9/9 PASS** · UI 게이트 **7/7 PASS**, 프롬프트 증분 **17 토큰**.
+2026-09-09 실측 (8080 이관 직후): smoke vLLM **9/9 PASS** · UI 게이트 §6 **7/7** · §7 **8/8 PASS**, 일반 대화 프롬프트 증분 **17 토큰**.
 
 ## 7. 설치·재빌드 (컨테이너 재생성 등으로 설치본이 없을 때)
 
@@ -138,4 +159,5 @@ pkill -TERM -f "alpha_serve_venv/bin/vllm"      # GPU 메모리 회수 확인은
 | 브라우저 회원가입 무응답 (로그에 register 요청 자체가 없음) | 요청이 서버에 미도달 — 앱 프록시 경로 의심 | SSH 터널로 접속. 계정은 `npm run create-user` 로 생성 |
 | `npm run reset-password` 가 멈춤 | readline 대화형 스크립트 — 인자를 줘도 확인 입력을 기다린다 | 비대화 재설정은 `bcryptjs` 해시(salt 10)를 `users.password` 에 직접 기록 (2026-09-09 실측, 로그인 확인) |
 | 스모크 계정이 ADMIN | LibreChat 은 첫 가입자를 ADMIN 으로 승격 | `users` 컬렉션 role 을 직접 교정 (admin@alpha.local=ADMIN, smoke=USER) |
+| `/api/config` 에 `webSearch` 가 없음 | 비인증 응답은 도구 구성을 숨긴다 | 게이트는 로그인 토큰으로 다시 읽는다 |
 | 첫 턴 "안녕?" 에 영어 답변 | 프레임워크 아님 — tools 없는 vLLM 직접 호출도 4샘플 중 1건 영어 | 모델(SFT 진행 중) 문제로 기록 |
