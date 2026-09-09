@@ -250,3 +250,62 @@ bash sdg/terminal/serve/glm_tunnel.sh start && bash sdg/terminal/serve/glm_tunne
   `New Terminal Output:` 접두, 완료 재확인 핸드셰이크, system prompt(SWE-v3 Terminus 계열 md5 fa616539·2,836자), assistant 턴마다 `reasoning_content`,
   tool-시나리오 아님(`tools` 없음) → 보존 렌더는 `--keep-history-think`. 품질 신호 7종(`convert/filter_rows.py`)·canary 제외·JSON 이스케이프 수리는 그대로 적용 가능.
 - 이 트랙의 파이프라인·도구·실측(P0~P4)은 공개 코퍼스가 부족할 때의 보강 경로로 유지한다. 스터디 문서 `study/terminal_sdg_study.md` 는 공부용으로 유효.
+
+### 공개 코퍼스 검증·변환 — Nemotron-Terminal-Corpus 366k 행 전량 변환, 채택 판정 자료 (2026-09-10 01:00 ~ 03:30 KST)
+
+phase-2 세션의 1차 검증(133k 표본: 계열 md5 fa616539 100%, 인라인 `<think>` 99.8%, 교사 DeepSeek-V3.2, agent terminus-2)을 이어받아
+변환기·필터·bins 경로를 끝까지 확인하고 전량을 변환했다. 산출 `/home/work/Datasets/LL_datasets/posttraining/SFT/alpha-SFT-Terminal-NTC-v1/`
+(`ntc_v1.jsonl` 20.6 GB, `MANIFEST.json`, `filtered/`). 변환기 `convert/nemotron_terminal_to_rows.py`(c3bdeae), 필터 보정 1037783.
+
+**원본의 실체 (표본 20k 행, adapters)**
+- system 역할이 없고 첫 user 턴 = SWE-v3 Terminus 프롬프트 2,836자(`swe_v3_terminus_system_prompt.txt` 와 바이트 일치) + `\n\nTask Description:\n…`. → system 으로 분리.
+- assistant content = `<think>…</think>` + Terminus-2 JSON. → `reasoning_content` 로 분리(변환기 special-token 가드 정합).
+- **행의 64% 에 파싱 실패 턴**이 있다: think 만 있고 content 가 빈 턴(표본 22,265턴, 전부 중간 턴) 뒤에 harness 의
+  `Previous response had parsing errors: ERROR: No valid JSON found in response` 가 따라온다. 학습 목표로 두면 "사고만 하고 응답을 비우는" 행동을
+  가르치므로 **(무효 assistant, 파싱오류 user) 쌍을 잘라낸다(splice)** — 파싱 오류에서는 명령이 실행되지 않아 터미널 상태가 그대로라 대화가 일관된다.
+- 행의 8.6% 는 마지막 assistant 가 JSON `null`(에피소드 끊김) → 그 턴과 직전 user 턴 제거(`null_tail`).
+- `Previous response had warnings:`(유효 JSON + 개행 누락 경고)는 프로토콜의 일부라 보존.
+
+**전량 변환 결과 (`--keep-not-completed`, 18분, 12 워커)**
+
+| 분할 | 입력 | 출력 | 완료(task_complete) | 미완료(플래그) | 미완료% | 턴/행 | splice/행 | null_tail |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|
+| adapters:code | 31,960 | 31,927 | 20,152 | 11,775 | 36.9% | 6.8 | 1.72 | 4,742 |
+| adapters:math | 162,692 | 162,662 | 147,533 | 15,129 | 9.3% | 6.5 | 1.17 | 4,300 |
+| adapters:swe | 31,661 | 31,421 | 28,885 | 2,536 | 8.1% | 13.6 | 0.59 | 103 |
+| synthetic:easy | 44,809 | 44,798 | 35,871 | 8,927 | 19.9% | 7.5 | 0.64 | 1,430 |
+| synthetic:medium | 89,343 | 89,216 | 22,541 | 66,675 | 74.7% | 7.6 | 0.37 | 6,462 |
+| synthetic:mixed | 5,689 | 5,681 | 739 | 4,942 | 87.0% | 5.8 | 0.26 | 518 |
+| **합계** | **366,154** | **365,705** | **255,721** | **109,984** | 30.1% | 7.5 | 0.90 | 17,555 |
+
+드롭 449 (json_invalid 314 · think_residual 126 · injection 6 · no_assistant 3). 사고 보유 턴 99.8%.
+미완료 행은 테스트는 통과했지만 완료 선언 전에 에피소드가 끝난 궤적(마지막 턴이 명령 2~6개, 턴 수 분포는 완료 행과 같음 → 상한 절단이 아니라
+시간 제한 추정). synthetic medium/mixed 는 대부분이 미완료라, 완료 행만 쓰면 NVIDIA 가 가장 큰 향상을 보고한 범주(data querying·debugging 등)를 잃는다.
+
+**품질 필터 보정** (`filter_rows.py`, 1037783): 그대로 적용하면 표본 통과율 70% — `repeat_loop` 21% 는 DeepSeek 에이전트가 턴마다 앞세우는
+`cd /app` 과 `df -h`·`cat patch`·`sleep 2` 같은 비연속 반복 점검이었고(연속 ≥4 는 4행), `no_edit` 5% 는 의존성·질의형 synthetic 과제(파일 쓰기 없음).
+→ repeat_loop 는 **연속** 횟수(cd/ls/pwd/clear 제외), no_edit 는 코드·SWE 과제만, dup_task 는 분할별 키. 통과율 98.8%(8,602→8,503). 자체 합성 행은
+8,596→8,611 로 5행 차이(기조립 셋 불변).
+
+**렌더·bins 검증 (시험 7,732행)**: `--keep-history-think` 로 859 bins, 실토큰 112.3M / 학습 61.6M, 드롭 0, `verify_sft_bins` PASS,
+`render_check` 3문서 `<think>` 전 턴(20/20·6/6·5/5) 봉투 흔적 없음.
+
+**3자 대조 (변환 표본 8,602행, 필터 전; `REFERENCE_STATS.md` 는 필터 후 20k 표본으로 갱신)**
+
+| 지표 | 합성 v1 | SWE-v3 Terminus | 공개 코퍼스(변환) |
+|---|---|---|---|
+| assistant 턴/행 median (p90 / max) | 5 (7 / 20) | 34 (66 / 232) | 7 (11 / 35) |
+| reasoning 보유 턴 | 99.99% | 39.2% | 99.7% |
+| reasoning 토큰/턴 median (p90) | 286 (1,839) | 44 (283) | 236 (1,088) |
+| 응답 토큰/턴 median · commands/턴 | 161 · 1.1 | 169 · 1.2 | 364 · 3.4 |
+| 행 토큰 median (p90 / max) · 128k 초과 | 5.1k (15k / 89k) · 0 | 30k (60k / 204k) · 7 | 13.8k (23k / 67k) · 0 |
+| system md5 | 7665e733 (Harbor) | fa616539 | fa616539 |
+
+**판정 자료 요약 (결정은 사용자)**
+- 규모: 완료 행만 255.7k ≈ 3.8B 토큰, 전량 365.7k ≈ 5.5B 토큰(행당 ≈15k 기준). 어느 쪽이든 블렌드에서는 부분 표본·ep≤1.
+- 원천 비율: math 162.7k(44%) vs code+swe+synthetic 203k. 사용자 결정 코드:수학 7:3 을 유지하려면 math 를 ≈87k 로 서브샘플.
+- **완료 행만 vs 전량**: 전량 권고 — 미완료 행도 매 턴이 유효한 행동(테스트 통과)이고 medium/mixed 범주가 여기 있다. 완료 핸드셰이크 예시는
+  완료 행 255.7k 로 충분. 미완료는 `metadata.completed=false`·`quality_flags=["not_completed"]` 로 표시돼 있어 서브셋은 필터 한 줄로 만든다.
+- **자체 합성 셋의 보강 역할**: system md5 가 다르다 — 공개 코퍼스는 fa616539, **TB-2 평가 harness(Harbor terminus-2)는 7665e733** 이고 우리
+  합성 8,596행이 그 프롬프트 계열의 유일한 데이터다. 평가 프롬프트 일치를 위해 합성 v1 을 소량 멤버로 병행하는 것이 안전하다(수학 om 2,556행 포함).
+- 블렌드 투입 시: `--keep-history-think`, 멤버 50+ 면 `mid-level-dataset-surplus 0.05`, 130k 행 이상이면 128k bins ≈ 40k 개 → 빌드 ≈1시간(16 워커 추정).

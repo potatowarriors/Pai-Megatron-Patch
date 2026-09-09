@@ -33,9 +33,10 @@ def bucket(n):
 
 
 def prefix_of(r):
-    m = r.get("metadata") or {}; t = m.get("task", "")
+    m = r.get("metadata") or {}; t = str(m.get("task", ""))
     if t[:3] in ("oc-", "sc-", "om-"): return t[:2]
-    return m.get("source") or m.get("task") or "?"
+    if m.get("split"): return str(m["split"]).split("/")[0]      # 공개 코퍼스 변환 행: adapters:code|math|swe / synthetic:easy|medium|mixed
+    return m.get("source") or t or "?"
 
 
 def analyze(path, tok):
