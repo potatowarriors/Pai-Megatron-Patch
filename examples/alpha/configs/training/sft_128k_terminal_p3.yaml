@@ -1,0 +1,29 @@
+# SFT phase-3 — 터미널 에이전트 보정 스테이지 (phase-2 완주 ckpt 위 연속학습)
+#
+# 설계 (사용자 결정 2026-09-09, examples/alpha/sdg/terminal/README.md §P4):
+#   블렌드 configs/data/sft_128k_terminal_blend_p3.yaml — phase-2 49종 리플레이 80% (비중 × 0.8) + 신규 20%
+#   (terminal_terminus2_synth 4 epoch + swe_v3_terminus_keephist 1 epoch), 예산은 gen_phase2_blend.py --solve-iters 산출.
+#   LR: 1e-5 → 1.5e-6 cosine, warmup 5% (phase-2 와 동일 — 사용자 결정 2026-09-09: constant 1.5e-6 은 누적 갱신량이 phase-2 의 2% 라 효과 부족).
+#   리플레이 비율은 phase-2 가중치가 아니라 **phase-1+2 누적 소비 분포**를 기준으로 재설정 (README §P4 표, 에이전틱·SWE 이웃 ×2).
+#   구조·병렬·offload 는 sft_128k_full_p2.yaml 과 동일 (CP8 + chunked offload, GBS 160, seq 128k).
+# 실행: cd examples/alpha && bash train.sh baseline_48L sft_128k_terminal_p3 sft_128k_terminal_blend_p3
+train-mode: finetune
+train-samples: 14080               # 88 iters @ GBS 160 — gen_sft_128k_terminal_blend_p3.sh --solve-iters 산출값으로 갱신할 것
+lr-warmup-samples: 704               # 5% (4.4 iters) — train-samples 갱신 시 같이
+lr-decay-samples: 14080
+lr: 1.0e-5
+min-lr: 1.5e-6
+lr-decay-style: cosine
+chunked-optimizer-state-offload: true
+optimizer-state-offload-chunk-size-mb: 256
+seq-length: 131072
+global-batch-size: 160
+no-create-attention-mask-in-dataloader: true
+moe-router-load-balancing-type: seq_aux_loss
+save-interval: 20
+eval-iters: 4
+eval-interval: 20
+load: /home/work/vidsearch/repos/project_s/Pai-Megatron-Patch/examples/alpha/outputs/alpha_baseline_48L_sft_128k_full_p2_20260907_073414/checkpoints
+finetune: true
+no-load-optim: true
+no-load-rng: true
