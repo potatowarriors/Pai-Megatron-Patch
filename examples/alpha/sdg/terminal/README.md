@@ -197,4 +197,23 @@ bash sdg/terminal/serve/glm_tunnel.sh start && bash sdg/terminal/serve/glm_tunne
 - 예산 `--solve-iters`: **90 iters × GBS 160 × 128k = 1.89B**, ≈8시간(320 s/iter). LR 1e-5 → 1.5e-6 cosine, warmup 4 iters (constant 1.5e-6 안은 누적 갱신량이 phase-2 의 2% 라 기각).
 - 게이트: 2-iter 스모크(G-P5 상당) → 첫 iteration 게이트 → TB-2 before/after(Terminus-2 `interleaved_thinking=true`, 89과제×8) · LogicKor·IFEval·정체성 프로브 무회귀.
   형식 준수율 개선 +15pp 미만이면 LR 재검토.
-- 실행: `cd examples/alpha && bash train.sh baseline_48L sft_128k_terminal_p3 sft_128k_terminal_blend_p3` (phase-2 완주 09-09 20:00 KST 이후, load = phase-2 ckpt).
+- 실행: `cd examples/alpha && bash train.sh baseline_48L sft_128k_terminal_p3 sft_128k_terminal_blend_p3` (phase-2 완주 09-09 ≈21:00 KST 이후, load = phase-2 ckpt).
+
+### P4 사전 게이트 — sub1 2-iter 스모크 PASS, 자동 런처 대기 (2026-09-09 12:00 ~ 12:38 KST)
+
+- **자동 런처** `scripts/launch_p3_after_phase2.sh` 를 main1 에 12:00 KST 가동: phase-2 latest==602 → GPU 유휴 → 51 멤버 sanity → 본 런 →
+  첫 iteration 게이트(loss 유한·Traceback 0). 실패는 `outputs/P3_CHAIN_ALERT.txt` 에 남기고 재시도 없음. 해제 `pkill -f "[l]aunch_p3_after_phase2.sh"`.
+- **사전 스모크(G-P5)**: sub1 GPU 가 비어 `scripts/sub1_jit595_smoke.sh` 로 3회. sudo 없이 09-07 의 jit595 링크 디렉터리를 `LD_LIBRARY_PATH` 앞에 두는 방식.
+
+| 회차 | 결과 | 원인 | 조치 |
+|---|---|---|---|
+| 1차 12:13 | 20초 만에 `micro_batch_size is None` | 프리셋이 phase-2 와의 차이 키만 담음 — 평면 YAML 은 상속이 없다 | phase-2 64키 전체 복제, 값 6개 + `no-load-rng` 만 상이(스크립트 대조) — 2ea365a |
+| 2차 12:15 | valid 블렌드 `IndexError`(436 요청 > 434 보유) | 51 멤버 top-level 크기 Σceil(w×3200)=3,241 이 멤버 버퍼 여유 0.5% 초과. `--mid-level-dataset-surplus` 가 데이터 제공자에서 미배관 | 배관 + 프리셋 0.05 + 테스트 3건 — 63f79d2 |
+| 3차 12:23 | **PASS** | | loss 0.832 → 0.831 · iter 476 s → 326 s(266 TFLOP/s/GPU) · 55.5 GB · 오류 0 · 데이터 캐시 629 파일 선빌드. 기록 `outputs/smoke_pass_p3_sub1_jit595_20260909_122350/` |
+
+- 두 결함 모두 sub1 고유가 아니라 본 런 기동 직후 그대로 터졌을 것 — **자동 런처 전 2-iter 스모크는 생략 불가**. 실패 기록 `outputs/smoke_failed_p3_{preset,valid_surplus}_*/`.
+- 부수 확인: 09-04 "sub1 학습 불가"(TE cuDNN norm `munmap`)는 09-07 진단대로 libcuda 595 + JIT 570 혼합이 원인. jit595 우회로 학습 스택도 정상 →
+  **sub1 에서 root 없이 학습 가능** (`docs/KNOWN_ISSUES.md` 09-04 갱신). 영구 수정(symlink)은 사용자 항목.
+- loss 0.83 은 phase-2 iter 500 의 0.65 보다 높다. 신규 도메인 20% + 1 배치 표본이라 절대값은 기록만(G-P5 기준: 유한·traceback 0), 판단은 본 런 곡선으로.
+- 데이터 캐시 `configs/data/.cache/sft_128k_terminal_blend_p3`(NFS)는 본 런이 재사용. 128k 패킹 bins 는 51 멤버도 1분 내 빌드(phase-2 "26종 25분"은 64k 기준).
+- phase-2 완주 예상 ≈ 21:00 KST (ckpt 100개당 8h41m 일정; main1 시계는 UTC, sub1 은 KST).

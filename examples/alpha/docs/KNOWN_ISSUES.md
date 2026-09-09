@@ -4,6 +4,21 @@
 CLAUDE.md의 "함정 표"는 이 문서의 한 줄 요약이며, 새 사고는 **여기에 서사를 쓰고 CLAUDE.md 표에는 한 줄만** 추가한다.
 날짜는 절대 표기. 두 스테이지 이상 지난 항목은 스테이지 경계에서 `archive/`로 이동.
 
+## phase-3 프리셋·데이터 결함 2건 — 차이 키만 담은 평면 프리셋 · 51 멤버 valid 블렌드 surplus 미배관 (2026-09-09 ✅, sub1 사전 스모크가 검출)
+
+- **증상 ①**: `sft_128k_terminal_p3.yaml` 1판이 20초 만에 `validate_args: assert args.micro_batch_size is not None`. 프리셋을 "phase-2 와의 차이 6키"만으로
+  썼는데 training preset 은 평면 YAML(`yaml_to_flags`)이라 상속이 없다.
+- **증상 ②**: 전체 복제 후 valid 블렌드에서 `IndexError: The valid blend oversamples … requests 436 samples from GPTDataset number 2 in excess of its size 434`.
+- **원인 ②**: `BlendedMegatronDatasetBuilder` 는 top-level 크기를 멤버별 `ceil(w×N)` 의 **합**으로 잡는다(51 멤버 valid 3,200 → 3,241, +1.28%). 멤버 버퍼는
+  `ceil(w×N×(1+surplus))`, 기본 surplus 0.005 → 큰 멤버가 2~3 샘플 모자람. train 은 같은 부풀림이 14,400 에 분산(+0.26%)돼 통과, phase-2(49 멤버,
+  valid 4,480)는 운 좋게 안 걸림. 게다가 alpha 데이터 제공자(`megatron_patch/data/__init__.py`)가 `args.mid_level_dataset_surplus` 를 `GPTDatasetConfig` 로
+  넘기지 않아 YAML 값이 조용히 무시됐다.
+- **대응**: ① phase-2 프리셋 64키 전체 복제(값 6개 + `no-load-rng` 만 상이, 스크립트 대조) ② 제공자 두 경로에 surplus 배관 + 프리셋
+  `mid-level-dataset-surplus: 0.05`(`helpers.build_blending_indices` 재현: 0.005 부족 · 0.02 여유 0 · 0.05 통과) + `tests/test_dataset_config_surplus.py` 3건.
+  3차 스모크 PASS(loss 0.832→0.831, 326 s/iter). 기록 `outputs/smoke_failed_p3_{preset,valid_surplus}_*/`, `outputs/smoke_pass_p3_sub1_jit595_20260909_122350/`.
+- **교훈**: 새 프리셋은 전체 복제 후 diff 로 의도한 키만 다른지 확인. 멤버가 많고 valid 가 작은 블렌드(짧은 런)는 surplus 를 올린다 — 인자는 로그 args
+  덤프로 적용 여부를 확인한다(존재≠적용). 자동 런처 전 2-iter 스모크는 생략 불가 — 둘 다 본 런 기동 직후 터졌을 결함이다.
+
 ## 교사가 만든 setup.sh 가 빌드 중 2.36 TB 파일을 써서 gpu06 디스크 고갈 (2026-09-08 ✅)
 
 - **증상**: 시나리오 배치 sc_b1 검증(oracle·nop) 중 gpu06 `/var/lib/docker` 여유 2.1 TB → 519 MB (20분). `/tmp/containerd-mount…/app/vault.bin` 2,358,518,644,736 바이트.
@@ -61,7 +76,7 @@ CLAUDE.md의 "함정 표"는 이 문서의 한 줄 요약이며, 새 사고는 *
 - **함의 (미검증)**: 아래 09-04 "sub1 학습 불가"(TE cuDNN norm 에서 같은 munmap_chunk)도 같은 원인일 가능성이 크다. 링크 정정 후
   `scripts/sub1_compat_smoke.sh` 방식으로 재검증하면 sub1 이 595 compat 인 채로 학습 가능해질 수 있다.
 
-## sub1 은 Megatron 학습을 못 돌린다 — CUDA compat 595 스왑 + Backend.AI libcudahook (2026-09-04 🔶 미해결)
+## sub1 은 Megatron 학습을 못 돌린다 — CUDA compat 595 스왑 + Backend.AI libcudahook (2026-09-04 → 09-09 ✅ jit595 우회, 🔶 영구 수정은 root)
 
 - **증상**: SFT phase-2 스모크(sub1, `sft_128k_full_p2` CP8+offload, 2026-09-04)가 첫 스텝의 TE `apply_normalization`
   (cuDNN norm, train.sh 의 `NVTE_NORM_FWD_USE_CUDNN=1`)에서 **전 rank `munmap_chunk(): invalid pointer` SIGABRT**.
@@ -83,6 +98,9 @@ CLAUDE.md의 "함정 표"는 이 문서의 한 줄 요약이며, 새 사고는 *
   sub1 에서 학습이 필요할 때마다 이 스크립트 방식(임시 570 → 복원)으로 쓴다. RL 은 노드 분리로 해당 없음(위 참조).
 - **교훈**: 노드 시스템 라이브러리 변경은 STATUS·KNOWN_ISSUES 에 기록한다 — 08-29 스왑은 `chat/README.md` 함정 표에만 있었다.
   실패 스모크 로그·런 디렉터리: `outputs/smoke_failed_sub1_compat_20260904/`.
+- **우회 확정(2026-09-09)**: 09-07 진단(libcuda 595 + JIT 570 혼합)이 학습 스택에도 원인이었다. `scripts/sub1_jit595_smoke.sh`(jit595 링크 디렉터리를
+  `LD_LIBRARY_PATH` 앞에, sudo 불필요)로 phase-3 프리셋·블렌드 2 iter 완주(loss 0.832→0.831, 326 s/iter, 55.5 GB, traceback 0). `libcudahook` 이 강제하는 건
+  libcuda 뿐이고 JIT 라이브러리는 LD_LIBRARY_PATH 를 따른다. sub1 학습이 필요하면 이 방식(symlink 변경 없음)을 쓴다 — 570 되돌리기(`sub1_compat_smoke.sh`, root)는 불필요.
 
 ## SFT 데이터 인벤토리 사고 2건 — 절단 다운로드 미검출 · used_in 오독 (2026-09-04 ✅)
 
