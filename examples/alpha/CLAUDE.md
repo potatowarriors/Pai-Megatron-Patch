@@ -101,7 +101,7 @@ configs/data/      stage1_v5_blend, stage2_v5_blend_packed{,_p2,_p2b,_p3} ★,
 | `scripts/setup_wandb.sh` | `WANDB_API_KEY` 해석 (env → `$WANDB_KEY_FILE` → `scripts/.wandb_key` → `~/.wandb_key`). **키 하드코딩 금지** |
 | `diloco_patch.py` / `pretrain_alpha_diloco.py` / `launch_diloco.sh` | DiLoCo 2노드 코어·엔트리·런처 (env knob은 런처 헤더) |
 | `scripts/lc_a_preflight.py`, `scripts/launch_lc_a_when_ready.sh` | LC 데이터 deep preflight, 자동 런처 |
-| `sdg/ko_chat/` | 한국어 chat 합성 트랙 (README에 함정 5건) |
+| `sdg/ko_chat/` | ⛔ **REJECTED (2026-09-09)** — 비-reasoning 교사(gemma-4-31B) 가짜 reasoning. 재합성은 `sdg/ko_chat_v3/`(GLM-5.3 + NVIDIA Chat-v3 레시피). `KNOWN_ISSUES` 09-09 |
 
 ## Environment
 
@@ -166,6 +166,9 @@ submodule `tests/unit_tests/test_step_batch_size_schedule.py`, `test_muon_optimi
 
 | 날짜 | 증상 | 원인 → 대응 |
 |---|---|---|
+| 09-09 | ko_chat 일반 대화 reasoning 이 100자 안팎(영어 셋의 1/10~1/30)·얕음. phase-2 회귀 아님(전 ckpt 동일) | 교사 gemma-4-31B 는 **비-reasoning 모델** → 지시문으로 사고를 지어내 guided JSON 에 채웠다(가짜 reasoning). **reasoning 데이터는 reasoning 모델의 네이티브 사고만 유효** → ko_chat v1/v2 전량 폐기, GLM-5.3-Flash + NVIDIA Chat-v3 레시피 재합성. `KNOWN_ISSUES` 09-09 |
+| 09-09 | (phase-2 회귀) 도구 선언되면 무관 질문도 강제 도구 호출 = 유령 호출·빈 답변. iter1500 은 0/33, p2 iter500 은 8/33 | phase-2 신규 Agentic-v2 가 범용 API 호출률 96%·미호출 예시 3% → "도구 보이면 부른다" 학습. 교정: 미호출 예시 2:1(When2Call) + 한국어 도구 행. **게이트: 도구 25종 주입 재생 유령률 ≤1/33 + BFCL AST 양방향**. `KNOWN_ISSUES` 09-09 |
+| 09-09 | (phase-2 회귀) 영어 정체성 질문에 "developed by Google" 유입 (CJ 22/24→12/24) | phase-2 신규 Chat-v2 assistant 턴 205개가 교사 자기귀속("trained by Google"), 87행이 정체성 질문 답 | 누출 필터를 gemma·gemini → 벤더 전체로 확장, 해당 행 드롭 후 재변환. `KNOWN_ISSUES` 09-09 |
 | 09-09 | SFT 데이터 일관성 검토: SWE-v3 는 `tools` 컬럼이 없어 232k 행이 도구 선언 없이 `<tool_call>`(phase-1 18.7%) · opencode 스키마가 MCP 형이라 `<name></name>`·`<parameters>` 빈값 렌더 · Chat-v2 on 은 train_turns 부재로 히스토리 턴을 빈 `<think></think>` 로 학습(IF 결함 재발) · identity_v2 fan-out 누락 · agentless user 프롬프트에 `<think>` 특수토큰 43% · 도구 영역 학습 토큰의 무사고 타깃 43.6%(p2) | 비학습 스팬 결함이라 **롤백 없이 phase-3 데이터 교정**(사용자): `normalize_tool_schema`·`--tools-sidecar`(하니스별 선언 복원)·`--fanout-implicit-turns`·`render_check` `<tools>` 검사. 게이트가 "tools 선언·name/parameters" 를 묻지 않았고 fan-out 은 train_turns 리스트를 전제했다. `KNOWN_ISSUES` 09-09, `INTERLEAVED_THINKING` §7 규칙 1·9·10 |
 | 09-09 | phase-3 프리셋 기동 실패 2건 — `micro_batch_size None` · valid 블렌드 `IndexError`(436 요청 > 434 보유). sub1 사전 스모크가 검출 | ① 차이 키만 담은 프리셋(평면 YAML, 상속 없음) → 전체 복제 후 diff ② 51 멤버 valid 크기가 Σceil(w×N) 로 +1.3% 부풀어 버퍼 여유 0.5% 초과 + `--mid-level-dataset-surplus` 가 데이터 제공자에서 미배관 → 배관 + 0.05. **자동 런처 전 2-iter 스모크 생략 금지**. `KNOWN_ISSUES` 09-09 |
 | 09-09 | 채팅 UI 응답 이상 (영어 답변·빈 답변·유령 도구 호출) | OpenWebUI 0.11 이 UI 발 요청마다 내장 도구 25종을 주입 → 템플릿 tool 분기, 프롬프트 17→5,440 토큰. **LibreChat(MIT) 교체** + `smoke_chat.sh` §6 프롬프트 토큰 게이트(실측 17). `KNOWN_ISSUES` 09-09 |

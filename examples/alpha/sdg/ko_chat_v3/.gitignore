@@ -1,0 +1,3 @@
+# 생성 산출물·로그·시드(수 GB) — 데이터는 /home/work/Datasets 이관 후 STATUS/README 에 경로만 기록
+out/
+__pycache__/

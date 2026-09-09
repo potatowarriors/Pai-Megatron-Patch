@@ -1,4 +1,10 @@
-# ko_chat — SFT 한국어 chat 데이터 합성 (2026-08-23~)
+# ko_chat — SFT 한국어 chat 데이터 합성 (2026-08-23~28) — ⛔ REJECTED 2026-09-09
+
+> **폐기 (2026-09-09, 사용자 결정).** 이 트랙 산출물(v1/v2) 전량 폐기. 교사가 **비-reasoning 모델(gemma-4-31B)**
+> 이라 사고를 지시문으로 지어냈고(가짜 reasoning), 학생이 얕은 요약형 사고를 학습했다. reasoning 데이터는 reasoning
+> 모델의 네이티브 사고 흔적만 유효하다. 서사·규칙: `docs/KNOWN_ISSUES.md` 2026-09-09.
+> 재합성은 **`sdg/ko_chat_v3/`** (교사 GLM-5.3-Flash 네이티브 사고, NVIDIA Chat-v3 레시피).
+> 아래 문서는 폐기된 v1/v2 파이프라인 기록으로만 보존한다.
 
 LC phase 동안 유휴인 **sub1(H100×8)** 로 SFT용 한국어 chat 데이터를 합성한다.
 교사 모델 **gemma-4-31B-it** (Apache 2.0 — 증류 제약 없음), 서빙은 vLLM TP2×DP4.

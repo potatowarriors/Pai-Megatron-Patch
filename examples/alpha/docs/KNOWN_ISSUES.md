@@ -4,6 +4,59 @@
 CLAUDE.md의 "함정 표"는 이 문서의 한 줄 요약이며, 새 사고는 **여기에 서사를 쓰고 CLAUDE.md 표에는 한 줄만** 추가한다.
 날짜는 절대 표기. 두 스테이지 이상 지난 항목은 스테이지 경계에서 `archive/`로 이동.
 
+## ko_chat v1/v2 폐기 — 비-reasoning 교사(gemma-4-31B)의 가짜 reasoning (2026-09-09 ✅ 폐기 결정, GLM-5.3 재합성)
+
+**증상**: 도구가 선언되지 않은 일반 한국어 대화에서 모델 reasoning 이 100자 안팎(중앙값 ~110자)으로 짧고 얕다. 같은
+조건 영어 셋 reasoning 은 2,700~7,000자 — 10~30배 차이. iter1200·1500·1800·phase-2 iter500 이 전부 동일해
+phase-2 회귀가 아니라 **데이터 태생 문제**로 확인(재생 실험 `eval_sft/results/reasoning_probe/`).
+
+**원인**: ko_chat v1/v2 의 교사가 **gemma-4-31B-it — 비-reasoning 모델**이었다. 네이티브 사고 흔적이 없으니
+`translate_regen.py`·`ko_chat_sdg.py` 가 guided JSON 으로 "요청 핵심·접근·주의점을 간결하게" 쓰라고 **지시문으로
+사고를 지어내게** 했다(원본 reasoning 중앙값 204자). 학생은 그 요약문을 reasoning 으로 학습했다. reasoning 모델로부터
+사고를 증류하려던 목적과 정반대로, 껍데기 사고를 주입한 것이다.
+
+**왜 폐기인가**: 짧은 요약형 사고를 학습한 모델은 한국어 질문에서 사고를 전개하지 않는다. backfill·부분 수정으로는
+사고 깊이를 만들 수 없다(원천에 없음). 데이터 태생 결함이라 전량 폐기 후 재합성이 유일한 교정이다.
+
+**대응**: ko_chat v1/v2(`alpha-SFT-KoChat-v1/v2`, `sft_packed_*/kochat_*` bins, `sdg/ko_chat/out/`)를 **REJECTED**
+표기·파이프라인 제외. 원본은 기록용 보존(하드 삭제는 사용자 지시 시). NVIDIA Chat-v3 레시피로 재합성 — 교사
+**GLM-5.3-Flash**(네이티브 사고를 `--reasoning-parser glm45` 로 분리 수록), 실사용자 프롬프트(lmsys/WildChat 한국어
++ 현지화 재작성), best-of-N + gemini 심판, identity 주입, 도구 비상관 슬라이스. 설계·진행은 `sdg/ko_chat_v3/README.md`
+와 STATUS.md.
+
+**재발 방지 규칙 (불변)**: reasoning 데이터의 교사는 **반드시 reasoning 모델**이다. 비-reasoning 모델에 사고를 지시문으로
+생성시키지 않는다. 신규 합성 트랙은 착수 전 교사가 네이티브 사고를 내는지 확인하고, 산출물 reasoning 의 길이·언어 분포를
+동일 도메인 영어 셋과 대조하는 게이트를 둔다.
+
+## phase-2 회귀 2건 — 도구 과잉 호출·교사 정체성 오염 → iter2448 에서 교정 재실행(B안) (2026-09-09)
+
+**배경**: 사용자가 LibreChat 으로 phase-2 iter500 을 테스트하다 정체성·품질 저하를 보고. 재생 실험(09-07 대화 재현 +
+도구 25종 주입 + 프로브, `eval_sft/results/reasoning_probe/`·`results/identity_probe/`)으로 세 갈래로 분리.
+
+**P1 도구 과잉 호출 (phase-2 신규 회귀)**: 도구가 하나라도 선언되면 무관한 질문에도 강제로 도구를 호출하고 답변이 빈다.
+09-07 대화 11턴 재생(도구 25종 주입) 유령 호출률 — iter1500 **0/33**, iter1800 1/33, p2 iter500 **8/33**. 원인은
+phase-2 신규 Agentic-v2(범용 API): tool_calling 첫 assistant 턴 호출률 96%·미호출 행 3%, interactive_agent 미호출 8%.
+"도구가 보이면 부른다"를 학습했다. phase-1 의 SWE 도구(코드 편집)는 채팅 도구와 부류가 달라 이 규칙이 전이되지 않았다
+(iter1500 이 범용 도구 25종 앞에서 0/33). 교정: 함수 호출 서브셋에 미호출 예시 2:1(When2Call `arXiv 2504.18851` —
+SFT 부정 예시만 넣으면 과보수화, 비율·게이트 필수) + 한국어 도구 행. 게이트: 도구 25종 주입 재생 유령률 ≤1/33 **과**
+BFCL AST(써야 할 때 쓰는가) 양방향.
+
+**P2 교사 정체성 오염 (phase-2 신규 회귀)**: 영어 "Who are you?" 24샘플 CJ 언급이 iter1800 22 → p2 iter500 12,
+"developed by Google" 2건. 원인: phase-2 신규 Chat-v2 reasoning_on assistant 턴 205개가 교사 자기귀속
+("trained by Google"), 그중 87행이 정체성 질문 답. ko_chat 원본에도 5턴. 한국어는 128샘플 0건(드묾). 교정: 누출
+필터를 gemma·gemini → 벤더 전체(Google·Gemini·Gemma·OpenAI·Anthropic·Zhipu·GLM·Qwen…)로 확장, 해당 행 드롭 후 재변환.
+
+**P3 제작자 프로브 미달 (phase-1 부터, 회귀 아님)**: 제작자 프로브 30문항 iter1800 11/30(37%)·p2 iter500 10~11/30,
+기준 ≥95%. iter900 이후 미측정(게이트 미배선)이라 500 iters 동안 아무도 못 봤다. 교정: identity creator 슬라이스 상향
++ `identity_probe.py` 를 `eval_new_ckpt.sh` 체인에 배선(100 iters 마다).
+
+**판단(B안, 사용자)**: SFT 처음부터 재시작은 기각(phase-1 궤적 상승, 결함은 phase-2 신규 셋·정체성 정책에 국한).
+**phase-1 최종 iter2448(`…swap_20260901_101523/checkpoints/iter_0002448`)에서 교정 phase-2 데이터 + 터미널 셋 흡수
+블렌드로 한 번에 재실행**. phase-3(터미널) 런은 09-09 종료 — 오염 Chat-v2 를 리플레이하고 "항상 호출"형 터미널
+데이터를 더 얹어 회귀를 심화시키므로. 프론티어 대조(웹 확인): DSV4 는 도메인별 전문가 SFT→GRPO 후 on-policy
+distillation, Nemotron 3 Super 는 단일 혼합 2단계 SFT(2단계가 1단계 블렌드 85% 리플레이)→RLVR→MOPD. 도구 절제·정체성
+최종 마감은 SFT 가 아니라 RL/선호(RPO)의 몫 — B 로 얻는 것은 "RL 입력용 깨끗한 SFT ckpt"이지 최종 품질이 아니다.
+
 ## SFT 데이터 일관성 검토 — chat template 기준 결함 5건·도구 영역 무사고 비중 (2026-09-09 🔶 phase-3 데이터 교정, 롤백 없음)
 
 **계기**: 사용자 요청으로 phase-2(진행 중)·phase-3(대기) 블렌드 51 멤버의 도구호출·추론 데이터 일관성을 검토했다. 방법은 둘:
