@@ -160,3 +160,41 @@ bash sdg/terminal/serve/glm_tunnel.sh start && bash sdg/terminal/serve/glm_tunne
 **사고 3건 (전부 `docs/KNOWN_ISSUES.md` 2026-09-08)**: ① Docker 주소 풀 고갈(동시 64 즉사) → daemon.json 풀 확장 ② 과제 이미지 940 MB 미공유 → 베이스 이미지
 `alpha-terminal-base:1` ③ 교사 setup.sh 가 2.36 TB 파일 생성 → `precheck_setup.sh` 샌드박스. 운영 교훈: **실행 중인 스크립트를 편집하지 않는다**
 (bash 가 파일을 점진적으로 읽어 두 번 검증이 깨졌다) · `pkill -f` 패턴은 자기 명령줄과 매치되지 않게 `[x]` 브래킷과 별도 호출로.
+
+### P3 완료 — 최종 조립 (2026-09-09 11:55 KST) 및 P4 보정 스테이지 확정
+
+**수집 총괄 (2026-09-08 12:49 ~ 09-09 11:54 KST, 23시간)**
+
+| 배치 | 과제 | 설정 | 트라이얼 | 채택 행 |
+|---|---|---|---|---|
+| oc_b1 high | 1,240 | 동시 64·15분 | 1,240 | 747 |
+| oc_b2 low/high | 883 / 1,325 | 동시 96·10분·hard 제외 | 2,208 | 415 / 639 |
+| oc_b3 low/high | 528 / 794 | 〃 (중복 제거) | 1,322 | 309 / 388 |
+| oc_b4 low/high | 498 / 747 | 〃 | 1,245 | 333 / 385 |
+| oc_b5 low/high | 580 / 871 | 〃 | 1,451 | 353 / 519 |
+| oc_b6 low/high | 1,102 / 1,653 | 〃 (전체 풀 잔여) | 2,755 | 634 / 920 |
+| om_b1~b3 low/high | 1,000 × 6 | 동시 96·10분·max_turns 20 | 4,000 | 563+652 / 348+330 / 327+336 |
+| sc_m1~m3 high | 111 / 222 / 165 | 동시 48·20분 | 498 | 87 / 175 / 136 |
+| **합계** | | | **14,719** | **8,596** (필터 24 드롭 후) |
+
+처리량은 동시 96 에서 시간당 680~750 트라이얼로 일정했다. 코드 성공률 58~73% (low < high), 수학 60~80%, 시나리오 79~84%.
+
+**정본 `alpha-SFT-Terminal-v1`** (`/home/work/Datasets/LL_datasets/posttraining/SFT/alpha-SFT-Terminal-v1/{train.jsonl, MANIFEST.json, FILTER_STATS.json}`)
+
+| 항목 | 값 |
+|---|---|
+| 행 | 8,596 = 코드 5,642 + 시나리오 398 + 수학 2,556 (코드·시나리오 : 수학 = 70.3 : 29.7, 요청 7:3) |
+| assistant 턴 | 43,855 (전부 reasoning 보유) |
+| 품질 필터 | 8,620 → 8,596 (반복 루프 10·편집 없음 13·파싱 오류율 1·금지 git 1) |
+| bins `sft_packed_128k_terminal_pad16/terminal_terminus2_synth` | 485 bins, 실토큰 63,381,097, 학습 42,265,199, 드롭 0 |
+| 게이트 | verify_sft_bins PASS · render_check 클린(`<think>` 전 턴) |
+| 동반 멤버 `swe_v3_terminus_keephist` | SWE-v3 Terminus 3,534행 보존 렌더, 936 bins, 실토큰 122.2M (128k 초과 8행 드롭) |
+
+**P4 보정 스테이지 (사용자 결정 2026-09-09)**: 프리셋 `configs/training/sft_128k_terminal_p3.yaml`, 블렌드 `configs/data/sft_128k_terminal_blend_p3.yaml`.
+- 리플레이 80% = phase-1+2 **누적 소비 분포** 기준 49종 (`toolkits/sft_data_preprocessing/terminal_p3_replay_shares.tsv`): cp_v2 14.7 · swe_v3_keepthink 14.2 · math_v4 8.0 ·
+  science_v2 7.0 · chat_v3_chat 5.0 · IF 3.9 · 한국어 4.5 · SWE 이웃(r2e·openhands·agentless) 5.3 (×1.7) · 에이전틱 3.0 (×1.8) · finance 1.2 (따라잡기 7.5% → 누적 수준) · 정체성 0.5 · 안전 0.3 · ml 2.6.
+- 신규 20% = terminal_terminus2_synth **4 epoch**(0.254B) + swe_v3_terminus_keephist **1 epoch**(0.122B).
+- 예산 `--solve-iters`: **90 iters × GBS 160 × 128k = 1.89B**, ≈8시간(320 s/iter). LR 1e-5 → 1.5e-6 cosine, warmup 4 iters (constant 1.5e-6 안은 누적 갱신량이 phase-2 의 2% 라 기각).
+- 게이트: 2-iter 스모크(G-P5 상당) → 첫 iteration 게이트 → TB-2 before/after(Terminus-2 `interleaved_thinking=true`, 89과제×8) · LogicKor·IFEval·정체성 프로브 무회귀.
+  형식 준수율 개선 +15pp 미만이면 LR 재검토.
+- 실행: `cd examples/alpha && bash train.sh baseline_48L sft_128k_terminal_p3 sft_128k_terminal_blend_p3` (phase-2 완주 09-09 20:00 KST 이후, load = phase-2 ckpt).

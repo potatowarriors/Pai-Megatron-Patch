@@ -8,9 +8,9 @@
 #   구조·병렬·offload 는 sft_128k_full_p2.yaml 과 동일 (CP8 + chunked offload, GBS 160, seq 128k).
 # 실행: cd examples/alpha && bash train.sh baseline_48L sft_128k_terminal_p3 sft_128k_terminal_blend_p3
 train-mode: finetune
-train-samples: 14080               # 88 iters @ GBS 160 — gen_sft_128k_terminal_blend_p3.sh --solve-iters 산출값으로 갱신할 것
-lr-warmup-samples: 704               # 5% (4.4 iters) — train-samples 갱신 시 같이
-lr-decay-samples: 14080
+train-samples: 14400               # 90 iters @ GBS 160 = 1.89B bin-tok — gen_sft_128k_terminal_blend_p3.sh --solve-iters 산출
+lr-warmup-samples: 640               # 5% (4 iters)
+lr-decay-samples: 14400
 lr: 1.0e-5
 min-lr: 1.5e-6
 lr-decay-style: cosine
