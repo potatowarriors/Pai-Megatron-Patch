@@ -707,3 +707,184 @@ def test_keep_history_think_does_not_touch_tool_scenario(tok):
     b, _ = render_and_mask(tok, _norm(TOOLCONV, tools=TOOLS), mask_role_header=False,
                            keep_history_think=True)
     assert a.ids.tolist() == b.ids.tolist()
+
+
+# ---------------------------------------------------------------------------
+# 9. 2026-09-09 SFT 데이터 일관성 검토 — 도구 스키마 정규화 / 선언 주입 / 암묵 fan-out / 특수 리터럴
+# ---------------------------------------------------------------------------
+from build_alpha_sft_idxmap import (  # noqa: E402
+    count_special_literals,
+    inject_tools,
+    needs_implicit_fanout,
+    normalize_tool_schema,
+    _sidecar_system_key,
+)
+
+MCP_TOOL = {"id": "bash", "description": "Run bash",
+            "inputSchema": {"jsonSchema": {"type": "object", "properties": {"command": {"type": "string"}},
+                                           "required": ["command"]}}}
+
+
+def test_tool_schema_mcp_normalized_and_renders_name_parameters(tok):
+    nt = normalize_tool_schema(MCP_TOOL)
+    assert nt["function"]["name"] == "bash"
+    assert nt["function"]["parameters"]["properties"]["command"]["type"] == "string"
+    row = {"messages": [{"role": "user", "content": "ls"},
+                        {"role": "assistant", "content": "",
+                         "tool_calls": [{"function": {"name": "bash", "arguments": {"command": "ls"}}}]},
+                        {"role": "tool", "content": "a.py"},
+                        {"role": "assistant", "content": "<think></think>done"}],
+           "tools": [MCP_TOOL], "uuid": "oc"}
+    info = Counter()
+    norm, why = normalize_row(row, info=info)
+    assert norm is not None, why
+    assert info["tools_schema_normalized"] == 1
+    out = tok.apply_chat_template(norm["messages"], tools=norm["tools"], tokenize=False)
+    assert "<name>bash</name>" in out and "<name></name>" not in out
+    assert "<parameters>\n<parameter>\n<name>command</name>" in out
+    assert "<inputSchema>" not in out and "<id>" not in out
+
+
+def test_tool_schema_wellformed_untouched_and_anthropic_shape():
+    t = TOOLS[0]
+    assert normalize_tool_schema(t) is t          # 정상 형태는 객체 동일 (기존 셋 렌더 불변)
+    bare = {"name": "f", "parameters": {"type": "object", "properties": {}}, "strict": True}
+    assert normalize_tool_schema(bare) is bare
+    anth = {"name": "g", "input_schema": {"type": "object", "properties": {"x": {"type": "integer"}}}}
+    nt = normalize_tool_schema(anth)
+    assert nt["function"]["parameters"]["properties"]["x"]["type"] == "integer"
+    assert normalize_tool_schema({"description": "no name"}) is None
+    norm, why = normalize_row({"messages": [{"role": "user", "content": "q"},
+                                            {"role": "assistant", "content": "a"}],
+                               "tools": [{"description": "no name"}], "uuid": "x"})
+    assert norm is None and why == "tool_schema_shape"
+
+
+SWE_ROW = [
+    {"role": "system", "content": "You are OpenHands agent, a helpful AI assistant."},
+    {"role": "user", "content": "fix it"},
+    {"role": "assistant", "reasoning_content": "R", "content": "",
+     "tool_calls": [{"function": {"name": "execute_bash", "arguments": {"command": "ls", "timeout": 5}}}]},
+    {"role": "tool", "content": "out"},
+    {"role": "assistant", "content": "<think></think>done",
+     "tool_calls": [{"function": {"name": "finish", "arguments": {"message": "ok"}}}]},
+]
+SC_TOOL = lambda n, props: {"type": "function", "function": {  # noqa: E731
+    "name": n, "description": f"desc {n}", "parameters": {"type": "object", "properties": props, "required": list(props)}}}
+
+
+def _sidecar(declare):
+    key = _sidecar_system_key(SWE_ROW[0]["content"])
+    fam_tools = {"execute_bash": SC_TOOL("execute_bash", {"command": {"type": "string"}}),
+                 "finish": SC_TOOL("finish", {"message": {"type": "string"}}),
+                 "think": SC_TOOL("think", {"thought": {"type": "string"}})}
+    return {"families": {key: {"declare": declare, "tools": fam_tools}},
+            "by_name": {"submit": SC_TOOL("submit", {})}}
+
+
+def test_inject_tools_family_union_declares_all_and_keeps_reasoning(tok):
+    info = Counter()
+    norm, why = normalize_row({"messages": SWE_ROW, "uuid": "s"}, tools_sidecar=_sidecar("union"), info=info)
+    assert norm is not None, why
+    assert [t["function"]["name"] for t in norm["tools"]] == ["execute_bash", "finish", "think"]
+    assert info["tools_injected_rows"] == 1 and info["tools_injected_by_family_union"] == 1
+    out = tok.apply_chat_template(norm["messages"], tools=norm["tools"], tokenize=False)
+    assert "# Tools" in out and "<name>think</name>" in out
+    assert "<think>\nR</think>" in out          # tool 시나리오 — reasoning 보존 불변
+    assert "<tool_call>\n<function=execute_bash>" in out
+
+
+def test_inject_tools_family_called_declares_only_used_names():
+    norm, _ = normalize_row({"messages": SWE_ROW, "uuid": "s"}, tools_sidecar=_sidecar("called"))
+    assert [t["function"]["name"] for t in norm["tools"]] == ["execute_bash", "finish"]
+
+
+def test_inject_tools_by_name_and_synthesized_fallback():
+    msgs = [dict(m) for m in SWE_ROW]
+    msgs[0] = {"role": "system", "content": "unknown harness"}
+    msgs[2] = dict(msgs[2], tool_calls=[{"function": {"name": "submit", "arguments": {}}}])
+    msgs[4] = dict(msgs[4], tool_calls=[{"function": {"name": "mystery", "arguments": {"path": "a", "n": 3, "flag": True}}}])
+    info = Counter()
+    norm, _ = normalize_row({"messages": msgs, "uuid": "s"}, tools_sidecar=_sidecar("union"), info=info)
+    names = [t["function"]["name"] for t in norm["tools"]]
+    assert names == ["submit", "mystery"]
+    assert info["tools_injected_by_name"] == 1 and info["tools_synthesized"] == 1
+    props = norm["tools"][1]["function"]["parameters"]["properties"]
+    assert props == {"path": {"type": "string"}, "n": {"type": "integer"}, "flag": {"type": "boolean"}}
+
+
+def test_inject_tools_skips_rows_without_calls_and_rows_with_tools():
+    plain = [{"role": "system", "content": SWE_ROW[0]["content"]},
+             {"role": "user", "content": "q"}, {"role": "assistant", "content": '{"analysis": "x"}'}]
+    norm, _ = normalize_row({"messages": plain, "uuid": "t"}, tools_sidecar=_sidecar("union"))
+    assert norm["tools"] is None                          # Terminus 형 — 주입 없음
+    norm, _ = normalize_row({"messages": TOOLCONV, "tools": TOOLS, "uuid": "u"}, tools_sidecar=_sidecar("union"))
+    assert norm["tools"] == TOOLS and norm["tools"][0] is TOOLS[0]   # 이미 있는 tools 는 그대로(주입 없음)
+
+
+CHAT_V2 = [
+    {"role": "system", "content": ""},
+    {"role": "user", "content": "q1"},
+    {"role": "assistant", "reasoning_content": "R1", "content": "a1"},
+    {"role": "user", "content": "q2"},
+    {"role": "assistant", "reasoning_content": "R2", "content": "a2"},
+]
+
+
+def test_implicit_fanout_general_chat_multi_user_with_history_reasoning(tok):
+    norm = _norm(CHAT_V2)
+    assert norm["train_turns"] is None and needs_implicit_fanout(norm)
+    assert expand_train_turns_fanout(norm) == [norm]                 # 기본 경로 불변
+    subs = expand_train_turns_fanout(norm, implicit=True)
+    assert len(subs) == 2 and subs[0]["train_turns"] == [False, False, True]
+    enc, why = render_and_mask(tok, subs[0], mask_role_header=False)
+    assert enc is not None, why
+    trained = tok.decode(enc.ids[enc.trainable].tolist())
+    assert "R1" in trained and "a1" in trained                        # 중간 턴의 reasoning 이 학습됨
+    full, _ = render_and_mask(tok, subs[1], mask_role_header=False)
+    assert np.array_equal(full.ids, render_and_mask(tok, norm, mask_role_header=False)[0].ids)
+    assert "<think></think>a1" in tok.decode(full.ids.tolist())     # 마지막 서브샘플 = 전체 렌더
+
+
+def test_implicit_fanout_not_for_tool_scenario_single_user_or_no_reasoning():
+    tool_multi = CHAT_V2 + [{"role": "user", "content": "q3"},
+                            {"role": "assistant", "content": "", "tool_calls": [{"function": {"name": "f", "arguments": {}}}]},
+                            {"role": "tool", "content": "o"}, {"role": "assistant", "reasoning_content": "R3", "content": "a3"}]
+    assert not needs_implicit_fanout(_norm(tool_multi))              # tool 시나리오 — 템플릿이 보존
+    assert not needs_implicit_fanout(_norm(CHAT_V2[:3]))             # 단일 user
+    off = [dict(m) for m in CHAT_V2]
+    for m in off:
+        m.pop("reasoning_content", None)
+    assert not needs_implicit_fanout(_norm(off))                     # reasoning_off — 전개 불요
+    assert not needs_implicit_fanout(_norm(CHAT_V2, train_turns=[False, False, True, False, True]))  # 명시 train_turns 는 기존 경로
+
+
+def test_implicit_fanout_worker_end_to_end_and_stats_counter():
+    import json as _json
+    _worker_init(TOKENIZER_DIR, True, fanout_implicit_turns=True)
+    out, drops, dropped, info = _worker_encode([_json.dumps({"messages": CHAT_V2, "uuid": "c"})])
+    assert len(out) == 2 and not drops
+    assert info["fanout_rows"] == 1 and info["fanout_implicit_rows"] == 1
+    _worker_init(TOKENIZER_DIR, True, fanout_train_turns=True)      # 기존 플래그만으로는 전개 안 함
+    out, drops, dropped, info = _worker_encode([_json.dumps({"messages": CHAT_V2, "uuid": "c"})])
+    assert len(out) == 1 and info["fanout_implicit_rows"] == 0
+
+
+AGENTLESS = [
+    {"role": "user", "content": "Put your reasoning between <think> and </think> and the fix in <solution>."},
+    {"role": "assistant", "reasoning_content": "R", "content": "<solution>x</solution>"},
+]
+
+
+def test_special_literals_counted_by_default_and_dropped_with_flag(tok):
+    import json as _json
+    c = count_special_literals(_norm(AGENTLESS))
+    assert c == {"literal_<think>_user": 1, "literal_</think>_user": 1}
+    assert count_special_literals(_norm(MULTITURN)) == {}           # assistant 안의 <think> 는 대상 아님
+    _worker_init(TOKENIZER_DIR, True)
+    out, drops, dropped, info = _worker_encode([_json.dumps({"messages": AGENTLESS, "uuid": "g"})])
+    assert len(out) == 1 and not drops and info["special_literal_rows"] == 1
+    assert THINK_END_ID in out[0].ids[~out[0].trainable].tolist()   # user 스팬에 특수토큰이 실제로 들어간다
+    _worker_init(TOKENIZER_DIR, True, drop_special_literals=True)
+    out, drops, dropped, info = _worker_encode([_json.dumps({"messages": AGENTLESS, "uuid": "g"})])
+    assert not out and drops["special_literal"] == 1

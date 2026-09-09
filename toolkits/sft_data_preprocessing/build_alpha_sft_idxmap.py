@@ -149,6 +149,12 @@ IGNORE_INDEX = -100
 # pretrain 계열 소비자(merge_eod_pad_segments 등)가 EOD 를 특별 취급하므로
 # 방어적으로 차단 (LC 잡탕 EOD 사고 계열의 원천 차단, 실측 발생율 ~0).
 STRUCTURAL_SPECIALS = ("<|im_start|>", "<|im_end|>", "<|endoftext|>")
+# 비-assistant 스팬(system/user/tool) 안에 있으면 렌더 후 단일 특수 토큰으로 파싱되는 리터럴들.
+# 드롭하지 않고 stats 에 세기만 한다 (기본) — 서빙(vLLM)도 같은 방식으로 토큰화하므로 학습·배포 분포는 일치하지만,
+# 구조 토큰이 비-assistant 스팬에 새는 규모는 셋별로 기록돼야 한다 (SWE-v2 agentless user 프롬프트 43% 실측, 2026-09-09).
+# --drop-special-literals 로 드롭 정책으로 전환 가능.
+SPAN_SPECIALS = ("<think>", "</think>", "<tool_call>", "</tool_call>",
+                 "<tool_response>", "</tool_response>")
 
 
 @dataclasses.dataclass
@@ -191,8 +197,136 @@ def iter_rows(path: str) -> Iterator[dict]:
 # ---------------------------------------------------------------------------
 # 정규화
 # ---------------------------------------------------------------------------
-def normalize_row(row: dict) -> Tuple[Optional[dict], Optional[str]]:
-    """원시 행 -> {messages, tools, train_turns, uuid}. 실패 시 (None, 사유)."""
+def normalize_tool_schema(t: Any) -> Optional[dict]:
+    """도구 선언 1건 -> 템플릿이 name·parameters 를 채워 렌더할 수 있는 형태.
+
+    이미 정상(function.name + parameters dict, 또는 bare name + parameters dict)이면 **원본 객체 그대로** 반환
+    (기존 셋의 렌더 불변 — 템플릿 render_extra_keys 가 뿌리는 부가 키도 유지). 비정상 형태만 정규화:
+      - MCP 형 (OpenCode-v1): {"id", "description", "inputSchema": {"jsonSchema": {...}}}
+        → 템플릿이 <name></name>·<parameters></parameters> 빈값으로 렌더했던 결함 (2026-09-09 검토 #2)
+      - Anthropic 형: {"name", "input_schema": {...}}
+    이름을 찾지 못하면 None (호출자가 tool_schema_shape 로 드롭).
+    """
+    if not isinstance(t, dict):
+        return None
+    fn = t.get("function") if isinstance(t.get("function"), dict) else t
+    if isinstance(fn.get("name"), str) and fn["name"] and isinstance(fn.get("parameters"), dict):
+        return t
+    name = fn.get("name") or fn.get("id") or t.get("name") or t.get("id")
+    if not isinstance(name, str) or not name:
+        return None
+    params = fn.get("parameters")
+    if not isinstance(params, dict):
+        for k in ("inputSchema", "input_schema", "parameters_schema"):
+            v = fn.get(k) if fn.get(k) is not None else t.get(k)
+            if isinstance(v, dict):
+                params = v.get("jsonSchema") if isinstance(v.get("jsonSchema"), dict) else v
+                break
+    if not isinstance(params, dict):
+        params = {"type": "object", "properties": {}}
+    out: Dict[str, Any] = {"name": name, "parameters": params}
+    desc = fn.get("description") if fn.get("description") is not None else t.get("description")
+    if isinstance(desc, str):
+        out["description"] = desc
+    return {"type": "function", "function": out}
+
+
+def _json_type(v: Any) -> str:
+    if isinstance(v, bool):
+        return "boolean"
+    if isinstance(v, int):
+        return "integer"
+    if isinstance(v, float):
+        return "number"
+    if isinstance(v, list):
+        return "array"
+    if isinstance(v, dict):
+        return "object"
+    return "string"
+
+
+def _sidecar_system_key(system_content: Any) -> str:
+    import hashlib
+    return hashlib.md5(((system_content or "") if isinstance(system_content, str) else "")[:200]
+                       .encode("utf-8")).hexdigest()[:10]
+
+
+def inject_tools(norm_msgs: List[dict], sidecar: dict) -> Tuple[Optional[list], Counter]:
+    """`tools` 가 없는데 구조화 tool_calls 를 쓰는 행에 도구 선언을 붙인다 (SWE-v3 결함, 2026-09-09 검토 #1).
+
+    sidecar 형식 (build_swe_v3_tools_sidecar.py 산출):
+      {"families": {md5(system[:200])[:10]: {"declare": "union"|"called", "tools": {name: tool}}},
+       "by_name": {name: tool}}
+      1) 행이 호출한 도구명(순서 유지)을 모은다. 호출이 없으면 주입하지 않는다 (Terminus·텍스트 액션 행 불변).
+      2) 행의 system 패밀리가 families 에 있으면: declare=="union" 이면 그 패밀리의 도구 전부(실제 하니스 —
+         OpenHands·SWE-agent·opencode·Codex 는 매 세션 고정 집합을 선언), "called" 면 그 패밀리 사전에서
+         호출된 이름만(별칭이 행마다 바뀌는 합성 하니스 — 행이 쓴 별칭이 곧 그 세션의 도구 집합).
+      3) 호출됐는데 아직 선언되지 않은 이름은 by_name 에서 채우고, 거기에도 없으면 관측 인자로 최소 스키마를 합성한다
+         (tools_synthesized 카운트) — "선언 없이 호출" 이 남지 않도록 보장.
+    """
+    called: List[str] = []
+    for m in norm_msgs:
+        for tc in m.get("tool_calls") or []:
+            n = tc["function"].get("name")
+            if n and n not in called:
+                called.append(n)
+    info: Counter = Counter()
+    if not called:
+        return None, info
+    sysc = norm_msgs[0]["content"] if norm_msgs and norm_msgs[0]["role"] == "system" else ""
+    fam = (sidecar.get("families") or {}).get(_sidecar_system_key(sysc))
+    by_name = sidecar.get("by_name") or {}
+    tools: List[dict] = []
+    have = set()
+    fam_tools = (fam or {}).get("tools") or {}
+    if fam and fam.get("declare", "called") == "union":
+        cand = list(fam_tools.values())
+        info["tools_injected_by_family_union"] += 1
+    elif fam:
+        cand = [fam_tools[n] for n in called if n in fam_tools]
+        info["tools_injected_by_family_called"] += 1
+    else:
+        cand = []
+    for t in cand:
+        nt = normalize_tool_schema(t)
+        if nt is not None and nt["function"]["name"] not in have:
+            tools.append(nt)
+            have.add(nt["function"]["name"])
+    for n in called:
+        if n in have:
+            continue
+        t = by_name.get(n)
+        if t is not None:
+            t = normalize_tool_schema(t)
+        if t is None:
+            args: Dict[str, str] = {}
+            for m in norm_msgs:
+                for tc in m.get("tool_calls") or []:
+                    a = tc["function"].get("arguments")
+                    if tc["function"].get("name") == n and isinstance(a, dict):
+                        for k, v in a.items():
+                            args.setdefault(k, _json_type(v))
+            t = {"type": "function", "function": {
+                "name": n, "description": f"Tool `{n}`.",
+                "parameters": {"type": "object",
+                               "properties": {k: {"type": ty} for k, ty in args.items()},
+                               "required": sorted(args)}}}
+            info["tools_synthesized"] += 1
+        else:
+            info["tools_injected_by_name"] += 1
+        tools.append(t)
+        have.add(n)
+    info["tools_injected_rows"] += 1
+    return tools, info
+
+
+def normalize_row(row: dict, tools_sidecar: Optional[dict] = None,
+                  info: Optional[Counter] = None) -> Tuple[Optional[dict], Optional[str]]:
+    """원시 행 -> {messages, tools, train_turns, uuid}. 실패 시 (None, 사유).
+
+    tools_sidecar: `tools` 가 없는 행에 inject_tools 로 선언을 붙일 때 (--tools-sidecar).
+    info: 정규화·주입 카운터 누적 (tools_schema_normalized, tools_injected_*).
+    """
     messages = row.get("messages")
     if not isinstance(messages, list) or not messages:
         return None, "bad_row"
@@ -267,6 +401,27 @@ def normalize_row(row: dict) -> Tuple[Optional[dict], Optional[str]]:
         norm_msgs.append(nm)
 
     tools = row.get("tools") or None
+    if isinstance(tools, str):  # tools 필드 전체가 JSON 문자열인 경우
+        try:
+            tools = json.loads(tools) or None
+        except json.JSONDecodeError:
+            return None, "bad_row"
+    if tools:
+        if not isinstance(tools, list):
+            return None, "tool_schema_shape"
+        fixed_tools = []
+        for t in tools:
+            nt = normalize_tool_schema(t)
+            if nt is None:
+                return None, "tool_schema_shape"
+            if nt is not t and info is not None:
+                info["tools_schema_normalized"] += 1
+            fixed_tools.append(nt)
+        tools = fixed_tools
+    elif tools_sidecar is not None:
+        tools, inj = inject_tools(norm_msgs, tools_sidecar)
+        if info is not None:
+            info.update(inj)
     train_turns = (row.get("metadata") or {}).get("train_turns")
     if train_turns is not None and len(train_turns) != len(norm_msgs):
         return None, "bad_row"
@@ -279,7 +434,40 @@ def normalize_row(row: dict) -> Tuple[Optional[dict], Optional[str]]:
     }, None
 
 
-def expand_train_turns_fanout(norm: dict) -> List[dict]:
+def _is_tool_scenario(norm: dict) -> bool:
+    """템플릿의 DSV4 분기와 같은 판정: tools 선언 ∨ tool_calls ∨ role=tool."""
+    if norm.get("tools"):
+        return True
+    return any(m["role"] == "tool" or m.get("tool_calls") for m in norm["messages"])
+
+
+def _has_reasoning(m: dict) -> bool:
+    rc = m.get("reasoning_content")
+    if isinstance(rc, str) and rc.strip():
+        return True
+    inl = _split_inline_think(m.get("content"))
+    return bool(inl and inl[0].strip())
+
+
+def needs_implicit_fanout(norm: dict) -> bool:
+    """train_turns 가 없는(=전 턴 학습) 행 중, 그대로 렌더하면 학습 턴의 reasoning 이 사라지는 행.
+
+    조건 = 일반(비-tool) 시나리오 ∧ user 턴 2개 이상 ∧ 마지막 user 이전 assistant 턴에 reasoning 존재.
+    tool 시나리오는 템플릿이 user 경계 너머 reasoning 을 보존하므로 전개 불요(턴 수 제곱 비용 회피).
+    reasoning 이 없는 셋(no-think)은 전개해도 loss 등가라 제외. Chat-v2 reasoning_on 실측: 행 25.5% (2026-09-09).
+    """
+    if norm["train_turns"] is not None:
+        return False
+    msgs = norm["messages"]
+    users = [i for i, m in enumerate(msgs) if m["role"] == "user"]
+    if len(users) < 2 or _is_tool_scenario(norm):
+        return False
+    last_user = users[-1]
+    return any(m["role"] == "assistant" and i < last_user and _has_reasoning(m)
+               for i, m in enumerate(msgs))
+
+
+def expand_train_turns_fanout(norm: dict, implicit: bool = False) -> List[dict]:
     """multi-True train_turns 행 -> True 턴별 서브샘플 (의도적 차이 #2).
 
     각 True assistant 턴 k 에 대해 messages[:k+1] + "k 만 학습" 서브샘플을
@@ -288,10 +476,16 @@ def expand_train_turns_fanout(norm: dict) -> List[dict]:
     토큰열 일치 (마지막 True 턴의 서브샘플은 원본 전체 렌더와 동일).
     True 가 1개 이하면 원본 그대로 1건 (last-only 행은 전개와 등가 —
     IF 실측상 single-True 는 전부 마지막 턴, docs §2.5).
+
+    implicit=True: train_turns 가 없는 행도 needs_implicit_fanout 이면 전 assistant 턴을
+    True 로 간주해 전개한다 (--fanout-implicit-turns; Chat-v2 reasoning_on 결함, 2026-09-09 검토 #3).
     """
     tt = norm["train_turns"]
     if tt is None:
-        return [norm]
+        if not (implicit and needs_implicit_fanout(norm)):
+            return [norm]
+        tt = [m["role"] == "assistant" for m in norm["messages"]]
+        norm = dict(norm, train_turns=tt)
     true_idxs = [i for i, m in enumerate(norm["messages"])
                  if m["role"] == "assistant" and tt[i]]
     if len(true_idxs) <= 1:
@@ -324,6 +518,25 @@ def has_structural_injection(norm: dict) -> bool:
             if lit in s:
                 return True
     return False
+
+
+def count_special_literals(norm: dict) -> Counter:
+    """비-assistant 스팬(system/user/tool content) 안의 SPAN_SPECIALS 리터럴 — {literal_<tok>_<role>: 건수}.
+
+    렌더 후 tok(rendered) 가 이를 단일 특수 토큰으로 파싱하므로 user 스팬에 <think>(14) 등이 들어간다.
+    기본은 stats 기록만(서빙도 동일 토큰화), --drop-special-literals 면 드롭.
+    """
+    c: Counter = Counter()
+    for m in norm["messages"]:
+        if m["role"] == "assistant":
+            continue
+        s = m.get("content")
+        if not isinstance(s, str):
+            continue
+        for lit in SPAN_SPECIALS:
+            if lit in s:
+                c[f"literal_{lit}_{m['role']}"] += 1
+    return c
 
 
 # ---------------------------------------------------------------------------
@@ -565,14 +778,20 @@ _WORKER_ARGS = None
 
 def _worker_init(tokenizer_path: str, mask_role_header: bool,
                  fanout_train_turns: bool = False, medium_effort: bool = False,
-                 budget: Optional[dict] = None, keep_history_think: bool = False):
+                 budget: Optional[dict] = None, keep_history_think: bool = False,
+                 fanout_implicit_turns: bool = False,
+                 tools_sidecar: Optional[dict] = None,
+                 drop_special_literals: bool = False):
     global _WORKER_TOK, _WORKER_ARGS
     from transformers import AutoTokenizer
     _WORKER_TOK = AutoTokenizer.from_pretrained(tokenizer_path)
     _WORKER_ARGS = {"mask_role_header": mask_role_header, "hdr_cache": {},
                     "fanout": fanout_train_turns,
+                    "fanout_implicit": fanout_implicit_turns,
                     "medium_effort": medium_effort, "budget": budget,
-                    "keep_history_think": keep_history_think}
+                    "keep_history_think": keep_history_think,
+                    "tools_sidecar": tools_sidecar,
+                    "drop_special_literals": drop_special_literals}
 
 
 def _worker_encode(rows: List[Any]
@@ -593,15 +812,30 @@ def _worker_encode(rows: List[Any]
                 drops["bad_row"] += 1
                 dropped_rows.append({"reason": "bad_row", "uuid": ""})
                 continue
-        norm, why = normalize_row(row)
+        norm, why = normalize_row(row, tools_sidecar=_WORKER_ARGS.get("tools_sidecar"),
+                                  info=info)
         if norm is None:
             drops[why] += 1
             dropped_rows.append({"reason": why, "uuid": str(row.get("uuid", ""))})
             continue
-        subs = expand_train_turns_fanout(norm) if _WORKER_ARGS["fanout"] else [norm]
+        specials = count_special_literals(norm)
+        if specials:
+            info.update(specials)
+            info["special_literal_rows"] += 1
+            if _WORKER_ARGS.get("drop_special_literals"):
+                drops["special_literal"] += 1
+                dropped_rows.append({"reason": "special_literal", "uuid": norm["uuid"]})
+                continue
+        implicit = _WORKER_ARGS.get("fanout_implicit", False)
+        if _WORKER_ARGS["fanout"] or implicit:
+            subs = expand_train_turns_fanout(norm, implicit=implicit)
+        else:
+            subs = [norm]
         if len(subs) > 1:
             info["fanout_rows"] += 1
             info["fanout_subsamples"] += len(subs)
+            if norm["train_turns"] is None:
+                info["fanout_implicit_rows"] += 1
         for sub in subs:
             enc, why = render_and_mask(
                 _WORKER_TOK, sub,
@@ -646,6 +880,16 @@ def get_args():
                    help="multi-True train_turns 행을 True 턴별 서브샘플로 전개 "
                         "— 중간 학습 턴의 reasoning 보존 (IF 계열용, "
                         "docstring 의도적 차이 #2)")
+    p.add_argument("--fanout-implicit-turns", action="store_true",
+                   help="train_turns 가 없는(전 턴 학습) 일반 대화 행도 멀티 user + 히스토리 reasoning 이면 "
+                        "턴별 전개 (needs_implicit_fanout). --fanout-train-turns 를 포함한다. "
+                        "Chat-v2 reasoning_on 같은 셋용 (2026-09-09 검토 #3)")
+    p.add_argument("--tools-sidecar", default=None,
+                   help="tools 가 없는데 tool_calls 를 쓰는 행에 도구 선언을 주입할 JSON "
+                        "({by_system, by_name}; inject_tools docstring). SWE-v3 용 (2026-09-09 검토 #1)")
+    p.add_argument("--drop-special-literals", action="store_true",
+                   help="system/user/tool content 에 <think>·<tool_call>·<tool_response> 계열 리터럴이 있는 행을 드롭 "
+                        "(기본은 stats 기록만 — count_special_literals)")
     p.add_argument("--medium-effort", action="store_true",
                    help="마지막 user 턴에 '{reasoning effort: efficient}' 마커 "
                         "(템플릿 medium_effort=True; docstring §Effort/Budget)")
@@ -698,6 +942,13 @@ def main():
     pad_id = tok.pad_token_id
     assert pad_id is not None, "tokenizer 에 pad 토큰 필요"
     vocab_size = len(tok)
+    tools_sidecar = None
+    if args.tools_sidecar:
+        with open(args.tools_sidecar, encoding="utf-8") as f:
+            tools_sidecar = json.load(f)
+        assert isinstance(tools_sidecar, dict) and ("by_name" in tools_sidecar or "by_system" in tools_sidecar), \
+            "--tools-sidecar 는 {by_system, by_name} JSON"
+    worker_extra = (args.fanout_implicit_turns, tools_sidecar, args.drop_special_literals)
 
     out_dir = os.path.dirname(args.output_prefix)
     if out_dir:
@@ -764,14 +1015,14 @@ def main():
     if args.workers <= 1:
         _worker_init(args.tokenizer, args.mask_role_header,
                      args.fanout_train_turns, args.medium_effort, budget,
-                     args.keep_history_think)
+                     args.keep_history_think, *worker_extra)
         for chunk in _chunks():
             _consume(_worker_encode(chunk))
     else:
         with mp.Pool(args.workers, initializer=_worker_init,
                      initargs=(args.tokenizer, args.mask_role_header,
                                args.fanout_train_turns, args.medium_effort,
-                               budget, args.keep_history_think)) as pool:
+                               budget, args.keep_history_think, *worker_extra)) as pool:
             for result in pool.imap(_worker_encode, _chunks(), chunksize=1):
                 _consume(result)
     dropped_f.close()
@@ -797,6 +1048,12 @@ def main():
             "truncate_reasoning_budget": budget,
             "truncate": {k: int(v) for k, v in sorted(fanout_agg.items())
                          if k.startswith("trunc_")},
+            "fanout_implicit_turns": args.fanout_implicit_turns,
+            "fanout_implicit_rows": int(fanout_agg["fanout_implicit_rows"]),
+            "tools_sidecar": args.tools_sidecar,
+            "tools": {k: int(v) for k, v in sorted(fanout_agg.items()) if k.startswith("tools_")},
+            "special_literals": {k: int(v) for k, v in sorted(fanout_agg.items())
+                                 if k.startswith("literal_") or k == "special_literal_rows"},
             "rows_rendered": int(lens.size),
             "drops": dict(drops),
             "total_tokens": int(lens.sum()),
@@ -870,6 +1127,13 @@ def main():
         "truncate_reasoning_budget": budget,
         "truncate": {k: int(v) for k, v in sorted(fanout_agg.items())
                      if k.startswith("trunc_")},
+        "fanout_implicit_turns": args.fanout_implicit_turns,
+        "fanout_implicit_rows": int(fanout_agg["fanout_implicit_rows"]),
+        "tools_sidecar": args.tools_sidecar,
+        "tools": {k: int(v) for k, v in sorted(fanout_agg.items()) if k.startswith("tools_")},
+        "drop_special_literals": args.drop_special_literals,
+        "special_literals": {k: int(v) for k, v in sorted(fanout_agg.items())
+                             if k.startswith("literal_") or k == "special_literal_rows"},
         "samples_kept": len(samples),
         "drops": dict(drops),
         "too_long_hist_tok_buckets": {str(k): v for k, v in sorted(too_long_hist.items())},

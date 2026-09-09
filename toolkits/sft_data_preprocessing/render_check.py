@@ -65,6 +65,17 @@ def inspect_doc(tok, doc: np.ndarray, width: int):
     out["block"] = block
     out["envelope"] = [p for p in ENVELOPE_PATTERNS if p in block]
     out["literal_newlines"] = block.count("\\n")
+    # <tools> 선언부 검사 (2026-09-09 검토 #1·#2): 선언 없는 tool_call, 빈 <name>/<parameters> 를 잡는다.
+    ts, te = text.find("<tools>"), text.find("</tools>")
+    tools_block = text[ts:te] if 0 <= ts < te else ""
+    out["tools_declared"] = tools_block.count("<function>")
+    out["tools_empty_name"] = tools_block.count("<name></name>")
+    out["tools_empty_params"] = tools_block.count("<parameters>\n</parameters>")
+    out["undeclared_tool_call"] = out["tool_call"] > 0 and out["tools_declared"] == 0
+    out["tools_flags"] = [f for f, v in (("undeclared_tool_call", out["undeclared_tool_call"]),
+                                          ("empty_name", out["tools_empty_name"]),
+                                          ("empty_parameters", out["tools_empty_params"])) if v]
+    out["tools_head"] = tools_block[:min(len(tools_block), 360)]
     li = np.nonzero(labels != IGNORE)[0]
     if li.size:
         s = int(li[0]); e = s
@@ -93,18 +104,23 @@ def check_member(member_dir: str, tok, docs, width: int, write: bool) -> bool:
     name = os.path.basename(member_dir.rstrip("/"))
     lines = [f"# {name} 렌더 육안 확인 (규칙 9) — {datetime.now().strftime('%Y-%m-%d %H:%M')}",
              f"docs={n:,}. 각 문서의 첫 샘플을 디코드해 첫 `<tool_response>` 블록(없으면 첫 assistant 턴 머리)을 기록한다.",
-             "봉투 흔적 = Python repr(`[{'type': …`)·리터럴 `\\n` 탐지. 판정은 본문을 읽고 사람이 한다.", ""]
+             "봉투 흔적 = Python repr(`[{'type': …`)·리터럴 `\\n` 탐지 + `<tools>` 선언부(선언 없는 tool_call·빈 name·빈 parameters). 판정은 본문을 읽고 사람이 한다.", ""]
     flagged = False
     for d in picks:
         r = inspect_doc(tok, np.asarray(ds[d]), width)
         env = ", ".join(r["envelope"]) if r["envelope"] else "없음"
-        flagged |= bool(r["envelope"])
-        lines += [f"## doc {d}  ({r['kind']})  봉투 흔적: {env}",
+        tf = ", ".join(r["tools_flags"]) if r["tools_flags"] else "없음"
+        flagged |= bool(r["envelope"]) or bool(r["tools_flags"])
+        lines += [f"## doc {d}  ({r['kind']})  봉투 흔적: {env} · tools 결함: {tf}",
                   f"tokens {r['tokens']:,} · trainable {r['trainable']:,} · assistant 턴 {r['assistant_turns']} · "
                   f"`<think>` {r['think_open']}/{r['think_close']} · tool_call {r['tool_call']} · tool_response {r['tool_response']}"
-                  f" · 블록 내 이스케이프 `\\n` {r['literal_newlines']}개(JSON 문자열이면 정상)",
+                  f" · 블록 내 이스케이프 `\\n` {r['literal_newlines']}개(JSON 문자열이면 정상)"
+                  f" · tools 선언 {r['tools_declared']}개(빈 name {r['tools_empty_name']}·빈 parameters {r['tools_empty_params']})",
                   "```", r["block"].rstrip(), "```",
-                  "첫 학습 스팬:", "```", r["first_trainable"].rstrip(), "```", ""]
+                  "첫 학습 스팬:", "```", r["first_trainable"].rstrip(), "```"]
+        if r["tools_head"]:
+            lines += ["`<tools>` 머리:", "```", r["tools_head"].rstrip(), "```"]
+        lines.append("")
     body = "\n".join(lines)
     print(body)
     if write:
@@ -141,7 +157,7 @@ def main():
     ok = True
     for m in members:
         ok &= check_member(m, tok, docs, a.width, a.write)
-    print("\n[RESULT]", "clean (봉투 흔적 없음)" if ok else "FLAGGED — 본문 확인 필요")
+    print("\n[RESULT]", "clean (봉투 흔적·tools 결함 없음)" if ok else "FLAGGED — 본문 확인 필요")
     sys.exit(0 if ok else 2)
 
 
