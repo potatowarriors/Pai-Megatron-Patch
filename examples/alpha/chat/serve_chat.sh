@@ -17,7 +17,7 @@
 set -euo pipefail
 HERE="$(cd "$(dirname "$0")" && pwd)"
 ALPHA="$(cd "$HERE/.." && pwd)"
-CKPT="${1:-$ALPHA/outputs/alpha_baseline_48L_sft_128k_full_swap_20260901_101523/hfmodel_0001800}"
+CKPT="${1:-$ALPHA/outputs/alpha_baseline_48L_sft_128k_full_p2_20260907_073414/hfmodel_0000500}"
 MAX_LEN="${2:-131072}"
 PORT="${3:-8001}"
 GPU="${4:-3}"
