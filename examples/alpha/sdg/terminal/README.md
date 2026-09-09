@@ -219,3 +219,19 @@ bash sdg/terminal/serve/glm_tunnel.sh start && bash sdg/terminal/serve/glm_tunne
 - loss 0.83 은 phase-2 iter 500 의 0.65 보다 높다. 신규 도메인 20% + 1 배치 표본이라 절대값은 기록만(G-P5 기준: 유한·traceback 0), 판단은 본 런 곡선으로.
 - 데이터 캐시 `configs/data/.cache/sft_128k_terminal_blend_p3`(NFS)는 본 런이 재사용. 128k 패킹 bins 는 51 멤버도 1분 내 빌드(phase-2 "26종 25분"은 64k 기준).
 - phase-2 완주 예상 ≈ 21:00 KST (ckpt 100개당 8h41m 일정; main1 시계는 UTC, sub1 은 KST).
+
+### P4 본 런 — 자동 개시 → iter 30 에서 종료 (2026-09-09 21:07 ~ 23:59 KST, 사용자 결정)
+
+- phase-2 602 완주 직후 런처가 본 런을 자동 개시했다 (`outputs/alpha_baseline_48L_sft_128k_terminal_p3_20260909_120750`, 21:07 KST).
+  첫 iteration 게이트 통과(loss 0.828, 469 s), 이후 316 s/iter. 블렌드는 09-09 15:30 교정본(리플레이 멤버 4종 교체, 위 STATUS 기록).
+- 진행: **iter 30/90**. loss 0.828 → 0.792(iter 30). iter 20 valid loss 0.672 / PPL 1.96. ckpt `iter_0000020` 저장(옵티마이저 포함, ≈90 GB — 분석용으로 보존).
+- **종료 (23:59 KST, SIGTERM — 사용자 결정, 다른 세션 통보)**: phase-2 에서 회귀 2건이 발견돼 교정이 먼저다.
+  ① 도구가 선언되면 무관한 질문에도 강제 호출하는 과잉 호출(phase-2 신규 Agentic-v2 의 호출률 96%, When2Call 계열)
+  ② Chat-v2 의 교사 정체성 오염("trained by Google" 205턴). phase-3 블렌드는 오염된 Chat-v2 를 리플레이하고 "항상 호출" 형 터미널
+  데이터를 얹어 회귀를 심화시키므로 교정 전 진행은 손실. 상세는 phase-2 트랙(STATUS)·`KNOWN_ISSUES`.
+- **후속(B안)**: phase-1 최종(iter 2448)에서 교정 블렌드로 phase-2 를 재실행하고 그 블렌드에 터미널 셋을 흡수한다. 터미널 데이터
+  (`alpha-SFT-Terminal-v1`, bins `terminal_terminus2_synth`·`swe_v3_terminus_keephist`)는 유효하므로 폐기하지 않는다. 흡수 시 참고:
+  둘 다 `--keep-history-think` 렌더(§1.1)이고 Terminus 행은 tool-시나리오가 아니라 `tools` 선언 없이 렌더된다 — 과잉 호출 회귀와는 경로가
+  다르다(도구 선언 없음). 4 epoch 근거는 §P4 표. 멤버 50+ 블렌드는 `mid-level-dataset-surplus: 0.05` 가 필요하다(위 사전 게이트 2차).
+- main1 GPU 는 회수돼 한국어 chat 재합성에 쓰인다. TB-2 before/after 는 B안 phase-2 완주 후로 이월. `scripts/launch_p3_after_phase2.sh` 는
+  첫 iteration 게이트 후 exit 0 으로 끝나 재발동하지 않는다.
