@@ -87,8 +87,13 @@ if has agentic; then
   if [ "$rc" -eq 0 ] || [ "${FORCE_AGENTIC:-0}" = "1" ]; then
     echo "[suite] === SWE-bench ==="
     SKIP_GATES=1 BASE_URL="$BURL" bash "$HERE/run_swe.sh" "$RUN_TAG" "${SWE_N:-0}" "${SWE_W:-12}" || rc=1
-    echo "[suite] === Terminal-Bench ==="
-    SKIP_GATES=1 BASE_URL="$BURL" bash "$HERE/run_terminal.sh" "$RUN_TAG" "${TERM_N:-0}" "${TERM_W:-8}" || rc=1
+    # Terminal 정본은 **TB-2**(Harbor + Terminus-2) — 사용자 결정 2026-09-07.
+    # 학습 데이터가 Terminus-2 스키마인데 TB-1 하니스는 terminus v1 이었다
+    # (`SFT_BENCHMARKS.md` §3.11). TB-1 로 되돌리려면 TERMINAL_HARNESS=tb1.
+    echo "[suite] === Terminal-Bench (${TERMINAL_HARNESS:-tb2}) ==="
+    TERM_RUNNER="run_terminal_tb2.sh"
+    [ "${TERMINAL_HARNESS:-tb2}" = "tb1" ] && TERM_RUNNER="run_terminal.sh"
+    SKIP_GATES=1 BASE_URL="$BURL" bash "$HERE/$TERM_RUNNER" "$RUN_TAG" "${TERM_N:-0}" "${TERM_W:-8}" || rc=1
     # 에이전틱은 컨테이너 호스트에 build cache 를 수십 GB 남긴다. 매번 회수한다.
     # (sweb.eval 태스크 이미지는 남긴다 — 다음 체크포인트에서 재사용)
     bash "$HERE/docker_gc.sh" || echo "[suite] ⚠️ docker gc 실패 (비치명)"

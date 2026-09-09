@@ -30,9 +30,19 @@ else
   # fleet 가 GPU 를 물고 있으면 변환이 OOM 난다 — 먼저 내린다.
   bash "$HERE/stop_fleet.sh" "${GPUS:-0,1,2,3,4,5,6,7}" >/dev/null 2>&1 || true
   sleep 5
-  bash "$REPO/toolkits/distributed_checkpoints_convertor/scripts/alpha/run_convert.sh" \
-      baseline_48L "$RUN_DIR" "auto:$ITER" true true bf16 || {
-    echo "[new-ckpt] ❌ 변환 실패 — 중단"; exit 1; }
+  if ! bash "$REPO/toolkits/distributed_checkpoints_convertor/scripts/alpha/run_convert.sh" \
+        baseline_48L "$RUN_DIR" "auto:$ITER" true true bf16; then
+    # sub1 은 compat libcuda 570→595 스왑 이후 변환 **teardown** 에서 SIGSEGV 를 낸다
+    # (`examples/alpha/CLAUDE.md` 함정 표 09-04). 두 선례(iter1200 .partial, iter1500·1800
+    # exitcode -11) 모두 8랭크 전부가 프로그램 끝까지 도달했고 산출물은 정상이었다.
+    # "종료코드 실패면 폐기" 도 "무시하고 진행" 도 틀렸다 — **산출물을 직접 잰다**.
+    echo "[new-ckpt] ⚠️ 변환 종료코드 실패 — 산출물 검증으로 판정한다"
+    if [ -d "$HFDIR" ] && python3 "$ALPHA/tools/verify_hf_export.py" "$HFDIR"; then
+      echo "[new-ckpt] ✅ 검증 통과 — 진행 (G1·G2·G3 가 서빙에서 한 번 더 확인한다)"
+    else
+      echo "[new-ckpt] ❌ 변환 실패 — 중단"; exit 1
+    fi
+  fi
 fi
 
 # ---- 2) G1 재확인 (변환 경로를 안 탔을 수도 있으므로) ----
