@@ -1,0 +1,48 @@
+# librechat.yaml — alpha 채팅 서빙(LibreChat) 설정. 런처 chat/run_librechat.sh 가 CONFIG_PATH 로 가리킨다.
+#
+# 이 파일이 alpha 의 학습 분포를 지키는 장치다. 검증 근거는 2026-09-09 PoC 요청 로그
+# (vLLM 에 도착한 본문이 model / stream / messages 뿐이었다) — docs/KNOWN_ISSUES.md 2026-09-09.
+#   - customParams.reasoningKey: vLLM 0.25.1 은 사고 과정을 `reasoning` 필드로 내보낸다.
+#     LibreChat 기본값은 `reasoning_content` 라 이 줄이 없으면 사고 과정이 본문에 섞여 보인다.
+#   - customParams.includeReasoningHistory: tool 호출 턴에만 reasoning 을 히스토리에 복원한다.
+#     alpha 템플릿의 DSV4 분기(tool 시나리오 = 보존, 일반 대화 = 제거)와 같은 규칙이다
+#     (docs/INTERLEAVED_THINKING.md §4). 일반 대화의 think 파트는 LibreChat 이 버린다.
+#   - dropParams: 학습에 없는 샘플링 항목을 보내지 않는다. temperature/top_p 는 사용자가 건드리지
+#     않으면 아예 보내지 않으므로 vLLM 의 generation_config(1.0 / 0.95) 가 적용된다.
+#   - titleConvo: false — 제목 생성이 같은 모델에 영어 메타 프롬프트를 보내는 것을 막는다.
+#   - interface: 도구를 켤 수 있는 UI 를 모두 감춘다. 도구가 하나라도 붙으면 템플릿이 tool
+#     시나리오로 분기해 시스템 프롬프트에 도구 명세가 들어간다 (OpenWebUI 사고의 재발 방지).
+#   - baseURL 의 ${ALPHA_VLLM_URL} 은 런처가 .env 에 써 넣는다 (기본 http://localhost:8001/v1).
+#   - 컨텍스트 창: 미등록 모델명은 LibreChat 기본 32,000 토큰. vLLM 의 max_model_len 은 읽지 않는다.
+#     더 긴 창이 필요하면 UI 파라미터 패널의 Max Context Tokens 로 지정.
+version: 1.3.15
+cache: true
+
+interface:
+  customWelcome: 'alpha v2'
+  fileSearch: false
+  webSearch: false
+  runCode: false
+  modelSelect: true
+  parameters: true
+  presets: false
+  prompts: false
+  bookmarks: false
+  multiConvo: false
+  agents: false
+  temporaryChat: true
+
+endpoints:
+  custom:
+    - name: 'alpha'
+      apiKey: 'dummy'                 # vLLM 은 키를 검사하지 않지만 비우면 클라이언트가 거부한다
+      baseURL: '${ALPHA_VLLM_URL}'
+      models:
+        default: ['alpha-v2-sft']
+        fetch: true                   # /v1/models 에서 served name 목록을 가져온다
+      titleConvo: false
+      modelDisplayLabel: 'alpha v2'
+      dropParams: ['stop', 'user', 'frequency_penalty', 'presence_penalty']
+      customParams:
+        reasoningKey: 'reasoning'
+        includeReasoningHistory: true

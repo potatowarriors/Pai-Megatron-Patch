@@ -6,9 +6,13 @@
 #   4. 멀티턴에서 히스토리 렌더가 깨지지 않는다
 #   5. tool_choice=auto 요청이 거절되지 않고, 파서가 XML 도구 호출을 실제로 구조화한다
 #      (벤치 게이트 A4 와 같은 취지 — 파서 이름이 붙어 있는 것과 파싱되는 것은 다르다)
-# 사용: bash chat/smoke_chat.sh [BASE_URL]
+#   6. UI(LibreChat) 경유 요청의 프롬프트가 학습 렌더 크기(≈17 토큰)인가 — vLLM /metrics 카운터로 측정.
+#      UI 가 도구·시스템 프롬프트를 몰래 붙이는 것을 잡는다 (OpenWebUI 0.11 사고, KNOWN_ISSUES 2026-09-09).
+#      구현은 smoke_ui_gate.py. LC_URL=none 으로 명시 스킵 가능 (UI 없는 벤치 fleet 용). 침묵 스킵은 없다.
+# 사용: LC_URL=http://localhost:8080 bash chat/smoke_chat.sh [BASE_URL]
 set -uo pipefail
 BASE="${1:-http://localhost:8001/v1}"
+HERE="$(cd "$(dirname "$0")" && pwd)"
 python3 - "$BASE" <<'PY'
 import json, sys, urllib.error, urllib.request
 
@@ -118,3 +122,14 @@ print("\n" + "=" * 60)
 print(f"  smoke: {PASS} PASS / {FAIL} FAIL")
 sys.exit(1 if FAIL else 0)
 PY
+rc_vllm=$?
+
+LC_URL="${LC_URL:-http://localhost:8080}"
+if [ "$LC_URL" = "none" ]; then
+  echo "── 6. UI 경유 프롬프트 게이트: SKIPPED (LC_URL=none 명시)"; rc_ui=0
+else
+  python3 "$HERE/smoke_ui_gate.py" "$LC_URL" "$BASE"; rc_ui=$?
+fi
+echo "============================================================"
+echo "  smoke total: vLLM rc=$rc_vllm · UI rc=$rc_ui"
+exit $(( rc_vllm || rc_ui ))
