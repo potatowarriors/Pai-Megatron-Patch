@@ -559,6 +559,43 @@ oracle 을 먼저 돌리는 이유: 0점이 나왔을 때 하니스 결함인지
 "there's extra text after the JSON"). 하니스를 맞춰도 형식 준수는 완전하지 않다 — 학습 블렌드에서
 Terminus 행이 토큰 기준 ≈0.3% 뿐이기 때문으로 보인다(§2.9). n=1 이므로 관측이지 측정은 아니다.
 
+## 3.12 phase-3 데이터 교정 before/after 게이트 (2026-09-09)
+
+`KNOWN_ISSUES.md` 2026-09-09 판정문이 **"phase-3 iteration 은 늘리지 않고 TB-2·SWE-bench
+before/after 로 검증"** 이라고 정했다. before = **phase-2 최종(602)**, after = phase-3 완주.
+
+교정된 결함 ①②(swe_v3 `tools` 컬럼 부재, opencode 스키마가 MCP 형이라 템플릿이 빈값 렌더)는
+**비학습 스팬(context)** 의 결함이다. 학습된 트라젝토리는 멀쩡하고, 빠진 것은 *"선언된 tools
+블록을 보고 호출하는"* 조건부뿐이다. 그래서 **resolved 만 보면 교정 효과가 안 보인다** —
+조건부가 붙었는지는 형식·추출 지표에 먼저 나타난다.
+
+| 게이트 | 출처 | before(602) 기대 | 교정이 들었다면 |
+|---|---|---|---|
+| SWE **빈 패치율** | `results_swe.json` › `swe_detail.empty_patch_rate` | ≈40% (i1500 40.4 / i1800 40.6) | 하락 |
+| SWE **채점기준 적중** | `swe_detail.resolved_given_completed` | i1500 13.5 / i1800 10.7% | 상승 |
+| TB-2 **명령 추출률** | `results_terminal.json` › `terminal_detail.extraction_rate` | 미측정 (1태스크 스모크 50%) | 상승 |
+| TB-2 예외 분포 | `terminal_detail.exception_stats` | — | parse 계열 감소 |
+
+**wandb 에는 올리지 않는다.** 이 값들은 평가 결과가 아니라 진단이고, wandb 는 평가 결과만
+올린다(사용자 결정 2026-09-01). 결과 JSON 과 이 표에서 본다.
+
+왜 이 셋인가 — 관측된 형식 손실이 한 자리에 모인다:
+
+| 실측 | 값 |
+|---|---|
+| SWE `RepeatedFormatError`(빈 패치 176건 중, iter900) | 51건 = 전체의 10.2% |
+| TB-1 `parse_error` (iter1500, 640 trial) | 64건 = 10.0% |
+| TB-2 명령 추출 (1태스크 스모크, 2026-09-07) | **4/8 = 50%** |
+| 도구 영역 학습 토큰 중 `<think></think>` 타깃 (KNOWN_ISSUES 09-09) | p1 ≈35% → **p2 43.6%** → p3 22.9% |
+
+평가 하니스는 전부 thinking ON 이다. 즉 형식 손실이 "모델이 형식을 모른다" 가 아니라
+**학습 모드와 평가 모드의 불일치**일 수 있다. phase-3 는 이 비중을 22.9% 로 낮추므로,
+before/after 로 그 가설이 갈린다.
+
+구현: `run_swe.sh` 파서가 `empty_patch/errors/completed` 를 `swe_detail` 에 넣고,
+`run_terminal_tb2.sh` 가 실행 후 `trajectory.json` 들을 훑어 `extraction_rate` 를 넣는다
+(검증 2026-09-09: 스모크 잡 재집계 8스텝 중 4 = 50%, 수기 계수와 일치).
+
 ## 3.10 반복 실행 워크플로 (학습 중 체크포인트마다)
 
 학습이 진행되며 체크포인트(300 iters마다)가 나오면 반복 평가한다. 스크립트는 모두

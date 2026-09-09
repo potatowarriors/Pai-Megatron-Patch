@@ -88,10 +88,22 @@ res = {"resolved,none": acc}
 # 프론티어 규약상 부분 표본 결과는 보고 대상이 아니다.
 if sub or total == 0:
     res["no_answer,none"] = 1.0
+# phase-3 데이터 교정의 before/after 게이트 (KNOWN_ISSUES 2026-09-09 판정문).
+# 결함 ①②는 **선언된 tools 블록을 보고 호출하는** 조건부를 못 배우게 했다 → 교정 후
+# 빈 패치율과 형식 오류가 줄어야 한다. resolved 만 보면 그 변화가 안 보인다.
+# 이 값들은 결과 JSON·문서에만 남긴다 — wandb 는 평가 결과만 올린다(사용자, 2026-09-01).
+empty = int(d.get("empty_patch_instances", 0) or 0)
+errs = int(d.get("error_instances", 0) or 0)
+comp = int(d.get("completed_instances", 0) or 0)
 json.dump({"results": {"swe_bench_verified": res},
-           "swe_detail": {"resolved": resolved, "total": total, "subsampled": sub}},
+           "swe_detail": {"resolved": resolved, "total": total, "subsampled": sub,
+                          "empty_patch": empty, "errors": errs, "completed": comp,
+                          "empty_patch_rate": (empty / total if total else 0.0),
+                          "resolved_given_completed": (resolved / comp if comp else 0.0)}},
           open(os.path.join(outd, "results_swe.json"), "w"), indent=2)
 mark = "  [부분표본 → 무효]" if sub else ("  [리포트 없음 → 무효]" if total == 0 else "")
 print(f"[swe] resolved {resolved}/{total} = {acc*100:.1f}%{mark}")
+print(f"[swe] 게이트 — 빈패치 {empty}/{total} = {empty/max(total,1)*100:.1f}% · "
+      f"평가오류 {errs} · 채점기준 적중 {resolved}/{comp} = {resolved/max(comp,1)*100:.1f}%")
 PY
 echo "== SWE 완료: $OUT =="

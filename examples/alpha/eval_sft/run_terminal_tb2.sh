@@ -67,6 +67,33 @@ ssh -F "$SSHC" -o BatchMode=yes alpha-eval "
 ssh -F "$SSHC" -o BatchMode=yes alpha-eval \
   "cat /opt/harbor/jobs/$RID/result.json 2>/dev/null" > "$OUT/terminal_raw.json" 2>/dev/null || true
 
+# ── 명령 추출률 (phase-3 before/after 게이트) ────────────────────────────
+# result.json 에는 보상만 있다. "모델이 Terminus-2 형식을 지켜 명령이 뽑혔는가" 는
+# 궤적에서만 나온다 — 2026-09-07 스모크에서 에이전트 응답 8개 중 4개만 추출됐다.
+# KNOWN_ISSUES 09-09: 도구 학습 토큰의 43.6%가 <think></think> 타깃인데 평가는
+# thinking ON 이다. 교정 후 이 비율이 오르는지가 phase-3b 판단 근거가 된다.
+# 원격 스크립트는 **stdin 으로 넘긴다** — ssh "..." 인라인은 따옴표가 중첩돼 깨진다.
+ssh -F "$SSHC" -o BatchMode=yes alpha-eval "JOB=/opt/harbor/jobs/$RID bash -s" > "$OUT/terminal_extract.json" 2>/dev/null <<'REMOTE' || true
+python3 - "$JOB" <<'PY2'
+import json, os, sys, glob
+job = sys.argv[1]
+steps = withcmd = 0
+for f in glob.glob(os.path.join(job, "*", "agent", "trajectory.json")):
+    try:
+        t = json.load(open(f))
+    except Exception:
+        continue
+    for st in (t.get("steps") or []):
+        if st.get("source") != "agent":
+            continue
+        steps += 1
+        if st.get("tool_calls"):
+            withcmd += 1
+print(json.dumps({"agent_steps": steps, "steps_with_commands": withcmd,
+                  "extraction_rate": (withcmd / steps if steps else 0.0)}))
+PY2
+REMOTE
+
 python3 - "$OUT" "$SUBSAMPLED" <<'PY'
 import json, sys, os
 outd, sub = sys.argv[1], sys.argv[2] == "true"
@@ -87,13 +114,22 @@ try:
 except Exception as e:  # noqa: BLE001
     print(f"[term2] ⚠️ 결과 파싱 실패: {e}")
 
+ext = {}
+try:
+    ext = json.load(open(os.path.join(outd, "terminal_extract.json")))
+except Exception:  # noqa: BLE001
+    pass
 res = {"results": {"terminal_bench_2": {"resolved,none": acc}},
        "terminal_detail": {"harness": "terminal-bench@2.0 + harbor + terminus-2",
                            "n_trials": ntr, "n_errors": nerr,
                            "reward_counts": rewards, "exception_stats": exc,
+                           **{k: ext[k] for k in ext},
                            "subsampled": sub}}
 json.dump(res, open(os.path.join(outd, "results_terminal.json"), "w"), ensure_ascii=False, indent=2)
 print(f"[term2] accuracy {acc*100:.1f}%  trials={ntr} errors={nerr}")
+if ext.get("agent_steps"):
+    print(f"[term2] 게이트 — 명령 추출 {ext['steps_with_commands']}/{ext['agent_steps']} "
+          f"= {ext['extraction_rate']*100:.1f}%")
 if exc: print(f"[term2] 예외 분포: {exc}")
 print(f"[term2] → {outd}/results_terminal.json")
 PY
