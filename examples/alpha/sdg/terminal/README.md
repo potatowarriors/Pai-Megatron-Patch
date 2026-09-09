@@ -290,7 +290,12 @@ phase-2 세션의 1차 검증(133k 표본: 계열 md5 fa616539 100%, 인라인 `
 **렌더·bins 검증 (시험 7,732행)**: `--keep-history-think` 로 859 bins, 실토큰 112.3M / 학습 61.6M, 드롭 0, `verify_sft_bins` PASS,
 `render_check` 3문서 `<think>` 전 턴(20/20·6/6·5/5) 봉투 흔적 없음.
 
-**3자 대조 (변환 표본 8,602행, 필터 전; `REFERENCE_STATS.md` 는 필터 후 20k 표본으로 갱신)**
+**전량 필터 (보정 후)**: 365,705 → **352,291 행(96.3%)**. 드롭 dup_task 9,905(같은 과제의 다른 에피소드 — 다양성을 원하면 유지 가능, 플래그 추가 필요) ·
+parse_error_rate 1,589(splice 후 남는 것은 `warnings` 턴이라 사실상 경고 무시율 >34%) · max_turns 834 · no_edit 920 · forbidden_git 291 · repeat_loop 117.
+`filtered/ntc_v1_filtered.jsonl` + `FILTER_STATS.json`. 필터 후 무작위 19,361행 표본: 행 토큰 mean 14.7k(median 13.1k, p90 26k, max 92k, 128k 초과 0),
+reasoning 턴 99.8%, 완료 72%, commands/턴 2.9 → 전량 ≈ **5.2B 실토큰** 추정 (`REFERENCE_STATS.md` 3열 갱신).
+
+**3자 대조 (변환 표본 8,602행, 필터 전; `REFERENCE_STATS.md` 는 필터 후 19,361행 표본)**
 
 | 지표 | 합성 v1 | SWE-v3 Terminus | 공개 코퍼스(변환) |
 |---|---|---|---|
