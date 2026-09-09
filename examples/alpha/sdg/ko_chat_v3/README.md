@@ -101,6 +101,30 @@ agentic search). 파악·우선순위는 `docs/SFT_RL_DATASETS.md` §2.8·§6 �
 - **재개**: 같은 명령 재실행(`conv_id` 로 건너뜀): `python3 generate_v3.py --seeds out/seeds_ko_pilot.jsonl --out out/v3_r1_lmsys.jsonl --workers 96`
 - 심판 위치 편향(A 9 : B 4, 스모크) 미보정 — 다음 라운드에 순서 무작위화 예정. 다음 시드 확장: 현지화 재작성(chat_v3 영어 원문) + 트랙 B 샘플러.
 
+### r1 결과 (2026-09-10 새벽 완주, 4,573 s, 교사 합산 ≈1,360 tok/s; 검수 `inspect_run.py` → `out/R1_INSPECT.md`)
+
+| 지표 | 값 |
+|---|---|
+| 채택 행 / 양샘플 리젝 행 | **2,327 / 234 → 채택률 90.9%** (시드 2,561) |
+| 채택 행 교사 | GLM 1,190 · Qwen 1,137 |
+| 사고 중앙값(p25/p75) | GLM **1,666자**(934/3,001) · Qwen **983자**(499/2,490) — v1/v2 204자 |
+| 사고 한글비 / 한자비 | GLM 0.11 / **0.000** · Qwen 0.20 / **0.000** (중국어 혼입 0 = 언어 규칙 통과) |
+| 답변 한글비 · 중앙값 | GLM 0.84 · 624자, Qwen 0.81 · 980자 |
+| 채택 행 자기귀속 재검 | **0 건** |
+| 멀티턴(user≥2) 행 | 1,040 (44.7%) — 히스토리 보존, 마지막 턴만 학습 |
+| 심판 | A 834 · B 857 · 판정 없음 636(그중 2샘플 행 322 = **심판 실패 12%**: 심판 사고가 4,096 토큰 소진 → 빈 답변) |
+| 샘플 리젝 사유 | reasoning_degenerate 170 · content_chinese 42 · empty_reasoning 33 · vendor_self_attribution 25 · empty_content 17 · finish_length 16 · reasoning_chinese 5 · gen_error 5 |
+
+**r1 교훈 → r2 반영(코드 반영 완료, r1 은 커밋 a0a54a4 판으로 실행됨)**: ① 심판은 thinking 을 끄고(`enable_thinking: false`)
+예산 1,024 로 → 빈 판정 해소, A/B 제시 순서 무작위화(원 순서로 복원) ② `reasoning_degenerate` 170 건 중 다수가 오탐 —
+Qwen 의 "We need … Need respond." 단문 사고·GLM 목록형 사고가 "8문장·고유비 40%" 규칙에 걸림(4-gram 최다 반복 1회) →
+12문장·30% 로 엄격화, 4-gram≥5 반복 규칙은 유지 ③ 리젝 파일에 사고·답변 전문 보존(게이트 재보정용).
+④ Qwen 은 사고가 길어 답변이 비는 행(empty_content·finish_length)이 GLM 보다 많음 — max_tokens 12,288 유지, 필요 시 16k.
+
+**P2 스크럽 결과(`scrub_vendor_self_attribution.py`, Chat-v2)**: reasoning_on 929,237행 중 1,823(0.20%) · reasoning_off
+1,068,273행 중 829(0.08%) 드롭 → `*.p2scrub.jsonl`. 예시에 "i was drunk and google" 류 오탐이 섞임(`I was … Google` 느슨 매칭)
+— 손실은 무시할 수준이지만 최종 B 블렌드 전 정규식을 조인다(자기귀속 동사·"AI/model/assistant" 명사 근접 요구).
+
 ## 상태
 
 진행 상태는 `docs/STATUS.md`. 이 README 는 설계 정본.

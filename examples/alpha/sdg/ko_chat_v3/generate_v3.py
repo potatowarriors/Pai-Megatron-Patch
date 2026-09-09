@@ -72,8 +72,10 @@ def degenerate(text):
         for i in range(len(toks) - 3):
             g = " ".join(toks[i:i + 4]); grams[g] = grams.get(g, 0) + 1
         if max(grams.values()) >= 5: return True
+    # r1(2026-09-10) 실측: 8문장·40% 규칙이 Qwen 의 "We need … Need respond." 식 단문 사고와 GLM 의 목록형 사고를
+    # 과잉 검출(리젝 사례의 4-gram 최다 반복 1회). → 12문장·30% 로 엄격화. 진짜 퇴행은 4-gram 규칙이 잡는다.
     sents = [s.strip() for s in re.split(r"[.!?。\n]+", text) if len(s.strip()) > 3]
-    if len(sents) >= 8 and len(set(sents)) / len(sents) < 0.4: return True
+    if len(sents) >= 12 and len(set(sents)) / len(sents) < 0.3: return True
     return False
 
 JUDGE_PROMPT = """다음은 한국어 사용자 대화와 두 개의 후보 답변(A, B)입니다. 정확성·도움됨·요청 준수·한국어 자연스러움을 기준으로 더 나은 답변 하나를 고르세요.
@@ -89,12 +91,20 @@ JUDGE_PROMPT = """다음은 한국어 사용자 대화와 두 개의 후보 답�
 {b}"""
 
 def judge(judge_teacher, conv_text, a, b):
-    body = {"model": judge_teacher["model"], "max_tokens": 4096, "temperature": 0.0,
-            "messages": [{"role": "user", "content": JUDGE_PROMPT.format(conv=conv_text[:6000], a=a[:6000], b=b[:6000])}]}
+    """r2(2026-09-10): r1 심판 실패 53/400 중 47 이 '빈 판정' = 심판 사고가 max_tokens 를 소진. → thinking 끔 + 예산 1,024.
+    위치 편향(r1 스모크 A 9:B 4) → 제시 순서 무작위화 후 원래 인덱스로 복원. 반환 verdict 는 항상 원 순서 기준 'A'(=샘플0)/'B'(=샘플1)."""
+    swap = random.random() < 0.5
+    x, y = (b, a) if swap else (a, b)
+    body = {"model": judge_teacher["model"], "max_tokens": 1024, "temperature": 0.0,
+            "chat_template_kwargs": {"enable_thinking": False},
+            "messages": [{"role": "user", "content": JUDGE_PROMPT.format(conv=conv_text[:6000], a=x[:6000], b=y[:6000])}]}
     try:
         d = post(judge_teacher["endpoint"], body); c = (d["choices"][0]["message"].get("content") or "")
         m = re.findall(r"판정\s*[:：]\s*([AB])", c)
-        return (m[-1] if m else None), c[-200:]
+        if not m: return None, ("empty" if not c.strip() else c[-200:])
+        v = m[-1]
+        if swap: v = "B" if v == "A" else "A"
+        return v, c[-200:] + ("|swapped" if swap else "")
     except Exception as e:
         return None, f"judge_error:{e!r}"[:200]
 
@@ -120,7 +130,7 @@ def process(idx, seed, args, stats, lock, out_f, rej_f):
         except Exception as e:
             rejects.append({"k": k, "why": f"gen_error:{e!r}"[:200]}); continue
         why = gate(s)
-        if why: rejects.append({"k": k, "why": why, "reasoning": s["reasoning"][:300], "content": s["content"][:300]})
+        if why: rejects.append({"k": k, "why": why, "reasoning": s["reasoning"], "content": s["content"]})  # 전문 보존(게이트 재보정용, r2)
         else: samples.append(s)
     rec_base = {"source": seed["source"], "conv_id": seed["conv_id"], "teacher": teacher["name"]}
     if not samples:
