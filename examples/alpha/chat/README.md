@@ -37,9 +37,18 @@ bash chat/run_librechat.sh                    # UI    (기본: :8080, MongoDB �
 ssh -N -L 8080:localhost:8080 main1     # ~/.ssh/config 의 Host main* (포트 2200)
 ```
 
-LibreChat 은 **로그인 필수**다 (auth-off 옵션 없음). 첫 접속에서 Sign up 으로 계정을 만든다. `ALLOW_REGISTRATION=true`
-이므로 포트에 닿는 누구나 가입할 수 있다 — OpenWebUI `WEBUI_AUTH=false` 와 같은 노출 수준이다.
-스모크 계정 `smoke@alpha.local` 은 게이트가 자동 생성한다 (`librechat_data/smoke_credentials`).
+LibreChat 은 **로그인 필수**다 (auth-off 옵션 없음). 데모용 관리자 계정은 만들어져 있다:
+
+| 계정 | 역할 | 비밀번호 | 용도 |
+|---|---|---|---|
+| `admin@alpha.local` | ADMIN | `librechat_data/admin_credentials` (0600) | 사람이 쓰는 계정. 첫 로그인 후 UI 에서 비밀번호 변경 권장 |
+| `smoke@alpha.local` | USER | `librechat_data/smoke_credentials` | `smoke_ui_gate.py` 전용. 게이트가 자동 생성 |
+
+계정 추가는 `cd /home/work/vidsearch/tools/librechat && npm run create-user -- <email> <name> <username> <password> --email-verified=true`.
+UI 회원가입(`ALLOW_REGISTRATION=true`)도 열려 있지만 **첫 가입자가 자동으로 ADMIN** 이 되는 규칙이 있다 (2026-09-09 실측: 스모크 계정이
+ADMIN 이 돼 역할을 DB 에서 교정했다). 브라우저 회원가입이 무응답이면 요청이 서버에 닿지 않은 것이다 — Backend.AI 앱 프록시 경로에서
+`POST /api/…` 가 유실될 수 있으므로 SSH 터널(`http://localhost:8080`)로 접속한다. 포트에 닿는 누구나 가입할 수 있다는 점은
+OpenWebUI `WEBUI_AUTH=false` 와 같은 노출 수준이다.
 
 ## 3. 벤치 fleet 과 무엇이 다른가
 
@@ -126,4 +135,6 @@ pkill -TERM -f "alpha_serve_venv/bin/vllm"      # GPU 메모리 회수 확인은
 | `/api/models` 에 openAI·google 등 미설정 제공자가 섞임 | 정적 기본 목록 | 설정된 엔드포인트는 `/api/endpoints` 로 고른다 |
 | 채팅 POST 응답에 본문이 없음 | 재개 가능 스트림: POST 는 `streamId` 만 반환 | 이벤트는 `GET /api/agents/chat/stream/{streamId}` (SSE, `final` 후 닫힘) |
 | 긴 스크립트가 도중 `401` | 액세스 토큰 15분 만료 | 재로그인 |
+| 브라우저 회원가입 무응답 (로그에 register 요청 자체가 없음) | 요청이 서버에 미도달 — 앱 프록시 경로 의심 | SSH 터널로 접속. 계정은 `npm run create-user` 로 생성 |
+| 스모크 계정이 ADMIN | LibreChat 은 첫 가입자를 ADMIN 으로 승격 | `users` 컬렉션 role 을 직접 교정 (admin@alpha.local=ADMIN, smoke=USER) |
 | 첫 턴 "안녕?" 에 영어 답변 | 프레임워크 아님 — tools 없는 vLLM 직접 호출도 4샘플 중 1건 영어 | 모델(SFT 진행 중) 문제로 기록 |
