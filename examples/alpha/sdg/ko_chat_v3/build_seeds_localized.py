@@ -22,8 +22,11 @@ LOCALIZERS = {
     "qwen": {"model": "qwen38-flash-next", "endpoint": "http://sub1:8300/v1", "max_tokens": 2048,
              "sampling": {"temperature": 0.7, "top_p": 0.8, "top_k": 20, "presence_penalty": 0.0},   # Qwen non-thinking best practice
              "extra": {"chat_template_kwargs": {"enable_thinking": False}}},
-    "glm": {"model": "glm53-flash", "endpoint": "http://localhost:8000/v1", "max_tokens": 6144,
+    "glm": {"model": "glm53-flash", "endpoint": os.environ.get("GLM_EP", "http://localhost:8000/v1"), "max_tokens": 6144,
             "sampling": {"temperature": 0.3, "top_p": 0.9}, "extra": {}},
+    # DSV4-Flash-0731: 기본 thinking 켬(파서 deepseek_v4 가 reasoning 분리) — 한국어로 사고하지만 content 만 쓰므로 무관 (P1 2026-09-10)
+    "dsv4": {"model": "dsv4-flash", "endpoint": os.environ.get("DSV4_EP", "http://sub1:8300/v1"), "max_tokens": 6144,
+             "sampling": {"temperature": 0.3, "top_p": 0.9}, "extra": {}},
 }
 LOC = LOCALIZERS[os.environ.get("LOCALIZER", "qwen")]
 H = re.compile(r"[가-힣]"); L = re.compile(r"[A-Za-z]"); HANJA = re.compile(r"[一-鿿]")
@@ -67,6 +70,7 @@ def main():
     ap.add_argument("--n", type=int, default=120000); ap.add_argument("--out", required=True)
     ap.add_argument("--workers", type=int, default=64); ap.add_argument("--min-chars", type=int, default=60)
     ap.add_argument("--max-chars", type=int, default=4000); ap.add_argument("--multi-turn", action="store_true", help="멀티턴 행도 포함(마지막 user 만 현지화·히스토리는 영어 유지 — 2단계 전용)")
+    ap.add_argument("--offset", type=int, default=0, help="필터·중복제거 후 후보 순서에서 앞 K 건을 건너뜀 — 교사별 몫을 서로소로 나눌 때(GLM 0~N, DSV4 N~2N)")
     ap.add_argument("--exclude-origin", default="", help="쉼표 구분 seed_dataset 접두(예: lmsys) — 해당 유래 행 제외. lmsys 유래는 파생 셋 재배포 금지라 사용자 확정 전 제외 가능")
     a = ap.parse_args()
     excl = [x.strip().lower() for x in a.exclude_origin.split(",") if x.strip()]
@@ -75,7 +79,7 @@ def main():
         for l in open(a.out):
             try: done.add(json.loads(l)["conv_id"])
             except Exception: pass
-    cands, seen = [], set()
+    cands, seen, ncand = [], set(), 0
     with open(SRC) as f:
         for line in f:
             d = json.loads(line); m = [x for x in d["messages"] if x["role"] in ("user", "assistant")]
@@ -90,7 +94,8 @@ def main():
             if not L.search(p): continue                      # 영어 원문이어야 현지화 의미가 있음
             h = hashlib.sha1(re.sub(r"\s+", " ", p.lower())[:500].encode()).hexdigest()
             if h in seen: continue
-            seen.add(h)
+            seen.add(h); ncand += 1
+            if ncand <= a.offset: continue
             cid = "cv3loc:" + h[:16]
             if cid in done: continue
             cands.append((cid, p, d))
