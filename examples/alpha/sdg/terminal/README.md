@@ -322,3 +322,21 @@ reasoning 턴 99.8%, 완료 72%, commands/턴 2.9 → 전량 ≈ **5.2B 실토�
 - ~~자체 합성 셋의 보강 역할~~ → **폐기(사용자 09-10)**. 남는 사실: 공개 코퍼스 system md5 fa616539 vs TB-2 평가 harness(Harbor terminus-2) 7665e733 —
   평가 프롬프트 계열 데이터는 이제 없다. 형식 준수가 프롬프트 문면에 과적합되는지는 TB-2 before/after 로 확인한다.
 - 블렌드 투입 시: `--keep-history-think`, 멤버 50+ 면 `mid-level-dataset-surplus 0.05`, 130k 행 이상이면 128k bins ≈ 40k 개 → 빌드 ≈1시간(16 워커 추정).
+
+### 공개 코퍼스 bins 완료 — 6 멤버 `ntc_v1_*` (2026-09-10 10:26 ~ 10:39 KST, main1 48 워커 13분)
+
+`/home/work/Datasets/LL_preprocessed/v5/sft_packed_128k_terminal_pad16/ntc_v1_{code,math,swe,syn_easy,syn_medium,syn_mixed}` — `--keep-history-think --seq-length 131072 --pad-doc-multiple 16`.
+입력은 `alpha-SFT-Terminal-NTC-v1/by_split/*.jsonl`(전량 365,705행, 품질 필터 미적용·splice 적용).
+
+| 멤버 | 행 | bins | 실토큰 | 학습 토큰 | 드롭 |
+|---|---:|---:|---:|---:|---:|
+| ntc_v1_code | 31,927 | 3,704 | 484.6M | 328.7M | 0 |
+| ntc_v1_math | 162,662 | 15,431 | 2,019.5M | 1,349.0M | 0 |
+| ntc_v1_swe | 31,421 | 6,332 | 827.3M | 511.2M | 0 |
+| ntc_v1_syn_easy | 44,798 | 4,116 | 537.7M | 293.6M | 0 |
+| ntc_v1_syn_medium | 89,216 | 11,835 | 1,543.2M | 830.4M | 0 |
+| ntc_v1_syn_mixed | 5,681 | 523 | 68.3M | 36.0M | 0 |
+| **합계** | **365,705** | **41,941** | **5,480.7M** | **3,349.9M** | 0 |
+
+게이트: `verify_sft_bins`(6 멤버 임시 트리) **PASS** · `render_check` 6 멤버 × 2 문서 전부 clean(봉투 흔적·tools 결함 없음, `<think>` 전 턴 — 예: code 31/31, math 28/28, swe 7/7).
+128k 초과 드롭 0. 블렌드 등록 시 크기 비례 가중이면 단일 멤버와 동치(가중 합 = 실토큰 비 code 8.8% · math 36.8% · swe 15.1% · syn_easy 9.8% · syn_medium 28.2% · syn_mixed 1.2%).
