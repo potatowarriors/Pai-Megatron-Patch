@@ -266,6 +266,10 @@ is_task_complete`)인데 학습 데이터는 Terminus-2 스키마다. 스키마�
 
 미공개: 과제 합성 프롬프트, 필터 임계값, 에피소드 분할 규칙, 터미널 RL 보상 정의, 교사 크기·PivotRL 하이퍼파라미터.
 
+**정정·추가 (2026-09-10)**: 위 "≈370K 미공개" 는 틀렸다 — NVIDIA 가 `nvidia/Nemotron-Terminal-Corpus`(366,154행, cc-by-4.0, arXiv 2602.21193)를 Post-Training-v3
+컬렉션 밖에 단독 공개했고(형제 `Nemotron-Terminal-Synthetic-Tasks`, RL `Nemotron-RL-Agentic-Terminal-Pivot-v1`, `Nemotron-Cascade-2-SFT-Data` Terminal Agent 스플릿),
+이 조사가 놓쳤다. 사용자 결정으로 자체 합성은 폐기하고 공개 코퍼스를 채택했다. 정본·변환·게이트·교훈은 `sdg/terminal/README.md`, 사고 서사는 `KNOWN_ISSUES.md` 2026-09-10.
+
 ### 2.10 SFT 데이터 일관성 검토 (2026-09-09) — 정본은 `KNOWN_ISSUES.md` 2026-09-09
 
 51 멤버의 원본 구조(400행/멤버)와 packed bins 토큰열(40문서/멤버)을 스캔했다. 결함 5건(SWE-v3 도구 선언 부재·opencode 스키마 렌더 파손·

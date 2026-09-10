@@ -23,3 +23,5 @@ paths:
   reasoning 셋은 `--fanout-implicit-turns`. 근거·실측은 `docs/KNOWN_ISSUES.md` 2026-09-09.
 - effort 마커 `{reasoning effort: efficient}` 는 데이터에 없고 렌더 플래그(`--medium-effort`)로 붙는다.
   IF split 은 항상 이 플래그로 변환. 근거·RL `effort_levels` 요건은 `SFT_RL_DATASETS.md` §2.6.
+- **새 도메인 데이터를 합성하기 전에 공개 릴리스를 조직 단위로 훑는다** — 컬렉션(`Nemotron-Post-Training-*`) 안만 보지 말고 `huggingface.co/nvidia` datasets 탭 전체와
+  최근 arXiv 의 데이터 절까지. 2026-09-10 `Nemotron-Terminal-Corpus`(366k, 컬렉션 밖)를 놓치고 3일 합성한 사고 (`docs/KNOWN_ISSUES.md` 2026-09-10).

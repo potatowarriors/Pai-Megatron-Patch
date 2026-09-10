@@ -71,7 +71,8 @@
 | 문서 | 한 줄 |
 |---|---|
 | [../sdg/ko_chat/README.md](../sdg/ko_chat/README.md) | 한국어 SFT chat 합성 — 트랙A 번역+재생성 / 트랙B 네이티브, 교사 Gemma-4-31B + OxAlpha(무료), 무인 체인·게이트·GPU 창구·함정 (2026-08-23~) |
-| [../sdg/terminal/README.md](../sdg/terminal/README.md) | 터미널 에이전트 SFT 합성 — Terminus-2 형, 교사 GLM-5.3-Flash(sub1 vLLM, EP+DP8) + Harbor(gpu06), 사용자 결정(보존 렌더·규모는 실측 후)·단계 P0~P4·게이트·기동 사고 2건 (2026-09-07~) |
+| [../sdg/terminal/README.md](../sdg/terminal/README.md) | 터미널 에이전트 SFT 데이터 정본 — 공개 `nvidia/Nemotron-Terminal-Corpus` 366k 채택(사용자 결정 2026-09-10): 원본 실체·변환 규칙(파싱실패 splice)·6 멤버 bins(5.48B)·게이트·블렌드 등록 지침·대조 기준·교훈 (2026-09-10) |
+| [../sdg/terminal/SYNTHESIS_ARCHIVE.md](../sdg/terminal/SYNTHESIS_ARCHIVE.md) | [아카이브·폐기] 자체 합성 트랙 — 교사 GLM-5.3-Flash + Harbor Terminus-2, P0~P4 실측·사고·phase-3 본 런 iter 30 종료 기록 (2026-09-07~10) |
 | [../sdg/identity/README.md](../sdg/identity/README.md) | 정체성 SFT/RL 데이터 생성 (DataDesigner, identity_card 단일 진실 원천) (2026-08-07~10) |
 
 ## chat/ (사람이 직접 대화 — docs 밖, 코드와 동거)

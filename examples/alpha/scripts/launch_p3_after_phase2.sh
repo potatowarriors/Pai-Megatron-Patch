@@ -1,4 +1,5 @@
 #!/bin/bash
+# [폐기 2026-09-10] phase-3 터미널 보정 스테이지 종료(iter 30)·트랙 전환 — 실행하지 않는다. 기록: examples/alpha/sdg/terminal/SYNTHESIS_ARCHIVE.md
 # SFT phase-3(터미널 보정 스테이지) 자동 연계 런처 — phase-2 본 런 602 완주를 기다렸다가 phase-3 본 런을 개시한다
 # (2026-09-09; 설계·게이트는 examples/alpha/sdg/terminal/README.md §P4, 선례는 launch_p2_after_phase1.sh).
 #

@@ -1,4 +1,5 @@
 #!/bin/bash
+# [폐기 2026-09-10] phase-3 터미널 보정 스테이지 종료(iter 30)·트랙 전환 — 실행하지 않는다. 기록: examples/alpha/sdg/terminal/SYNTHESIS_ARCHIVE.md
 # gen_sft_128k_terminal_blend_p3.sh — 터미널 에이전트 보정 스테이지(phase-3) 블렌드 생성.
 #
 # 설계 (examples/alpha/sdg/terminal/README.md §P4, 사용자 결정 2026-09-07~09):

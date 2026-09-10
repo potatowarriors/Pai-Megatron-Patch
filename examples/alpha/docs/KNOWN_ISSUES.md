@@ -140,6 +140,22 @@ name/parameters 가 채워졌는가"는 어느 게이트도 묻지 않았고, fa
 - **교훈**: UI 가 vLLM 에 무엇을 보내는지는 UI 를 믿지 말고 **서버 카운터로 잰다**. 파서 게이트(A1)는 도구를 받아들이는지만 보지, 도구가 주입되는지는
   `prompt_tokens` 로만 보인다. 템플릿의 시나리오 분기는 도구 "선언"만으로 발동하므로 클라이언트가 몰래 붙이는 도구 하나가 학습 분포 전체를 바꾼다.
 
+## 공개 터미널 코퍼스 채택 — 조사 누락(컬렉션 밖 릴리스)·원본의 파싱 실패 턴 64%·필터 오보정·'테스트 통과' 오기술 (2026-09-10 ✅)
+
+- **조사 누락**: `nvidia/Nemotron-Terminal-Corpus`(366,154행, cc-by-4.0, arXiv 2602.21193)는 Post-Training-v3 컬렉션 **밖** 단독 릴리스라 §2.9 조사(컬렉션 안만 검색)가
+  놓쳤고, 이름에 SFT/Post-Training 이 없어 이름 패턴 검색에도 안 걸렸다. 그 사이 GLM-5.3-Flash 교사로 8,596행을 합성했다(→ `sdg/terminal/SYNTHESIS_ARCHIVE.md`, 폐기).
+  → 조사 규칙에 "조직 데이터셋 목록 전체 + 최근 arXiv 데이터 절" 추가(`.claude/rules/sft-data.md`).
+- **원본의 결함 ①**: 표본 행의 64% 에 think 만 있고 content 가 빈 assistant 턴(파싱 실패)이 있고, 뒤에 harness 의 `Previous response had parsing errors: … No valid JSON` user 턴이
+  따라온다. 학습 목표로 두면 "사고만 하고 응답을 비우는" 행동을 가르친다. 변환기가 (무효 assistant, 파싱오류 user) 쌍을 잘라낸다(splice, 전량 327,939턴) — 파싱 오류에서는
+  명령이 실행되지 않아 터미널 상태가 그대로라 대화가 일관. 단 논문의 최고 성적은 이 턴을 그대로 둔 데이터에서 나왔으므로 레시피와의 차이로 명시(`--keep-parse-errors`).
+- **원본의 결함 ②**: 행의 8.6% 는 마지막 assistant 가 JSON `null`(에피소드 끊김) → 그 턴과 직전 user 턴 제거. 30% 는 완료 선언 없이 끝남(플래그 보존, 전량 채택).
+- **필터 오보정**: GLM 교사용으로 만든 `filter_rows.py` 를 그대로 쓰면 통과율 70% — `repeat_loop` 가 DeepSeek 에이전트의 `cd /app` 습관과 `df -h`·`sleep 2` 반복 점검을
+  루프로 오인(21%), `no_edit` 가 의존성·질의형 과제를 결함으로 봄(5%). → 연속 횟수 기준·사소 명령 제외·코드 과제 한정·분할별 dup 키로 보정, 통과율 98.8%.
+  최종 학습 데이터에는 필터를 적용하지 않았다(논문 소거: 무필터 12.4% > 완료만 6.74% > 성공만 5.06%).
+- **오기술**: "미완료 행도 테스트는 통과한 궤적" 이라고 보고했으나 근거 없는 추정이었다 — 논문에 따르면 성공 여부 필터 없음, parquet 에 reward 열 없음. 사용자 질문으로
+  드러나 철회·정정. 교훈: 데이터의 선별 기준은 배포 문서·논문 본문에서 확인한 뒤에만 서술한다.
+- 산출·게이트: 변환 365,705행 → 6 멤버 `ntc_v1_*` 41,941 bins(5.48B 실토큰), verify PASS·render clean. 정본 `sdg/terminal/README.md`.
+
 ## phase-3 프리셋·데이터 결함 2건 — 차이 키만 담은 평면 프리셋 · 51 멤버 valid 블렌드 surplus 미배관 (2026-09-09 ✅, sub1 사전 스모크가 검출)
 
 - **증상 ①**: `sft_128k_terminal_p3.yaml` 1판이 20초 만에 `validate_args: assert args.micro_batch_size is not None`. 프리셋을 "phase-2 와의 차이 6키"만으로

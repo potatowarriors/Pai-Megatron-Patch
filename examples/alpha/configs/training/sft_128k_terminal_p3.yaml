@@ -1,3 +1,4 @@
+# [폐기 2026-09-10] phase-3 터미널 보정 스테이지 종료(iter 30)·트랙 전환 — 실행하지 않는다. 기록: examples/alpha/sdg/terminal/SYNTHESIS_ARCHIVE.md
 # SFT phase-3 "터미널 에이전트 보정 스테이지" — phase-2 완주 ckpt(iter 602) 위 짧은 연속학습 (sdg/terminal/README.md §P4)
 #   bash train.sh baseline_48L sft_128k_terminal_p3 sft_128k_terminal_blend_p3
 #
