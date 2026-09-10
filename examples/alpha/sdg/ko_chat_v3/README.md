@@ -177,6 +177,9 @@ lmsys 유래 행 포함(사내 연구 전용), 기사 원문 포함(모드 A) �
 - **GLM 재서빙(09-10 08:20, 런북 `out/p1/glm_reserve.sh`)**: `--kv-cache-dtype fp8` 은 **실패** — GLM-5.3-Flash 는 희소 MLA(FlashInfer MLA sparse SM90 백엔드)라 이 vLLM 빌드가 KV 를 uint8 로 넘겨
   `MLA kv_data_type torch.uint8 is not supported` (DSV4 는 자체 어텐션 경로라 fp8 KV 가능). 후퇴 = KV auto + **prefix caching**(같은 프롬프트의 2번째 샘플 프리필 절약). 후보: `fp8_ds_mla` 형식·FlashMLA sparse 백엔드(유휴 시 재시도).
   재기동 후 벤치(짧은 프롬프트): 128 동시 3,706 · **256 동시 7,391 tok/s** — GLM 도 256 동시에서 DSV4 급. 실부하(긴 사고·기사 프롬프트·심판)가 3.7~4.5k 에 머무는 건 KV 선점·프리필 몫.
+- **GLM 의 진짜 한계 = 하이브리드 상태(09-10 08:50)**: `Glm5NextForConditionalGeneration` 45층 = **KDA 선형 어텐션 34층 + DeepSeek 희소 어텐션 11층**(indexer topk 2048). 선형 층은 요청마다
+  고정 상태를 KV 블록에 잡아 요청당 점유 ≈25k 토큰 상당 → 랭크당 ≈28 요청에서 KV 97% → 선점 40~58회/분(프리필 재계산 낭비). prefix caching 은 DP8 라우팅(같은 랭크 1/8)+즉시 축출로 적중 0.
+  조치: GLM 동시성을 랭크당 ≈23(총 ≈185: P2-A 120·현지화 40·심판)로 낮춰 선점 제거 — 실측 동시 164 에서 생성 3,515·프리필 3,516 tok/s·**선점 0/분**·KV 72%(처리량 동일, 낭비만 제거). GLM 처리량은 연산이 아니라 **동시 요청 수(상태 메모리)** 로 캡된다 — fp8 KV 가 됐어도 선형 상태는 안 줄어든다.
 - **생성 타임아웃**: GLM 부하 시 스트림당 10~15 tok/s → 6k+ 토큰 사고가 900 s 를 넘겨 P2-A 초반 56 샘플 타임아웃(양샘플 리젝 66행, GPU 작업 폐기) → `GEN_TIMEOUT`(기본 3,600 s). 리젝 행은 재개 시 자동 재시도.
 - P2 실행: `GEN_TEACHERS=glm53-flash JUDGE=dsv4-flash python3 generate_v3.py --seeds out/p1/seeds_p1_A.jsonl --out out/p1/gen_A.jsonl --workers 256`
   / `GEN_TEACHERS=dsv4-flash JUDGE=glm53-flash … seeds_p1_B → gen_B --workers 224`(DSV4 KV 903k 토큰 한도 고려). 런처 `run_p2.sh A|B [workers]`(구제·재병합 후 기동, conv_id 재개).
