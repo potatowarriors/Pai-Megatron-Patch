@@ -16,6 +16,8 @@ phase-2 신규 23셋에는 0이다. Ultra 는 Harbor + Terminus-2 안에서 Deep
 | 교사 | **GLM-5.3-Flash** (321B 총량 / 18B 활성, FP8 305.8 GiB, MIT, TB 2.1 공개 84.3). 사용자 제공 vLLM 레시피의 플래그 승계 |
 | 규모·투입 방식 | P1 파일럿의 **처리량 실측 후** 결정 |
 | **공개 코퍼스 채택 (2026-09-10)** | NVIDIA 가 `nvidia/Nemotron-Terminal-Corpus`(366,154행, 8.2 GB, cc-by-4.0, TB 2.0 대상, arXiv 2602.21193)를 Post-Training-v3 컬렉션 밖에 별도 공개 — Ultra 의 ~370K 와 규모 일치. **직접 합성을 중단하고 공개 코퍼스를 B안 블렌드의 터미널 멤버로 채택**. 다운로드·렌더 스키마 검증(§2.9 규칙 9)은 phase-2 세션 담당. 이미 만든 `alpha-SFT-Terminal-v1`·`swe_v3_terminus_keephist` 는 폐기하지 않고 대조·보강용으로 보존 — 공개 코퍼스가 Terminus-2 스키마인지 검증 후 채택 또는 부족분 보강으로 확정. §5 마지막 절 |
+| **합성 데이터 폐기 (2026-09-10 사용자)** | `alpha-SFT-Terminal-v1`(8,596행)과 bins `terminal_terminus2_synth` 삭제. 공개 코퍼스가 있으므로 자체 합성분은 보강 용도로도 쓰지 않는다. 수집 원본(`tools/glm53/{collect,tasks,pilot}`)은 삭제 여부 확인 중. `swe_v3_terminus_keephist` 는 합성이 아니라 SWE-v3 재렌더라 별도. |
+| **코드:수학 비율 정책 폐기 (2026-09-10 사용자)** | 7:3 은 터미널 데이터가 없다고 보고 수학을 터미널 과제로 재포맷하던 시절의 정책. 공개 코퍼스 채택 후에는 비율 설계를 하지 않는다 (math 어댑터 162.7k 를 포함할지 제외할지는 별도 확인). |
 | think 렌더 | **보존 렌더** — Terminus 행의 모든 assistant 턴에 reasoning 을 남긴다 (DeepSeek V4·GLM-5.3 방식). 합성 데이터와 SWE-v3 Terminus 3.5k행을 같은 규약으로 변환. 템플릿은 불변, 변환기 명시 kwarg(`--keep-history-think`)로 렌더하고 평가 하니스는 reasoning 재전달(`interleaved_thinking=true` + `chat_template_kwargs`)로 학습 조건과 맞춘다. 근거는 §1.1 |
 
 ### 1.1 think 렌더 결정의 근거
@@ -279,8 +281,12 @@ phase-2 세션의 1차 검증(133k 표본: 계열 md5 fa616539 100%, 인라인 `
 | **합계** | **366,154** | **365,705** | **255,721** | **109,984** | 30.1% | 7.5 | 0.90 | 17,555 |
 
 드롭 449 (json_invalid 314 · think_residual 126 · injection 6 · no_assistant 3). 사고 보유 턴 99.8%.
-미완료 행은 테스트는 통과했지만 완료 선언 전에 에피소드가 끝난 궤적(마지막 턴이 명령 2~6개, 턴 수 분포는 완료 행과 같음 → 상한 절단이 아니라
-시간 제한 추정). synthetic medium/mixed 는 대부분이 미완료라, 완료 행만 쓰면 NVIDIA 가 가장 큰 향상을 보고한 범주(data querying·debugging 등)를 잃는다.
+**정정(09-10, arXiv 2602.21193 본문 확인)**: 이 코퍼스는 **성공 여부로 거르지 않았다**. 논문은 "no filtering (12.4%) significantly surpasses both complete-only (6.74%) and
+success-only (5.06%)", "retaining unsuccessful trajectories appears to provide valuable supervision" 이라고 보고한다(TB-2 정확도). 즉 미완료 행은 물론 **실패한 궤적도 섞여 있고**,
+parquet 에 reward 열이 없어 성공/실패를 구분할 수 없다. 앞서 "미완료도 테스트 통과" 라고 쓴 추정은 근거가 없어 철회한다. 미완료 행(마지막 턴이 명령 2~6개, 턴 수 분포는 완료 행과 같음)은
+완료 선언 전에 에피소드가 끝난 궤적이며, synthetic medium/mixed 는 대부분이 미완료다. 공개분 366,154 = 어댑터 226,313 + skill-based 139,841 (seed-based 124k 는 미공개).
+**splice 는 논문 레시피와의 차이**: 논문의 최고 성적은 파싱 실패 턴(think 만 있는 턴)을 그대로 둔 데이터로 나왔다. 우리는 그 턴을 학습 목표로 두지 않으려고 잘라내며(행은 보존),
+`--keep-parse-errors` 로 논문 방식 재현이 가능하다.
 
 **품질 필터 보정** (`filter_rows.py`, 1037783): 그대로 적용하면 표본 통과율 70% — `repeat_loop` 21% 는 DeepSeek 에이전트가 턴마다 앞세우는
 `cd /app` 과 `df -h`·`cat patch`·`sleep 2` 같은 비연속 반복 점검이었고(연속 ≥4 는 4행), `no_edit` 5% 는 의존성·질의형 synthetic 과제(파일 쓰기 없음).
@@ -308,9 +314,9 @@ reasoning 턴 99.8%, 완료 72%, commands/턴 2.9 → 전량 ≈ **5.2B 실토�
 
 **판정 자료 요약 (결정은 사용자)**
 - 규모: 완료 행만 255.7k ≈ 3.8B 토큰, 전량 365.7k ≈ 5.5B 토큰(행당 ≈15k 기준). 어느 쪽이든 블렌드에서는 부분 표본·ep≤1.
-- 원천 비율: math 162.7k(44%) vs code+swe+synthetic 203k. 사용자 결정 코드:수학 7:3 을 유지하려면 math 를 ≈87k 로 서브샘플.
-- **완료 행만 vs 전량**: 전량 권고 — 미완료 행도 매 턴이 유효한 행동(테스트 통과)이고 medium/mixed 범주가 여기 있다. 완료 핸드셰이크 예시는
-  완료 행 255.7k 로 충분. 미완료는 `metadata.completed=false`·`quality_flags=["not_completed"]` 로 표시돼 있어 서브셋은 필터 한 줄로 만든다.
-- **자체 합성 셋의 보강 역할**: system md5 가 다르다 — 공개 코퍼스는 fa616539, **TB-2 평가 harness(Harbor terminus-2)는 7665e733** 이고 우리
-  합성 8,596행이 그 프롬프트 계열의 유일한 데이터다. 평가 프롬프트 일치를 위해 합성 v1 을 소량 멤버로 병행하는 것이 안전하다(수학 om 2,556행 포함).
+- 원천 비율: math 162.7k(44%) vs code+swe+synthetic 203k. ~~7:3 서브샘플~~ → **비율 정책 폐기(사용자 09-10)**. math 어댑터 포함/제외는 확인 중.
+- **완료 행만 vs 전량**: 전량 권고 — 근거는 논문의 소거 실험(무필터 12.4% > 완료만 6.74% > 성공만 5.06%). 미완료·실패 궤적도 감독 신호가 된다는 것이 저자들의 결론이다.
+  미완료는 `metadata.completed=false`·`quality_flags=["not_completed"]` 로 표시돼 있어 서브셋은 필터 한 줄로 만든다.
+- ~~자체 합성 셋의 보강 역할~~ → **폐기(사용자 09-10)**. 남는 사실: 공개 코퍼스 system md5 fa616539 vs TB-2 평가 harness(Harbor terminus-2) 7665e733 —
+  평가 프롬프트 계열 데이터는 이제 없다. 형식 준수가 프롬프트 문면에 과적합되는지는 TB-2 before/after 로 확인한다.
 - 블렌드 투입 시: `--keep-history-think`, 멤버 50+ 면 `mid-level-dataset-surplus 0.05`, 130k 행 이상이면 128k bins ≈ 40k 개 → 빌드 ≈1시간(16 워커 추정).
