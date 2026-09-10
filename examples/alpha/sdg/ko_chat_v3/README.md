@@ -173,7 +173,11 @@ lmsys 유래 행 포함(사내 연구 전용), 기사 원문 포함(모드 A) �
   P2 는 시드 완료 후 순차 투입(겹치면 선점만 는다).
 - 시드 생성 속도(GLM, 초반 실측): 기사 1.42건/s · 현지화 0.82건/s(채택 77%, 리젝은 low_hangul·codefence) · 맥락 —. GLM 몫 48.5k ≈ 6h 전망.
 - P2 실행: `GEN_TEACHERS=glm53-flash JUDGE=dsv4-flash python3 generate_v3.py --seeds out/p1/seeds_p1_A.jsonl --out out/p1/gen_A.jsonl --workers 256`
-  / `GEN_TEACHERS=dsv4-flash JUDGE=glm53-flash … seeds_p1_B → gen_B --workers 180`(DSV4 KV 903k 토큰 한도 고려). conv_id 재개.
+  / `GEN_TEACHERS=dsv4-flash JUDGE=glm53-flash … seeds_p1_B → gen_B --workers 224`(DSV4 KV 903k 토큰 한도 고려). 런처 `run_p2.sh A|B [workers]`(구제·재병합 후 기동, conv_id 재개).
+- **P3 내보내기 `export_sft.py`**: Chat-v3 스키마(`metadata.train_turns` 마지막만 True — 없으면 변환기가 전 턴 학습, 실사용자 멀티턴의 원 모델 히스토리를 배우게 됨),
+  no-think 30% 파생(해시 결정적, 기본 서로소 70/30; `--nothink-mode duplicate` 가능), 최종 게이트(special·EOD 리터럴·한자·자기귀속) 재검, 출처·라이선스 태그.
+- **P4 경로 사전 검증(파일럿 384행, 2026-09-10)**: 128k 레시피(`--seq-length 131072 --pad-doc-multiple 16`) 변환 → thinking 282행 10 bins(실 1.20M·학습 1.14M 토큰, 행당 ≈4.2k)
+  · no-think 102행 1 bin(행당 ≈830) → `verify_sft_bins` **PASS 11/11** → `render_check` clean(thinking `<think>…`, no-think `<think></think>`). 본 변환은 `convert_sft_128k_mixed_p2b.sh` 의 `run` 규약으로.
 
 ## 상태
 
