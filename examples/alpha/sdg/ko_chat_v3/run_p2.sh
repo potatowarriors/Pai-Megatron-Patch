@@ -8,5 +8,5 @@ python3 merge_seeds.py
 if [ "$side" = A ]; then export GEN_TEACHERS=glm53-flash JUDGE=dsv4-flash; w=${w:-256}
 else export GEN_TEACHERS=dsv4-flash JUDGE=glm53-flash; w=${w:-224}; fi
 echo "[run_p2] side=$side GEN_TEACHERS=$GEN_TEACHERS JUDGE=$JUDGE workers=$w $(date '+%F %T')" | tee -a out/p1/gen_${side}.log
-nohup python3 generate_v3.py --seeds out/p1/seeds_p1_${side}.jsonl --out out/p1/gen_${side}.jsonl --workers "$w" >> out/p1/gen_${side}.log 2>&1 < /dev/null &
+nohup python3 generate_v3.py --seeds out/p1/seeds_p1_${side}.jsonl --out out/p1/gen_${side}.jsonl --workers "$w" ${SKIP_REJECTED:---skip-rejected} >> out/p1/gen_${side}.log 2>&1 < /dev/null &
 echo "pid $!"

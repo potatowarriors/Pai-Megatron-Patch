@@ -202,10 +202,15 @@ def main():
     ap.add_argument("--seeds", required=True); ap.add_argument("--out", required=True)
     ap.add_argument("--workers", type=int, default=96); ap.add_argument("--n", type=int, default=2)
     ap.add_argument("--max-tokens", type=int, default=16384, help="P0 실측: 철저 사고 지시로 사고가 8k 토큰을 넘는 행이 있어 12,288 에서 답변이 비던 것을 완화"); ap.add_argument("--limit", type=int, default=0)
+    ap.add_argument("--skip-rejected", action="store_true", help="양샘플 리젝(rejects jsonl) 시드도 완료로 간주 — 재개 때마다 폭주 시드를 재시도해 GLM 을 낭비하지 않도록(P1 실측: 373 시드 × 32k tok). 남은 시드는 마지막에 별도 처리")
     args = ap.parse_args()
     done = set()
     if os.path.exists(args.out):
         for l in open(args.out):
+            try: done.add(json.loads(l)["conv_id"])
+            except Exception: pass
+    if args.skip_rejected and os.path.exists(args.out.replace(".jsonl", "") + ".rejects.jsonl"):
+        for l in open(args.out.replace(".jsonl", "") + ".rejects.jsonl"):
             try: done.add(json.loads(l)["conv_id"])
             except Exception: pass
     seeds = [json.loads(l) for l in open(args.seeds)]
