@@ -25,13 +25,15 @@ export VLLM_WORKER_MULTIPROC_METHOD=spawn
 export NCCL_IB_DISABLE=1 NCCL_SOCKET_IFNAME=eth0 GLOO_SOCKET_IFNAME=eth0
 export VLLM_ENGINE_READY_TIMEOUT_S=3600
 
-echo "[serve-main1] model=$MODEL EP+DP8 max_len=$MAX_LEN batched=$MAX_BATCHED_TOKENS seqs=$MAX_SEQS port=$PORT"
+echo "[serve-main1] model=$MODEL EP+DP8 max_len=$MAX_LEN batched=$MAX_BATCHED_TOKENS seqs=$MAX_SEQS kv=${KV_DTYPE:-fp8} prefix=${PREFIX_CACHE:---enable-prefix-caching} port=$PORT"
 exec "$VENV/bin/vllm" serve "$MODEL" \
   --served-model-name glm53-flash \
   --enable-expert-parallel --data-parallel-size 8 \
   --max-model-len "$MAX_LEN" \
   --max-num-batched-tokens "$MAX_BATCHED_TOKENS" \
   --max-num-seqs "$MAX_SEQS" \
+  --kv-cache-dtype "${KV_DTYPE:-fp8}" \
+  ${PREFIX_CACHE:---enable-prefix-caching} \
   --gpu-memory-utilization 0.90 \
   --no-enable-flashinfer-autotune \
   --tool-call-parser glm47 --enable-auto-tool-choice \

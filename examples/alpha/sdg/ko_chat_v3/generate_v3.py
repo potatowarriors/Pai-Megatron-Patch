@@ -69,7 +69,8 @@ def post(ep, body, timeout=900):
 
 def gen(teacher, messages, max_tokens):
     body = {"model": teacher["model"], "messages": messages, "max_tokens": max_tokens, **teacher["sampling"]}
-    d = post(teacher["endpoint"], body); ch = d["choices"][0]; m = ch["message"]
+    # P1 실측(2026-09-10): GLM 부하 시 스트림당 10~15 tok/s → 6k+ 토큰 사고가 900 s 를 넘겨 56 건 타임아웃(GPU 작업도 폐기). 생성은 3,600 s.
+    d = post(teacher["endpoint"], body, timeout=int(os.environ.get("GEN_TIMEOUT", "3600"))); ch = d["choices"][0]; m = ch["message"]
     return {"reasoning": m.get("reasoning") or m.get("reasoning_content") or "", "content": m.get("content") or "",
             "finish": ch["finish_reason"], "ctoks": d.get("usage", {}).get("completion_tokens", 0)}
 

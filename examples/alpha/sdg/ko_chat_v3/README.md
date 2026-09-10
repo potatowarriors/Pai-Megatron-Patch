@@ -172,6 +172,12 @@ lmsys 유래 행 포함(사내 연구 전용), 기사 원문 포함(모드 A) �
   P0 의 ≈1,000 tok/s 는 동시 48 의 저부하 측정이었다. GLM(DP8, 랭크당 96) 은 시드 3종 255 동시에서 4,113 tok/s·KV 90% = 포화 →
   P2 는 시드 완료 후 순차 투입(겹치면 선점만 는다).
 - 시드 생성 속도(GLM, 초반 실측): 기사 1.42건/s · 현지화 0.82건/s(채택 77%, 리젝은 low_hangul·codefence) · 맥락 —. GLM 몫 48.5k ≈ 6h 전망.
+- **GLM 병목 분석(09-10 07:30)**: 시드당 소요 GLM ≈2.5 s vs DSV4 ≈0.94 s(2.6×) = 서버 처리량 1.8×(328 GB FP8·288 전문가 top-8 vs 167 GB MXFP4 전문가·256 top-6)
+  × 샘플당 토큰 1.7×(GLM 사고 중앙값 6,020 tok vs DSV4 3,477). 심판(GLM low effort)은 실측 프롬프트 ≈1.2k·완성 6~400 tok 으로 싸다. 사용자 결정: 교사 1:1 유지, **서빙 재설정만 적용**.
+- **GLM 재서빙(09-10 08:20, 런북 `out/p1/glm_reserve.sh`)**: `--kv-cache-dtype fp8` 은 **실패** — GLM-5.3-Flash 는 희소 MLA(FlashInfer MLA sparse SM90 백엔드)라 이 vLLM 빌드가 KV 를 uint8 로 넘겨
+  `MLA kv_data_type torch.uint8 is not supported` (DSV4 는 자체 어텐션 경로라 fp8 KV 가능). 후퇴 = KV auto + **prefix caching**(같은 프롬프트의 2번째 샘플 프리필 절약). 후보: `fp8_ds_mla` 형식·FlashMLA sparse 백엔드(유휴 시 재시도).
+  재기동 후 벤치(짧은 프롬프트): 128 동시 3,706 · **256 동시 7,391 tok/s** — GLM 도 256 동시에서 DSV4 급. 실부하(긴 사고·기사 프롬프트·심판)가 3.7~4.5k 에 머무는 건 KV 선점·프리필 몫.
+- **생성 타임아웃**: GLM 부하 시 스트림당 10~15 tok/s → 6k+ 토큰 사고가 900 s 를 넘겨 P2-A 초반 56 샘플 타임아웃(양샘플 리젝 66행, GPU 작업 폐기) → `GEN_TIMEOUT`(기본 3,600 s). 리젝 행은 재개 시 자동 재시도.
 - P2 실행: `GEN_TEACHERS=glm53-flash JUDGE=dsv4-flash python3 generate_v3.py --seeds out/p1/seeds_p1_A.jsonl --out out/p1/gen_A.jsonl --workers 256`
   / `GEN_TEACHERS=dsv4-flash JUDGE=glm53-flash … seeds_p1_B → gen_B --workers 224`(DSV4 KV 903k 토큰 한도 고려). 런처 `run_p2.sh A|B [workers]`(구제·재병합 후 기동, conv_id 재개).
 - **P3 내보내기 `export_sft.py`**: Chat-v3 스키마(`metadata.train_turns` 마지막만 True — 없으면 변환기가 전 턴 학습, 실사용자 멀티턴의 원 모델 히스토리를 배우게 됨),
