@@ -19,13 +19,36 @@ CARD = yaml.safe_load(open(os.path.join(HERE, "..", "identity", "identity_card.y
 NAME, ORG = CARD["name"]["canonical"], CARD["organization"]["ko"]
 SYS_IDENTITY = (f"당신은 {ORG}에서 개발한 AI 어시스턴트 {NAME}입니다. 사용자에게 정확하고 도움이 되는 답변을 "
                 f"한국어로 제공합니다. 다른 회사나 다른 모델의 이름으로 자신을 소개하지 않습니다.")
+# "철저 사고" 지시 (2026-09-10 실측): 한국어 프롬프트에서 GLM 사고 737→2,893 토큰(NVIDIA Chat-v3 1,256 의 2.2×), 답변 한글비 0.92 유지.
+# 지시문이 사고에 그대로 되풀이되는 누출은 gate 의 instruction_leak 가 잡는다.
+THOROUGH = (" 답하기 전에 사고 과정에서 요청을 다시 정리하고, 사용자가 실제로 원하는 것을 여러 각도로 검토하고, 대안과 예외 상황을 "
+            "따져보고, 초안을 쓴 뒤 사실과 오류를 검증하세요. 사고를 생략하거나 서두르지 마세요.")
+SYS_GEN = SYS_IDENTITY + (THOROUGH if os.environ.get("GEN_THOROUGH", "1") == "1" else "")
 
-TEACHERS = [
-    {"name": "glm53-flash", "endpoint": "http://localhost:8000/v1", "model": "glm53-flash",
-     "sampling": {"temperature": 1.0, "top_p": 0.95}},
-    {"name": "qwen38-flash-next", "endpoint": "http://sub1:8300/v1", "model": "qwen38-flash-next",
-     "sampling": {"temperature": 1.0, "top_p": 0.95, "top_k": 20, "presence_penalty": 0.0}},  # HF best practice (thinking)
-]
+ALL_TEACHERS = {
+    "glm53-flash": {"name": "glm53-flash", "endpoint": os.environ.get("GLM_EP", "http://localhost:8000/v1"), "model": "glm53-flash",
+                    "sampling": {"temperature": 1.0, "top_p": 0.95}},
+    "dsv4-flash": {"name": "dsv4-flash", "endpoint": os.environ.get("DSV4_EP", "http://sub1:8300/v1"), "model": "dsv4-flash",
+                   "sampling": {"temperature": 1.0, "top_p": 0.95}},
+    "qwen38-flash-next": {"name": "qwen38-flash-next", "endpoint": os.environ.get("QWEN_EP", "http://sub1:8300/v1"), "model": "qwen38-flash-next",
+                          "sampling": {"temperature": 1.0, "top_p": 0.95, "top_k": 20, "presence_penalty": 0.0}},  # HF best practice (thinking)
+}
+# 생성 교사 = GEN_TEACHERS(라운드로빈). 심판 = JUDGE: 기본 "other" = **상대 생성 교사**(GLM 생성→DSV4 심판, DSV4 생성→GLM 심판;
+# 사용자 결정 2026-09-10 — 세 번째 모델(Qwen)을 GPU 에 올렸다 내리는 비효율 제거). 특정 모델명을 주면 고정 심판.
+TEACHERS = [ALL_TEACHERS[n.strip()] for n in os.environ.get("GEN_TEACHERS", "glm53-flash,dsv4-flash").split(",") if n.strip()]
+_J = os.environ.get("JUDGE", "other")
+JUDGE_FIXED = None if _J == "other" else ALL_TEACHERS[_J]
+def pick_judge(idx):
+    if JUDGE_FIXED: return JUDGE_FIXED
+    return TEACHERS[(idx + 1) % len(TEACHERS)] if len(TEACHERS) > 1 else TEACHERS[0]
+# 심판용 사고 억제(저효율) kwarg — 모델별. 판정은 "판정: A/B" 한 줄이라 저효율로 충분하고 생성 서버를 그대로 쓴다.
+#   GLM-5.3: 템플릿에 끄기 없음 → reasoning_effort=low(확인됨), 예산 4,096.  DSV4: Non-think 모드(서빙 후 kwarg 실측 → JUDGE_KW_DSV4 로 덮어씀).
+#   Qwen: enable_thinking=False(동작 확인). 환경변수 JUDGE_KW_<NAME>='{"..."}' 로 덮어쓸 수 있다.
+JUDGE_KW = {
+    "glm53-flash": ({"chat_template_kwargs": {"reasoning_effort": "low"}}, 4096),
+    "dsv4-flash": (json.loads(os.environ.get("JUDGE_KW_DSV4", '{"chat_template_kwargs": {"thinking": false}}')), 2048),
+    "qwen38-flash-next": ({"chat_template_kwargs": {"enable_thinking": False}}, 1024),
+}
 
 H = re.compile(r"[가-힣]"); L = re.compile(r"[A-Za-z]"); HANJA = re.compile(r"[一-鿿㐀-䶿]")
 SPECIAL = re.compile(r"<\|[A-Za-z_]+\|>|</?(?:tool_call|tool_response|think)>")
@@ -62,20 +85,28 @@ def gate(s):
     if cj > 0.01: return "content_chinese"
     if SELF_ATTR.search(r) or SELF_ATTR.search(c): return "vendor_self_attribution"
     if degenerate(r): return "reasoning_degenerate"   # "We need call now. Let's call." 류 반복 퇴행 (스모크 실측)
+    if INSTR_LEAK.search(r) or INSTR_LEAK.search(c): return "instruction_leak"   # 시스템 지시문("여러 각도로 검토…")을 그대로 되풀이
     return None
 
+INSTR_LEAK = re.compile(r"(사고를 생략하거나 서두르지|여러 각도로 검토하고, 대안과 예외|초안을 쓴 뒤 사실과 오류를 검증|다른 회사나 다른 모델의 이름으로)")
+
 def degenerate(text):
-    """짧은 문장/구의 과도 반복 = 퇴행 사고. 4-gram 이 5회 이상 반복되거나 고유 문장 비율이 40% 미만이면 True."""
+    """퇴행 사고 판정 (P0 파일럿 재보정, 2026-09-10).
+    r1 실측: 4-gram≥5 단독 규칙이 긴 정상 사고(5~25k자, 고유 문장 비율 0.96~1.00)의 주제어 반복("가상 조작 교구를 활용한"×13)을
+    오탐했다. 진짜 퇴행("We need call now. Let's call." 반복)은 문장 자체가 되풀이돼 고유 비율이 낮다.
+    → (4-gram≥5 AND 고유 문장 비율<0.7) OR (12문장 이상 AND 고유 비율<0.3) OR 같은 줄이 연속 3회."""
     toks = text.split()
+    sents = [s.strip() for s in re.split(r"[.!?。\n]+", text) if len(s.strip()) > 3]
+    uniq = len(set(sents)) / len(sents) if sents else 1.0
     if len(toks) >= 40:
         grams = {}
         for i in range(len(toks) - 3):
             g = " ".join(toks[i:i + 4]); grams[g] = grams.get(g, 0) + 1
-        if max(grams.values()) >= 5: return True
-    # r1(2026-09-10) 실측: 8문장·40% 규칙이 Qwen 의 "We need … Need respond." 식 단문 사고와 GLM 의 목록형 사고를
-    # 과잉 검출(리젝 사례의 4-gram 최다 반복 1회). → 12문장·30% 로 엄격화. 진짜 퇴행은 4-gram 규칙이 잡는다.
-    sents = [s.strip() for s in re.split(r"[.!?。\n]+", text) if len(s.strip()) > 3]
-    if len(sents) >= 12 and len(set(sents)) / len(sents) < 0.3: return True
+        if max(grams.values()) >= 5 and uniq < 0.7: return True
+    if len(sents) >= 12 and uniq < 0.3: return True
+    lines = [l.strip() for l in text.split("\n") if l.strip()]
+    for i in range(len(lines) - 2):
+        if lines[i] == lines[i + 1] == lines[i + 2]: return True
     return False
 
 JUDGE_PROMPT = """다음은 한국어 사용자 대화와 두 개의 후보 답변(A, B)입니다. 정확성·도움됨·요청 준수·한국어 자연스러움을 기준으로 더 나은 답변 하나를 고르세요.
@@ -95,8 +126,10 @@ def judge(judge_teacher, conv_text, a, b):
     위치 편향(r1 스모크 A 9:B 4) → 제시 순서 무작위화 후 원래 인덱스로 복원. 반환 verdict 는 항상 원 순서 기준 'A'(=샘플0)/'B'(=샘플1)."""
     swap = random.random() < 0.5
     x, y = (b, a) if swap else (a, b)
-    body = {"model": judge_teacher["model"], "max_tokens": 1024, "temperature": 0.0,
-            "chat_template_kwargs": {"enable_thinking": False},
+    # 교사별 사고 억제 kwarg (2026-09-10 실측): GLM-5.3 템플릿에는 enable_thinking 이 없고 항상 <think> 로 끝난다 →
+    # reasoning_effort=low 로 짧게 사고시키고 예산 4,096. Qwen 은 enable_thinking=False 가 실제로 동작(예산 1,024).
+    kw, budget = JUDGE_KW.get(judge_teacher["name"], ({}, 4096))
+    body = {"model": judge_teacher["model"], "max_tokens": budget, "temperature": 0.0, **kw,
             "messages": [{"role": "user", "content": JUDGE_PROMPT.format(conv=conv_text[:6000], a=x[:6000], b=y[:6000])}]}
     try:
         d = post(judge_teacher["endpoint"], body); c = (d["choices"][0]["message"].get("content") or "")
@@ -122,8 +155,8 @@ def process(idx, seed, args, stats, lock, out_f, rej_f):
     if turns is None:
         with lock: stats["skip_seed"] += 1
         return
-    gi = idx % 2; teacher, judge_t = TEACHERS[gi], TEACHERS[1 - gi]
-    msgs = [{"role": "system", "content": SYS_IDENTITY}] + turns
+    teacher, judge_t = TEACHERS[idx % len(TEACHERS)], pick_judge(idx)
+    msgs = [{"role": "system", "content": SYS_GEN}] + turns
     samples, rejects = [], []
     for k in range(args.n):
         try: s = gen(teacher, msgs, args.max_tokens)
@@ -146,6 +179,7 @@ def process(idx, seed, args, stats, lock, out_f, rej_f):
     loser = (samples[0] if verdict == "B" else samples[1]) if len(samples) >= 2 else None
     row = {"messages": turns + [{"role": "assistant", "content": best["content"], "reasoning_content": best["reasoning"]}],
            **rec_base,
+           **{k: seed[k] for k in ("mode", "task_type", "persona", "seed_origin", "article_ref") if k in seed},   # 시드 메타 전파(보고·분할·라이선스 태그)
            "ko_synthesis": {"pipeline": "ko_chat_v3", "think": True, "n_samples": args.n, "kept": len(samples),
                             "judge": judge_t["name"] if len(samples) >= 2 else None, "verdict": verdict,
                             "judge_tail": jtail, "loser_content": (loser["content"][:2000] if loser else None),
@@ -161,7 +195,7 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--seeds", required=True); ap.add_argument("--out", required=True)
     ap.add_argument("--workers", type=int, default=96); ap.add_argument("--n", type=int, default=2)
-    ap.add_argument("--max-tokens", type=int, default=12288); ap.add_argument("--limit", type=int, default=0)
+    ap.add_argument("--max-tokens", type=int, default=16384, help="P0 실측: 철저 사고 지시로 사고가 8k 토큰을 넘는 행이 있어 12,288 에서 답변이 비던 것을 완화"); ap.add_argument("--limit", type=int, default=0)
     args = ap.parse_args()
     done = set()
     if os.path.exists(args.out):
