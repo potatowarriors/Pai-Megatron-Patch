@@ -16,7 +16,9 @@ for f in files:
         seen.add(r["conv_id"]); r["seed_file"] = os.path.basename(f); rows.append(r); cnt[os.path.basename(f)] += 1
 split = {"A": [], "B": []}
 for r in rows: split["A" if int(hashlib.sha1(r["conv_id"].encode()).hexdigest(), 16) % 2 == 0 else "B"].append(r)
+# 처리 순서: S4 한국 맥락(ko_context_grid) 은 마지막 — GLM 이 이 시드에서 사고 폭주(P1 실측 09-10: 채택 중앙값 8.6k tok·양샘플 리젝 39%) → 설정 결정 전 낭비 방지
 for k, rs in split.items():
+    rs.sort(key=lambda r: (r.get("seed_origin", {}).get("dataset") == "ko_context_grid"))
     with open(f"{a.out_prefix}_{k}.jsonl", "w") as o:
         for r in rs: o.write(json.dumps(r, ensure_ascii=False) + "\n")
 print("total", len(rows), "A", len(split["A"]), "B", len(split["B"]), "| by file", dict(cnt))

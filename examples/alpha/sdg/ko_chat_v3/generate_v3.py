@@ -23,11 +23,16 @@ SYS_IDENTITY = (f"당신은 {ORG}에서 개발한 AI 어시스턴트 {NAME}입�
 # 지시문이 사고에 그대로 되풀이되는 누출은 gate 의 instruction_leak 가 잡는다.
 THOROUGH = (" 답하기 전에 사고 과정에서 요청을 다시 정리하고, 사용자가 실제로 원하는 것을 여러 각도로 검토하고, 대안과 예외 상황을 "
             "따져보고, 초안을 쓴 뒤 사실과 오류를 검증하세요. 사고를 생략하거나 서두르지 마세요.")
-SYS_GEN = SYS_IDENTITY + (THOROUGH if os.environ.get("GEN_THOROUGH", "1") == "1" else "")
+# v2(P1 실측 후보, 2026-09-10): "초안을 쓴 뒤 검증" 이 GLM 에게 답변 본문을 사고 안에 먼저 쓰게 해 길이 2배·폭주(8%, 토큰 24% 낭비) → 논점·구조·검증만.
+THOROUGH_V2 = (" 답하기 전에 사고 과정에서 요청을 다시 정리하고, 사용자가 실제로 원하는 것을 여러 각도로 검토하고, 대안과 예외 상황을 "
+               "따져보고, 핵심 사실과 오류를 검증하세요. 다만 답변 본문을 사고 안에 미리 쓰지 말고, 사고에서는 논점·구조·검증만 다루세요.")
+_T = os.environ.get("GEN_THOROUGH", "1")
+SYS_GEN = SYS_IDENTITY + ({"1": THOROUGH, "2": THOROUGH_V2}.get(_T, ""))
 
 ALL_TEACHERS = {
     "glm53-flash": {"name": "glm53-flash", "endpoint": os.environ.get("GLM_EP", "http://localhost:8000/v1"), "model": "glm53-flash",
-                    "sampling": {"temperature": 1.0, "top_p": 0.95}},
+                    "sampling": {"temperature": 1.0, "top_p": 0.95, **json.loads(os.environ.get("GLM_GEN_KW", "{}"))}},   # 예: '{"chat_template_kwargs":{"reasoning_effort":"high"}}'
+
     "dsv4-flash": {"name": "dsv4-flash", "endpoint": os.environ.get("DSV4_EP", "http://sub1:8300/v1"), "model": "dsv4-flash",
                    "sampling": {"temperature": 1.0, "top_p": 0.95}},
     "qwen38-flash-next": {"name": "qwen38-flash-next", "endpoint": os.environ.get("QWEN_EP", "http://sub1:8300/v1"), "model": "qwen38-flash-next",
