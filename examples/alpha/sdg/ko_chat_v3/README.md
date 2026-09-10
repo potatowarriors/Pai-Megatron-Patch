@@ -152,7 +152,28 @@ lmsys 유래 행 포함(사내 연구 전용), 기사 원문 포함(모드 A) �
   세 번째 모델(Qwen) 제거. GLM 템플릿에는 `enable_thinking` 이 없어(`clear_thinking`·`reasoning_effort` 만) 사고를 끌 수 없다.
 - **DSV4-Flash-0731 서빙(sub1)**: `serve/serve_dsv4_sub1.sh` — TP8+EP, KV fp8, FP4 indexer off. 체크포인트의 전문가는 **MXFP4**(FP8 라벨과 달리)
   → Triton mxfp4 는 SiLU 미지원으로 실패, **Marlin** 백엔드로 기동 성공(KV 903k 토큰). identity 미주입 시 "저는 DeepSeek" → 주입 필수.
-  처리량 실측 ≈1,000 tok/s(동시 48) — 튜닝 여지.
+  처리량 실측 ≈1,000 tok/s(동시 48) — 저부하 측정. P1 벤치는 아래 P1 절(seqs 256, 7,849 tok/s@256).
+
+## P1 본 트랜치 (2026-09-10 착수, 사용자 승인 "착수 진행해") — 시드 10만 행 → P2 생성
+
+**교사 배분 1:1·GLM 철저 사고 지시 그대로·DSV4 처리량 최대화(사용자 확정)**. 시드 4종은 교사별 파일로 나눠 두 서버를 동시에 채운다.
+
+| 트랙 | 스크립트 | GLM 몫 | DSV4 몫 | 서로소 보장 |
+|---|---|---|---|---|
+| S1 현지화 40k | `build_seeds_localized.py` (`LOCALIZER=glm\|dsv4`, thinking-on content-only) | 20k | 20k `--offset 20000` | 후보 순서가 결정적 → 오프셋 |
+| S2 기사 40k | `news_prompts.py --articles 10000 --per-article 2` | seed 11 | seed 12 | 974k 중 10k 표본 2개(겹침 ≈1%, 작가가 다름) |
+| S3 실사용자 | `select_real_seeds.py` (lmsys 2,561 + WildChat 2,833 → ≥25자·한글비·한자·정체성·**히스토리 벤더 자기귀속 111행 제외**) | 2,348 (목표 3k 미달, 다른 트랙이 흡수) | | |
+| S4 한국 맥락 17k | `context_prompts.py` (10 도메인×58 상황×15 페르소나×10 과업×5 어투 격자, 실존 인물·특정 사건 금지, `SPECIFIC` 게이트) | 8.5k seed 6 | 8.5k seed 5 | 격자 난수 시드 |
+
+- S4 스모크(DSV4 40건): 38 통과(리젝 2 = 특정 시점 언급), 중앙값 338자, 숫자·조건 제약이 붙은 실제 요청 형태.
+- **병합 `merge_seeds.py`**: conv_id sha1 홀짝으로 A/B 배정(결정적) → 시드가 자라도 배정 불변. A = GLM 생성·DSV4 심판, B = DSV4 생성·GLM 심판.
+  프롬프트 작가와 생성 교사가 독립이라 4 조합이 모두 등장.
+- **DSV4 처리량**: seqs 128 기준선 conc 64/128/256 = 3,895/4,954/4,816 tok/s → **seqs 256 재기동: conc 128/256 = 4,206/7,849 tok/s**(+58%).
+  P0 의 ≈1,000 tok/s 는 동시 48 의 저부하 측정이었다. GLM(DP8, 랭크당 96) 은 시드 3종 255 동시에서 4,113 tok/s·KV 90% = 포화 →
+  P2 는 시드 완료 후 순차 투입(겹치면 선점만 는다).
+- 시드 생성 속도(GLM, 초반 실측): 기사 1.42건/s · 현지화 0.82건/s(채택 77%, 리젝은 low_hangul·codefence) · 맥락 —. GLM 몫 48.5k ≈ 6h 전망.
+- P2 실행: `GEN_TEACHERS=glm53-flash JUDGE=dsv4-flash python3 generate_v3.py --seeds out/p1/seeds_p1_A.jsonl --out out/p1/gen_A.jsonl --workers 256`
+  / `GEN_TEACHERS=dsv4-flash JUDGE=glm53-flash … seeds_p1_B → gen_B --workers 180`(DSV4 KV 903k 토큰 한도 고려). conv_id 재개.
 
 ## 상태
 

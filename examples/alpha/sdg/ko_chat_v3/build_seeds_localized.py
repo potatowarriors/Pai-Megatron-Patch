@@ -22,10 +22,10 @@ LOCALIZERS = {
     "qwen": {"model": "qwen38-flash-next", "endpoint": "http://sub1:8300/v1", "max_tokens": 2048,
              "sampling": {"temperature": 0.7, "top_p": 0.8, "top_k": 20, "presence_penalty": 0.0},   # Qwen non-thinking best practice
              "extra": {"chat_template_kwargs": {"enable_thinking": False}}},
-    "glm": {"model": "glm53-flash", "endpoint": os.environ.get("GLM_EP", "http://localhost:8000/v1"), "max_tokens": 6144,
+    "glm": {"model": "glm53-flash", "endpoint": os.environ.get("GLM_EP", "http://localhost:8000/v1"), "max_tokens": 8192,   # 6144 는 다국어 번역 요청에서 사고가 예산을 소진해 content 가 빔(empty 3%)
             "sampling": {"temperature": 0.3, "top_p": 0.9}, "extra": {}},
     # DSV4-Flash-0731: 기본 thinking 켬(파서 deepseek_v4 가 reasoning 분리) — 한국어로 사고하지만 content 만 쓰므로 무관 (P1 2026-09-10)
-    "dsv4": {"model": "dsv4-flash", "endpoint": os.environ.get("DSV4_EP", "http://sub1:8300/v1"), "max_tokens": 6144,
+    "dsv4": {"model": "dsv4-flash", "endpoint": os.environ.get("DSV4_EP", "http://sub1:8300/v1"), "max_tokens": 8192,
              "sampling": {"temperature": 0.3, "top_p": 0.9}, "extra": {}},
 }
 LOC = LOCALIZERS[os.environ.get("LOCALIZER", "qwen")]
@@ -58,7 +58,10 @@ def gate(en, ko):
     if SPECIAL.search(ko): return "special_token"
     hk, hj = ratios(strip_code(ko))
     if hj > 0.01: return "hanja"
-    if hk < 0.4 and not FENCE.search(en): return "low_hangul"
+    # low_hangul 재보정(P1 2026-09-10): "한국어 지시 + 영어 인용문/펜스 없는 코드" 는 정당한 한국 사용자 요청(리젝 103 중 71). 실패는
+    # ① 한글이 거의 없음(재작성 안 됨) ② 원문보다 영문이 늘어남(교사가 영어를 덧붙임). 원문 영문을 그대로 품은 경우는 통과.
+    if len(H.findall(ko)) < 15: return "low_hangul"
+    if hk < 0.4 and not FENCE.search(en) and len(L.findall(ko)) > 1.1 * len(L.findall(en)): return "low_hangul"
     if len(FENCE.findall(ko)) != len(FENCE.findall(en)): return "codefence_mismatch"
     r = len(ko) / max(len(en), 1)
     if r < 0.25 or r > 4.0: return "length_ratio"
@@ -114,7 +117,7 @@ def main():
             with lock:
                 if why:
                     stats[why.split(":")[0]] = stats.get(why.split(":")[0], 0) + 1
-                    rej_f.write(json.dumps({"conv_id": cid, "why": why, "en": p[:500], "ko": (ko or "")[:500]}, ensure_ascii=False) + "\n")
+                    rej_f.write(json.dumps({"conv_id": cid, "why": why, "en": p, "ko": ko or ""}, ensure_ascii=False) + "\n")   # 전문 보존(게이트 재보정 구제용)
                 else:
                     stats["ok"] += 1
                     out.write(json.dumps({"source": "chat_v3_localized", "conv_id": cid, "language": "Korean",

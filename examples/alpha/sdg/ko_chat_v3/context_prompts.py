@@ -11,7 +11,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 
 WRITERS = {"glm53-flash": os.environ.get("GLM_EP", "http://localhost:8000/v1"), "dsv4-flash": os.environ.get("DSV4_EP", "http://sub1:8300/v1")}
 H = re.compile(r"[가-힣]"); L = re.compile(r"[A-Za-z]"); HANJA = re.compile(r"[一-鿿]"); SPECIAL = re.compile(r"<\|[A-Za-z_]+\|>|</?(?:tool_call|tool_response|think)>")
-SPECIFIC = re.compile(r"(20\d\d년 \d{1,2}월|이날|지난달|지난주|어제 뉴스|최근 기사)")
+SPECIFIC = re.compile(r"(20\d\d년 \d{1,2}월|이날|어제 뉴스|최근 기사|오늘 뉴스|이번 사건)")   # "지난주/지난달" 은 개인 맥락(지난주 진료·지난달 계약)이라 제외(P1 리젝 42/42 전부 정당)
 
 DOMAINS = {
     "주거": ["전세·월세 계약", "청약·분양", "전세사기 예방", "이사·입주", "관리비·층간소음", "주택담보대출"],
