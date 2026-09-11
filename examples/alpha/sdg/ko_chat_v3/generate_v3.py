@@ -178,7 +178,7 @@ def process(idx, seed, args, stats, lock, out_f, rej_f):
             rej_f.write(json.dumps({**rec_base, "rejects": rejects}, ensure_ascii=False) + "\n"); rej_f.flush()
         return
     verdict, jtail = None, ""
-    if len(samples) >= 2:
+    if len(samples) >= 2 and not args.defer_judge:
         conv_text = "\n".join(f"{t['role']}: {t['content'][:1500]}" for t in turns)
         verdict, jtail = judge(judge_t, conv_text, samples[0]["content"], samples[1]["content"])
     best = samples[1] if verdict == "B" else samples[0]
@@ -189,11 +189,14 @@ def process(idx, seed, args, stats, lock, out_f, rej_f):
            "ko_synthesis": {"pipeline": "ko_chat_v3", "think": True, "n_samples": args.n, "kept": len(samples),
                             "judge": judge_t["name"] if len(samples) >= 2 else None, "verdict": verdict,
                             "judge_tail": jtail, "loser_content": (loser["content"][:2000] if loser else None),
+                            # --defer-judge: 심판 보류(DSV4 부재 중 GLM 2대 생성). 2번째 샘플 전문을 보존 → judge_pending.py 가 나중에 판정·교체
+                            "judge_pending": bool(args.defer_judge and len(samples) >= 2),
+                            "pending_sample": ({"reasoning": samples[1]["reasoning"], "content": samples[1]["content"], "ctoks": samples[1]["ctoks"]} if args.defer_judge and len(samples) >= 2 else None),
                             "rejects": [{"k": r["k"], "why": r["why"]} for r in rejects],
                             "r_hangul": round(ratios(best["reasoning"])[0], 2), "ctoks": best["ctoks"]}}
     with lock:
         stats["ok"] += 1; stats["toks"] += sum(s["ctoks"] for s in samples)
-        if verdict is None and len(samples) >= 2: stats["judge_fail"] += 1
+        if verdict is None and len(samples) >= 2 and not args.defer_judge: stats["judge_fail"] += 1
         for r in rejects: stats["rej_" + r["why"].split(":")[0]] = stats.get("rej_" + r["why"].split(":")[0], 0) + 1
         out_f.write(json.dumps(row, ensure_ascii=False) + "\n"); out_f.flush()
 
@@ -202,6 +205,7 @@ def main():
     ap.add_argument("--seeds", required=True); ap.add_argument("--out", required=True)
     ap.add_argument("--workers", type=int, default=96); ap.add_argument("--n", type=int, default=2)
     ap.add_argument("--max-tokens", type=int, default=16384, help="P0 실측: 철저 사고 지시로 사고가 8k 토큰을 넘는 행이 있어 12,288 에서 답변이 비던 것을 완화"); ap.add_argument("--limit", type=int, default=0)
+    ap.add_argument("--defer-judge", action="store_true", help="심판 호출 생략, 두 샘플 모두 저장(judge_pending). 심판 모델이 내려간 동안 생성만 할 때(2026-09-11 sub1 GLM 병행). 이후 judge_pending.py 로 판정")
     ap.add_argument("--skip-rejected", action="store_true", help="양샘플 리젝(rejects jsonl) 시드도 완료로 간주 — 재개 때마다 폭주 시드를 재시도해 GLM 을 낭비하지 않도록(P1 실측: 373 시드 × 32k tok). 남은 시드는 마지막에 별도 처리")
     args = ap.parse_args()
     done = set()
