@@ -27,6 +27,11 @@ def main():
     done = set()
     if os.path.exists(a.out):
         for l in open(a.out): done.add(json.loads(l)["chain_id"])
+    # 누출 등으로 리젝된 연쇄는 최대 2회까지만 재시도(라운드마다 무한 재시도로 GLM 낭비 — 2026-09-12 실측 3,723 리젝 중 재시도 653)
+    rp = a.out.replace(".jsonl", "") + ".rejects.jsonl"
+    if os.path.exists(rp):
+        cnt = collections.Counter(json.loads(l)["chain_id"] for l in open(rp))
+        done |= {k for k, v in cnt.items() if v >= 2}
     GENERIC = {"P17", "P37", "P38", "P30", "P36", "P1376", "P361", "P131"}; BL = {"대한민국", "미국", "일본", "중국", "영국", "프랑스", "독일", "러시아", "서울특별시", "도쿄", "워싱턴 D.C.", "런던", "파리", "베이징", "한국어", "영어", "일본어", "중국어", "프랑스어", "독일어", "스페인어", "미국 달러", "대한민국 원", "유로", "엔", "아시아", "유럽", "북아메리카", "지구"}
     chains = [c for c in chains if c["hops"][-1]["prop"] not in GENERIC and c["answer"] not in BL and sum(1 for h in c["hops"] if h["prop"] in GENERIC) <= 1]
     todo = [c for c in chains if c["chain_id"] not in done]; print(f"chains={len(chains)} done={len(done)} todo={len(todo)} teacher={t['name']}", flush=True)
