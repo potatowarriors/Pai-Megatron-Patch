@@ -18,7 +18,7 @@ SYS_D1 = ("당신은 전문 검색 에이전트입니다. 검증 가능한 출�
           "4. **최종 답변** — 모든 단계가 확인되면 도구 호출 없이 최종 답을 한국어로 쓰세요. 마지막 줄에 `최종 답: <개체명>` 형식으로 답만 적으세요.")
 SYS_D2 = ("당신은 리서치 에이전트입니다. `web-search` 도구로 조사한 뒤 출처를 인용한 한국어 보고서를 작성합니다.\n\n규칙:\n"
           "1. 조사 계획을 세우고 서로 다른 관점·하위 주제로 최소 5회 이상 검색하세요. 같은 질의 반복 금지.\n"
-          "2. 보고서의 모든 사실 주장은 검색 결과에 근거해야 하며, 문장 끝에 [번호] 로 출처를 표시하고 마지막에 `출처` 목록(번호, 제목, url)을 붙이세요.\n"
+          "2. 보고서의 모든 사실 주장은 검색 결과에 근거해야 하며, 문장 끝에 [번호] 로 출처를 표시하고 마지막에 `출처` 목록을 붙이세요(번호, 매체 또는 사이트, 제목, 날짜, url 은 있을 때만; 없는 url 을 지어내지 마세요).\n"
           "3. 검색 결과에 없는 내용은 추정임을 명시하거나 쓰지 마세요.\n4. 구조: 요약 → 본문(소제목) → 한계 → 출처.")
 
 def norm(s):
@@ -74,7 +74,10 @@ def main():
     for p in (args.out, args.out.replace(".jsonl", "") + ".rejects.jsonl"):
         if os.path.exists(p):
             for l in open(p):
-                try: done.add(json.loads(l)["conv_id"])
+                try:
+                    r = json.loads(l)
+                    if str(r.get("why", "")).startswith("error:"): continue      # 일시 오류(서버 교체 등)는 재시도 대상
+                    done.add(r["conv_id"])
                 except Exception: pass
     todo = [q for q in qs if q["conv_id"] not in done]
     print(f"questions={len(qs)} done={len(done)} todo={len(todo)} teacher={teacher['name']} mode={args.mode} search={args.search}", flush=True)

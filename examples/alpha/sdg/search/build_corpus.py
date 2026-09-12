@@ -77,7 +77,7 @@ def main():
             for title, body in iter_kowiki(a.kowiki):
                 did = "w" + hashlib.sha1(title.encode()).hexdigest()[:12]
                 for i, p in enumerate(passages(body)):
-                    o.write(json.dumps({"doc_id": f"{did}#{i}", "title": title, "url": "https://ko.wikipedia.org/wiki/" + title.replace(" ", "_"), "source": "kowiki", "text": (title + "\n" + p) if i == 0 else p}, ensure_ascii=False) + "\n"); n_pas += 1
+                    o.write(json.dumps({"doc_id": f"{did}#{i}", "title": title, "url": "https://ko.wikipedia.org/wiki/" + title.replace(" ", "_"), "source": "kowiki", "text": title + "\n" + p}, ensure_ascii=False) + "\n"); n_pas += 1
                 n_doc += 1
                 if n_doc % 50000 == 0: print(f"[kowiki] docs {n_doc} passages {n_pas}", flush=True)
                 if a.limit and n_doc >= a.limit: break
@@ -88,11 +88,13 @@ def main():
                 try: d = json.load(open(fp, encoding="utf-8"))
                 except Exception as e: print("skip", fp, e); continue
                 for doc in d.get("document", []):
-                    md = doc.get("metadata") or {}; title = md.get("title") or ""; body = "\n\n".join(re.sub(r"</?p>", "", (x.get("form") or "")).strip() for x in doc.get("paragraph", []) if x.get("form"))
+                    md = doc.get("metadata") or {}; title = md.get("title") or ""; paras = [re.sub(r"</?p>", "", (x.get("form") or "")).strip() for x in doc.get("paragraph", []) if x.get("form")]
+                    body = "\n\n".join(p for p in paras if p)
                     if len(body) < 200: continue
+                    if (not title or ("기사" in title and len(title) < 24)) and paras: title = paras[0][:80]      # v2: 헤드라인으로
                     did = "n" + hashlib.sha1((doc.get("id") or title).encode()).hexdigest()[:12]
                     for i, p in enumerate(passages(body)):
-                        o.write(json.dumps({"doc_id": f"{did}#{i}", "title": title, "url": f"nikl://{md.get('publisher','')}/{md.get('date','')}/{doc.get('id','')}", "source": "nikl_news", "date": md.get("date"), "publisher": md.get("publisher"), "text": (title + "\n" + p) if i == 0 else p}, ensure_ascii=False) + "\n"); npz += 1
+                        o.write(json.dumps({"doc_id": f"{did}#{i}", "title": title, "url": f"nikl://{md.get('publisher','')}/{md.get('date','')}/{doc.get('id','')}", "source": "nikl_news", "date": md.get("date"), "publisher": md.get("publisher"), "text": title + "\n" + p}, ensure_ascii=False) + "\n"); npz += 1
                     nd += 1
                 print(f"[nikl] {os.path.basename(fp)} docs {nd} passages {npz}", flush=True)
             print(f"[nikl] DONE docs {nd} passages {npz}", flush=True)

@@ -21,7 +21,10 @@ def search(query, k):
     for i, sc in zip(ids[0].tolist(), scores[0].tolist()):
         d = S.docs[i]; base = d["doc_id"].split("#")[0]
         if base in seen: continue
-        seen.add(base); out.append({"url": d["url"], "title": d["title"], "content": d["text"], "score": round(float(sc), 4), "raw_content": None})
+        # NIKL 기사는 원문 URL 이 없다 → url 대신 매체·날짜를 노출(지어낸 URL·내부 식별자 학습 방지, P0 실측 2026-09-12)
+        nikl = d.get("source") == "nikl_news"
+        seen.add(base); out.append({"url": None if nikl else d["url"], "title": d["title"], "content": d["text"], "score": round(float(sc), 4), "raw_content": None,
+                                    **({"publisher": d.get("publisher"), "published_date": d.get("date")} if nikl else {})})
         if len(out) >= k: break
     return out
 

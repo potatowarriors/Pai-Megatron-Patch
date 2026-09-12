@@ -22,7 +22,7 @@ def main():
     with open(a.passages) as f, open(os.path.join(a.out, "docs.jsonl"), "w") as m:
         for i, l in enumerate(f):
             d = json.loads(l); corpus_tokens.append(tokenize(d["text"]))
-            m.write(json.dumps({"doc_id": d["doc_id"], "title": d["title"], "url": d["url"], "source": d["source"], "text": d["text"]}, ensure_ascii=False) + "\n")
+            m.write(json.dumps({"doc_id": d["doc_id"], "title": d["title"], "url": d["url"], "source": d["source"], "text": d["text"], "publisher": d.get("publisher"), "date": d.get("date")}, ensure_ascii=False) + "\n")
             if i % 500000 == 0 and i: print(f"tokenized {i} ({time.time()-t0:.0f}s)", flush=True)
     print(f"tokenize done n={len(corpus_tokens)} ({time.time()-t0:.0f}s)", flush=True)
     retriever = bm25s.BM25(k1=1.2, b=0.75)

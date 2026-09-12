@@ -6,7 +6,7 @@
 질문 자연어화는 wd_question.py(교사) 가 맡는다. Wikidata API 는 배치 50·User-Agent 명시·캐시(out/wd_cache.jsonl).
 사용: python3 wd_chain.py --titles-from out/corpus/passages.jsonl --n-chains 10000 --out out/d1/chains.jsonl [--min-passages 6] [--rps 3]
 """
-import argparse, json, os, random, time, urllib.parse, urllib.request, collections, threading
+import argparse, json, os, random, time, urllib.parse, urllib.request, urllib.error, collections, threading
 
 API = "https://www.wikidata.org/w/api.php"; UA = "alpha-sdg-search/0.1 (research; contact: cjaidivision@gmail.com)"
 PROPS = {  # 의미 있는 관계(값이 개체). 너무 일반적인 P31/P279/P106/P27 은 제외
@@ -20,15 +20,16 @@ PROPS = {  # 의미 있는 관계(값이 개체). 너무 일반적인 P31/P279/P
 }
 _lock = threading.Lock(); _last = [0.0]
 def api(params, rps):
-    with _lock:
-        dt = 1.0 / rps - (time.time() - _last[0])
-        if dt > 0: time.sleep(dt)
-        _last[0] = time.time()
+    with _lock:                       # 토큰버킷: 다음 슬롯을 예약만 하고 sleep 은 락 밖에서(병렬 in-flight 허용)
+        slot = max(_last[0] + 1.0 / rps, time.time()); _last[0] = slot
+    time.sleep(max(0.0, slot - time.time()))
     q = urllib.parse.urlencode({**params, "format": "json"}); req = urllib.request.Request(API + "?" + q, headers={"User-Agent": UA})
-    for i in range(4):
+    for i in range(7):
         try: return json.load(urllib.request.urlopen(req, timeout=60))
+        except urllib.error.HTTPError as e:
+            err = e; time.sleep(15 if e.code == 429 else 3 * (i + 1))     # 429: 15초 백오프
         except Exception as e:
-            time.sleep(2 * (i + 1)); err = e
+            time.sleep(3 * (i + 1)); err = e
     raise err
 
 class Store:
@@ -71,12 +72,14 @@ class Store:
                 e = self.slim(raw); self._save(e); out[e["kowiki"]] = e
         return out
 
+GENERIC = {"P17", "P37", "P38", "P30", "P36", "P1376", "P361", "P131"}   # 국가·공용어·통화·대륙·수도·상위단위·행정구역: 정답이 뻔해짐 → 마지막 홉 금지, 연쇄당 ≤1
 def walk(store, seed, rng, min_hops, max_hops):
     """홉마다 단일값 후보 전부를 한 번에 배치 조회(호출 1회) → 유효 후보 중 무작위 선택. 호출 수 ≈ 홉 수."""
     cur, chain, seen = seed, [], {seed["id"]}
     target = rng.randint(min_hops, max_hops)
     for h in range(target):
-        cands = [(p, v[0]) for p, v in cur["claims"].items() if p in PROPS and len(v) == 1 and v[0] not in seen]
+        n_generic = sum(1 for c in chain if c["prop"] in GENERIC); last = (h == target - 1)
+        cands = [(p, v[0]) for p, v in cur["claims"].items() if p in PROPS and len(v) == 1 and v[0] not in seen and not (p in GENERIC and (last or n_generic >= 1))]
         if not cands: break
         rng.shuffle(cands); cands = cands[:20]
         ents = store.get_many([q for _, q in cands])

@@ -1,0 +1,21 @@
+# 트랙 T — 한국어 도구 호출/미호출 SFT 셋 (kotool_v1, When2Call 형)
+
+**목적**: phase-2 회귀 "도구 선언 시 무관한 질문에도 호출"(유령 호출 8/33, `KNOWN_ISSUES` 09-09) 교정 항목 중 **한국어 도구 행**. 한국어 chat 행에는 도구 선언이 전혀 없어 템플릿 tool 분기가 영어로만 학습됐다.
+**비율**: 호출 : 미호출 = 1 : 2 (사용자 결정). 미호출 = 직접 답변(무관·도구 없이 가능) / 되묻기(필수 정보 부재) / 불가 안내(선언 도구로 불가능). **규모** 5k 행 목표.
+
+## 레시피 (`t_generate.py`)
+- 도구 세트: Nemotron-SFT-Agentic-v2 `tool_calling` 행의 실제 API 스키마(영어, 행당 1~8개)를 그대로 선언.
+- 요청 작성: GLM(저효율 사고)이 사례 규칙(call/direct/clarify/infeasible, 가중치 2:2:2:1)에 맞춰 한국어 요청을 씀. 되묻기 사례는 "기본값으로 대신할 수 없는 필수 인자를 비운 짧고 막연한 요청".
+- 정책 응답: GLM(v2 지시)·DSV4 1:1, tools 선언 + `tool_choice auto`, n=2 → **검증기**: call = tool_calls 있음·선언된 이름·필수 인자 충족 / 미호출 = tool_calls 없음 + (clarify: 질문형·≤300자, infeasible: 한계 인정 어구) → 상대 교사 심판.
+  call 사례는 도구 결과를 DSV4 무사고로 모의 생성 → 최종 답변 턴(Agentic-v2 형, 전 assistant 턴 학습).
+- **생성 시점 시스템 규칙**(학습 행 미포함): "꼭 필요할 때만 호출·핵심 정보 없으면 되묻기·불가하면 한계 명시". 규칙 없이는 되묻기 수율 0, 유령 호출 리젝 30%였다(P0/P1 실측 2026-09-12).
+
+## 실측
+- P0 60잡: 채택 43(call 13·direct 17·infeasible 13·clarify 0), 유령 호출 샘플 19를 검증기가 리젝.
+- 본생성 1차(규칙 없음) 750잡: 채택 451(clarify 0) → 중단·보존(`out/p1/t_main.jsonl`). 2차(규칙 적용, conv_id 오프셋 100000) 750잡: 채택 533(**clarify 65**), 유령 호출 리젝 235→128.
+
+## 실행
+```
+GEN_THOROUGH=2 GEN_TEACHERS=glm53-flash,dsv4-flash JUDGE=other python3 t_generate.py --n 8000 --out out/p1/t_main2.jsonl --workers 96 --seed 8 --id-offset 100000
+```
+출력 행: `{messages(system 없음), tools, conv_id, source: kotool_v1, teacher, case, metadata}` → 변환기 tool 시나리오 분기, `render_check` 로 `<tools>` 선언·`<tool_response>` 확인. bins `kotool_v1`.

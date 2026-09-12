@@ -73,6 +73,9 @@
 | [../sdg/ko_chat/README.md](../sdg/ko_chat/README.md) | 한국어 SFT chat 합성 — 트랙A 번역+재생성 / 트랙B 네이티브, 교사 Gemma-4-31B + OxAlpha(무료), 무인 체인·게이트·GPU 창구·함정 (2026-08-23~) |
 | [../sdg/terminal/README.md](../sdg/terminal/README.md) | 터미널 에이전트 SFT 데이터 정본 — 공개 `nvidia/Nemotron-Terminal-Corpus` 366k 채택(사용자 결정 2026-09-10): 원본 실체·변환 규칙(파싱실패 splice)·6 멤버 bins(5.48B)·게이트·블렌드 등록 지침·대조 기준·교훈 (2026-09-10) |
 | [../sdg/terminal/SYNTHESIS_ARCHIVE.md](../sdg/terminal/SYNTHESIS_ARCHIVE.md) | [아카이브·폐기] 자체 합성 트랙 — 교사 GLM-5.3-Flash + Harbor Terminus-2, P0~P4 실측·사고·phase-3 본 런 iter 30 종료 기록 (2026-09-07~10) |
+| [../sdg/usab/README.md](../sdg/usab/README.md) | 트랙 U 구조화 출력·사용성 SFT 셋 — 15 제약군 + 프로그램 검증기, EN 80/KO 20, GLM v2 지시·DSV4 교차 심판, P0·본생성 30k (2026-09-12) |
+| [../sdg/search/README.md](../sdg/search/README.md) | 트랙 D 검색 에이전트 SFT 셋 — 로컬 BM25(위키+NIKL) Tavily 형 서버, Wikidata 한국어 연쇄 D1 다중 홉·D2 딥 리서치 보고서(인용 심판), P0 실측 (2026-09-12) |
+| [../sdg/kotool/README.md](../sdg/kotool/README.md) | 트랙 T 한국어 도구 호출/미호출(When2Call 형) — Agentic-v2 스키마 재사용, 호출:미호출 1:2, 검증기·생성 시점 규칙 (2026-09-12) |
 | [../sdg/identity/README.md](../sdg/identity/README.md) | 정체성 SFT/RL 데이터 생성 (DataDesigner, identity_card 단일 진실 원천) (2026-08-07~10) |
 
 ## chat/ (사람이 직접 대화 — docs 밖, 코드와 동거)

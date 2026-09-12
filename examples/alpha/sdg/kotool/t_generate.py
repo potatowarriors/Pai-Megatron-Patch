@@ -15,11 +15,11 @@ HERE = os.path.dirname(os.path.abspath(__file__)); sys.path.insert(0, os.path.jo
 
 SRC = "/home/work/Datasets/LL_datasets/posttraining/SFT/Nemotron-SFT-Agentic-v2/data/tool_calling.jsonl"
 H = re.compile(r"[가-힣]"); L = re.compile(r"[A-Za-z]")
-CASES = [("call", 2), ("direct", 2), ("clarify", 1), ("infeasible", 1)]
+CASES = [("call", 2), ("direct", 2), ("clarify", 2), ("infeasible", 1)]   # P0: clarify 수율 0/7 → 규칙 강화 + 비중 상향
 WRITER = {
  "call": "선언된 도구 중 「{target}」 를 실제로 호출해야만 처리할 수 있는 요청을 쓰세요. 그 도구의 필수 인자를 채울 수 있도록 구체적 정보(이름·날짜·수량 등)를 요청문에 자연스럽게 포함하세요. 도구 이름을 직접 언급하지는 마세요.",
  "direct": "선언된 도구들과 전혀 무관하거나 도구 없이도 충분히 답할 수 있는 일반 요청(지식 질문·설명·글쓰기·조언 등)을 쓰세요. 도구를 써야 하는 것처럼 보이지 않게 하세요.",
- "clarify": "선언된 도구 「{target}」 가 필요한 요청이지만, 그 도구의 필수 인자 중 하나 이상을 알 수 없게 **정보를 빠뜨린** 요청을 쓰세요(예: 날짜·대상·수량 누락). 도구 이름은 언급하지 마세요.",
+ "clarify": "선언된 도구 「{target}」 가 필요한 요청이지만, 되묻지 않고는 호출이 **불가능**하도록 핵심 정보를 빠뜨리세요: 필수 인자 중 기본값으로 대신할 수 없는 것(대상 식별자·이름·도시·날짜·계좌·상품 등)을 하나 이상 비우고, 요청 자체는 짧고 막연하게(예: '예약 좀 해줘', '그 사람 정보 찾아줘'). 도구 없이 답할 수 있는 질문이면 안 됩니다. 도구 이름은 언급하지 마세요.",
  "infeasible": "선언된 도구들이 제공하지 않는 능력(예: 결제·전화·물리적 행동·다른 서비스 조작)이 필요한 요청을 쓰세요. 선언된 도구로는 해결할 수 없어야 합니다.",
 }
 WRITE_PROMPT = """당신은 AI 어시스턴트 학습 데이터를 만드는 작가입니다. 아래 도구들이 어시스턴트에게 선언되어 있습니다.
@@ -102,11 +102,12 @@ def process(idx, ts, case, args, stats, lock, out_f, rej_f, rng):
     teacher, judge_t = g.TEACHERS[idx % len(g.TEACHERS)], g.pick_judge(idx)
     try: q, target, why = write_request(case, ts, rng)
     except Exception as e: q, target, why = None, None, f"write_error:{e!r}"[:100]
-    cid = f"kotool:{idx:06d}"
+    cid = f"kotool:{idx + args.id_offset:06d}"
     if why:
         with lock: stats["rej_" + why] = stats.get("rej_" + why, 0) + 1; rej_f.write(json.dumps({"conv_id": cid, "case": case, "why": why}, ensure_ascii=False) + "\n")
         return
-    msgs = [{"role": "system", "content": g.SYS_GEN}, {"role": "user", "content": q}]
+    # 생성 시점 시스템 규칙(학습 행에는 미포함): 유령 호출 억제·되묻기 유도. P1 실측: 규칙 없이는 clarify 수율 0, ghost_call 리젝 30%
+    msgs = [{"role": "system", "content": g.SYS_GEN + " 도구는 요청 처리에 꼭 필요할 때만 호출하세요. 도구 호출에 필요한 핵심 정보가 요청에 없으면 추측해서 호출하지 말고 가장 중요한 것 하나만 짧게 되물으세요. 선언된 도구로 할 수 없는 일이면 그 한계를 솔직히 밝히고 대안을 제시하세요."}, {"role": "user", "content": q}]
     samples, rejects = [], []
     for k in range(args.n_samples):
         try: s = policy(teacher, msgs, ts, args.max_tokens)
@@ -152,7 +153,7 @@ def process(idx, ts, case, args, stats, lock, out_f, rej_f, rng):
 
 def main():
     ap = argparse.ArgumentParser(); ap.add_argument("--n", type=int, required=True); ap.add_argument("--out", required=True); ap.add_argument("--workers", type=int, default=96)
-    ap.add_argument("--n-samples", type=int, default=2); ap.add_argument("--max-tokens", type=int, default=6144); ap.add_argument("--seed", type=int, default=1)
+    ap.add_argument("--n-samples", type=int, default=2); ap.add_argument("--max-tokens", type=int, default=6144); ap.add_argument("--seed", type=int, default=1); ap.add_argument("--id-offset", type=int, default=0)
     args = ap.parse_args(); rng = random.Random(args.seed); os.makedirs(os.path.dirname(args.out) or ".", exist_ok=True)
     sets = load_toolsets(args.n, rng); print(f"toolsets={len(sets)} teachers={[t['name'] for t in g.TEACHERS]}", flush=True)
     cases = [c for c, w in CASES for _ in range(w)]
