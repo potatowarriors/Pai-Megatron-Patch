@@ -9,6 +9,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import bm25s
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__))); from build_index import tokenize
 
+CONTENT_CHARS = int(os.environ.get("SEARCH_CONTENT_CHARS", "700"))   # 병목 교정 2026-09-12: 결과 본문 700→500자(프리필 20~60k 토큰/단계 완화)
 class S:
     idx = None; docs = None; lock = threading.Lock()
 
@@ -23,7 +24,7 @@ def search(query, k):
         if base in seen: continue
         # NIKL 기사는 원문 URL 이 없다 → url 대신 매체·날짜를 노출(지어낸 URL·내부 식별자 학습 방지, P0 실측 2026-09-12)
         nikl = d.get("source") == "nikl_news"
-        seen.add(base); out.append({"url": None if nikl else d["url"], "title": d["title"], "content": d["text"], "score": round(float(sc), 4), "raw_content": None,
+        seen.add(base); out.append({"url": None if nikl else d["url"], "title": d["title"], "content": d["text"][:CONTENT_CHARS], "score": round(float(sc), 4), "raw_content": None,
                                     **({"publisher": d.get("publisher"), "published_date": d.get("date")} if nikl else {})})
         if len(out) >= k: break
     return out

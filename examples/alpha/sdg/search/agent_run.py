@@ -34,8 +34,20 @@ def match_answer(final, answer, aliases):
     return ok, cand[:120]
 
 def search(ep, query, k=10):
+    """검색 서버 호출 — 일시 장애(서버 재기동·연결 오류)에 5회 백오프 재시도. 2026-09-12 실측: 재기동 1분 동안 진행 중 트라젝토리 238건이 통째로 폐기됐다."""
     req = urllib.request.Request(ep.rstrip("/") + "/search", data=json.dumps({"query": query, "max_results": k}).encode(), headers={"Content-Type": "application/json"})
-    return json.load(urllib.request.urlopen(req, timeout=60))
+    for i in range(6):
+        try: return json.load(urllib.request.urlopen(req, timeout=60))
+        except Exception as e:
+            err = e; time.sleep(min(60, 5 * (i + 1)))
+    raise err
+
+def llm_post(teacher, body):
+    for i in range(4):
+        try: return g.post(teacher["endpoint"], body, timeout=int(os.environ.get("GEN_TIMEOUT", "1800")))
+        except Exception as e:
+            err = e; time.sleep(min(60, 10 * (i + 1)))
+    raise err
 
 def run_one(teacher, ep, question, args):
     sys_ = SYS_D1 if args.mode == "d1" else SYS_D2
@@ -43,7 +55,7 @@ def run_one(teacher, ep, question, args):
     n_calls, turns_tok, finish = 0, [], []
     for step in range(args.max_calls + 1):
         body = {"model": teacher["model"], "messages": msgs, "tools": TOOLS, "tool_choice": "auto", "max_tokens": args.max_tokens, **teacher["sampling"]}
-        d = g.post(teacher["endpoint"], body, timeout=int(os.environ.get("GEN_TIMEOUT", "1800"))); ch = d["choices"][0]; m = ch["message"]
+        d = llm_post(teacher, body); ch = d["choices"][0]; m = ch["message"]
         rc = m.get("reasoning_content") or m.get("reasoning") or ""; content = m.get("content") or ""; tcs = m.get("tool_calls") or []
         finish.append(ch["finish_reason"]); turns_tok.append(d.get("usage", {}).get("completion_tokens", 0))
         am = {"role": "assistant", "content": content, "reasoning_content": rc}
@@ -64,7 +76,7 @@ def run_one(teacher, ep, question, args):
     return msgs, n_calls, finish, turns_tok, None
 
 def main():
-    ap = argparse.ArgumentParser(); ap.add_argument("--questions", required=True); ap.add_argument("--out", required=True); ap.add_argument("--search", default="http://localhost:8600")
+    ap = argparse.ArgumentParser(); ap.add_argument("--questions", required=True); ap.add_argument("--out", required=True); ap.add_argument("--search", default="http://127.0.0.1:8600")   # localhost 는 IPv6 ::1 폴백으로 오류 99 를 낸다(컨테이너에 IPv6 없음)
     ap.add_argument("--workers", type=int, default=160); ap.add_argument("--max-calls", type=int, default=20); ap.add_argument("--max-tokens", type=int, default=6144); ap.add_argument("--mode", choices=["d1", "d2"], default="d1")
     ap.add_argument("--min-calls", type=int, default=5); ap.add_argument("--limit", type=int, default=0); ap.add_argument("--teacher", default=os.environ.get("AGENT_TEACHER", "dsv4-flash"))
     args = ap.parse_args(); teacher = g.ALL_TEACHERS[args.teacher]
