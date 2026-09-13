@@ -77,3 +77,8 @@ LR 은 phase-1 과 동일(2.5e-5 cosine → 1.5e-6, Ultra 비율 이식). DiLoCo
 - 09-13 11:44(sub1 시계) sub1 jit595 2-iter 스모크 PASS: loss **비트 동일**(1.069033 → 1.038569), 321.7 s/iter, max alloc 55.3 GB, munmap 0 — 캐시 462 파일 공유.
 - 09-13 02:29 A 기동 `outputs/alpha_baseline_48L_sft_128k_final_20260913_022854`(wandb alpha-posttraining 88yjmimx), iter1 loss 1.069033(스모크와 동일). 체인 `scripts/sft_final_chain.sh`(outputs/sft_final_chain.log): iter 100 + sub1 유휴 → sub1 probe, A 종료 → B 자동 기동.
 - 09-13 04:00 **A′** sub1 기동(`outputs/run_sft_final_Aprime_sub1.log`, `--exit-interval 100`, ≈9h). B 기동 시각(≈16:00) 불변.
+- 09-13 13:26(sub1 시계 기준 22:26) **A′ 100 iters 완주**(sub1 9.5 h 연속, munmap 0, ckpt iter 100). A 와 겹치는 100 iters loss 차이 평균 7e-5·최대 2e-4 → 비결정 포락선 ≈ 2e-4.
+- 09-13 15:47 **A 150 iters 완주**(loss 1.069 → 0.882, valid iter100 0.824/PPL 2.28, ckpt iter 100·150).
+- 09-13 15:47 **B 1차 기동 실패**: 런처가 `CUDA_DEVICE_MAX_CONNECTIONS=32` 를 강제(프리트레인 CP=1 전제) → CP8 프리셋에서 Megatron assert 로 양 노드 즉사. 런처가 프리셋의 CP/TP>1 이면 1 로 두도록 수정(1b7ffe5). **B 재기동 16:12** `outputs/diloco_sft_final/node{0,1}`, 로그 ~/run_diloco_sft_final_node{0,1}.log.
+- probe 체인 실측: MG→HF 변환은 **main1 8 GPU** 에서 PASS(forward_sanity), sub1 2 GPU 는 저장 단계 SIGSEGV(원인 미상, 09-13 13:29). vLLM(alpha_serve_venv, CUDA 13 torch)은 **sub1 에서만** 뜬다(main1 드라이버 12.8 "too old"). → 사후 평가는 변환 main1 · 서빙 sub1 로 분담.
+- A iter 100 probe(09-14 01:09 sub1 시계): 제작자 0/30(OpenAI/챗GPT 자칭), 유령 호출 4/33 — LC-B 시작점(FAIL·4/33)과 동일. iter 100 = 예산의 3.5%·워밍업 중·identity 0.5% 라 아직 판정 의미 없음, 이후 ckpt 추이로 본다.
