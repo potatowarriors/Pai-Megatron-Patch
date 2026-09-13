@@ -57,8 +57,14 @@ fi
 # :-32): .pai_megatron_alpha_env exports =1 into the interactive shell, which would defeat
 # a :-default on node0, while node1's non-interactive ssh shell may not source the profile
 # at all — hardcoding guarantees BOTH nodes match. To A/B a different value, edit this line.
+# CP>1 presets (SFT 128k = CP8) hit Megatron's assert "context parallelism require CUDA_DEVICE_MAX_CONNECTIONS to 1"
+# (2026-09-13 15:47 B launch died on both nodes). Derive from the training preset; DILOCO_CUDA_CONN overrides.
+_CP=$(grep -E '^context-parallel-size:' "$ALPHA/configs/training/$TRAIN.yaml" 2>/dev/null | awk '{print $2}'); _CP=${_CP:-1}
+_TP=$(grep -E '^tensor-model-parallel-size:' "$ALPHA/configs/training/$TRAIN.yaml" 2>/dev/null | awk '{print $2}'); _TP=${_TP:-1}
+if [ -n "${DILOCO_CUDA_CONN:-}" ]; then CUDA_CONN=$DILOCO_CUDA_CONN; elif [ "$_CP" -gt 1 ] || [ "$_TP" -gt 1 ]; then CUDA_CONN=1; else CUDA_CONN=32; fi
+echo "[launch_diloco] CUDA_DEVICE_MAX_CONNECTIONS=$CUDA_CONN (preset CP=$_CP TP=$_TP)"
 ENVV="NCCL_IB_DISABLE=1 NCCL_SOCKET_IFNAME=eth0 GLOO_SOCKET_IFNAME=eth0 \
-CUDA_DEVICE_MAX_CONNECTIONS=32 \
+CUDA_DEVICE_MAX_CONNECTIONS=$CUDA_CONN \
 DILOCO_WORLD=2 DILOCO_MASTER=main1 DILOCO_PORT_BASE=$PORT_BASE \
 DILOCO_H=${DILOCO_H:-30} DILOCO_TAU=${DILOCO_TAU:-0} DILOCO_OUTER_LR=${DILOCO_OUTER_LR:-0.7} \
 DILOCO_OUTER_MOMENTUM=${DILOCO_OUTER_MOMENTUM:-0.6} DILOCO_DATA_SHARD=${DILOCO_DATA_SHARD:-0} \
