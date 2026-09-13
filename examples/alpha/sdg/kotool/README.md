@@ -19,3 +19,7 @@
 GEN_THOROUGH=2 GEN_TEACHERS=glm53-flash,dsv4-flash JUDGE=other python3 t_generate.py --n 8000 --out out/p1/t_main2.jsonl --workers 96 --seed 8 --id-offset 100000
 ```
 출력 행: `{messages(system 없음), tools, conv_id, source: kotool_v1, teacher, case, metadata}` → 변환기 tool 시나리오 분기, `render_check` 로 `<tools>` 선언·`<tool_response>` 확인. bins `kotool_v1`.
+
+## 완료 (2026-09-12 08:45 KST)
+1차 480 + 2차 5,655 = 6,135행(자기귀속 오탐 1 제외 → 6,134): call 1,973 · direct 2,403 · clarify 642 · infeasible 1,117 = 호출:미호출 1:2.11. 교사 DSV4 3,041 / GLM 3,094, 사고 중앙값 681자.
+**bins** `sft_packed_128k_terminal_pad16/kotool_v1` 81 bins(실 10.45M·학습 4.10M tok; 도구 선언·결과는 비학습). `verify_sft_bins` PASS 81/81, `render_check` clean(`<tools>` 선언 1~8개·`<tool_response>` JSON).

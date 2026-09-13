@@ -22,3 +22,9 @@
 GEN_THOROUGH=2 GEN_TEACHERS=glm53-flash,dsv4-flash JUDGE=other python3 u_generate.py --n 36000 --out out/p1/u_main.jsonl --workers 352 --seed 2
 ```
 출력 행: Chat-v3 스키마(messages, 마지막 assistant 에 reasoning_content) + `lang`, `u_meta{family,...}`, `ko_synthesis{validator: pass, ...}`. 내보내기·변환은 ko_chat_v3 의 `export_sft.py`(train_turns 마지막만, no-think 30%) → 128k bins `usab_v1_think/nothink`.
+
+## 완료 (2026-09-12 14:45 KST)
+본생성 36k 잡 → 채택 30,018(84%; EN 24,134 / KO 5,884), 15군 전부(json_schema 6,383 … clarify 779), 교사 DSV4 15,664 / GLM 14,354, 판정 A/B 12,966:12,813, 자기귀속 0.
+발견: 1,065행(3.5%)이 러시아어 등 비영어 요청(Chat-v3 영어 풀의 키릴 프롬프트가 라틴 비율 필터를 통과) → 사용자 결정으로 제외.
+**bins** `sft_packed_128k_terminal_pad16/usab_v1_think` 20,272행 → 273 bins(실 35.6M·학습 32.5M tok) · `usab_v1_nothink` 8,539행(29.6%) → 35 bins(4.4M·3.1M). `verify_sft_bins` PASS, `render_check` clean.
+교훈: 영어 시드 필터는 라틴 비율이 아니라 비라틴 문자 비율(키릴·아랍·데바나가리 등)로 걸러야 한다(`u_generate.load_en` 개선 과제).
