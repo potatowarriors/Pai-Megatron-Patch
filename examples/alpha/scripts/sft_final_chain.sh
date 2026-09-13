@@ -1,6 +1,6 @@
 #!/bin/bash
 # sft_final_chain.sh — SFT 최종 런 A/B 체인 (docs/SFT_FINAL_PLAN.md §4.2, 사용자 승인 2026-09-13 "진행해").
-#   ① A(main1 단일 150 iters) 의 iter 100 ckpt 가 나오면 sub1(유휴) 에서 경량 게이트 probe_ckpt.sh 실행 (GPU 0,1 · jit595)
+#   ① A(main1 단일 150 iters) 의 iter 100 ckpt 가 나오고 sub1 GPU 가 비면(복제 런 A′ 종료 후) sub1 에서 경량 게이트 probe_ckpt.sh 실행 (GPU 0,1 · jit595)
 #   ② A 가 iter 150 에서 종료하고 양 노드 GPU 가 비면 B(DiLoCo 2노드 150 iters) 기동 — launch_diloco.sh 는 node0 를 전경에서 돌리므로 이 스크립트가 끝까지 붙어 있는다.
 # 사용: nohup bash scripts/sft_final_chain.sh <A_RUN_DIR> > outputs/sft_final_chain.log 2>&1 < /dev/null &
 set -u
@@ -12,11 +12,11 @@ latest() { { tr -d '[:space:]' < "$A_RUN/checkpoints/latest_checkpointed_iterati
 gpu_used() { nvidia-smi --query-gpu=memory.used --format=csv,noheader,nounits | awk '{s+=$1} END {print s+0}'; }
 sub1_gpu_used() { ssh -o ConnectTimeout=15 sub1 "nvidia-smi --query-gpu=memory.used --format=csv,noheader,nounits | awk '{s+=\$1} END {print s+0}'" 2>/dev/null || echo 999999; }
 
-# ① iter 100 probe on sub1
-log "A=$A_RUN — iter 100 ckpt 대기"
-while [ "$(latest)" -lt 100 ]; do grep -q "exiting program\|Traceback" "$A_LOG" 2>/dev/null && break; sleep 120; done
-if [ "$(latest)" -ge 100 ]; then
-  log "iter 100 ckpt 확인 → sub1 probe 시작"
+# ① iter 100 probe on sub1 — sub1 GPU 가 비어야 한다 (사용자 승인 09-13 04:00: sub1 에 복제 런 A′ 100 iters 병행 → 종료 후 probe)
+log "A=$A_RUN — iter 100 ckpt + sub1 GPU 유휴 대기"
+while [ "$(latest)" -lt 100 ] || [ "$(sub1_gpu_used)" -ge 2000 ]; do grep -q "Traceback" "$A_LOG" 2>/dev/null && break; sleep 120; done
+if [ "$(latest)" -ge 100 ] && [ "$(sub1_gpu_used)" -lt 2000 ]; then
+  log "iter 100 ckpt 확인·sub1 유휴 → sub1 probe 시작"
   ssh -o ConnectTimeout=15 sub1 "cd $ALPHA && LD_LIBRARY_PATH=$JIT595\${LD_LIBRARY_PATH:+:\$LD_LIBRARY_PATH} GPUS=0,1 PORT=8011 bash eval_sft/probe_ckpt.sh $A_RUN 100" > "$ALPHA/outputs/probe_A_iter100.log" 2>&1
   log "probe rc=$? → outputs/probe_A_iter100.log"; tail -3 "$ALPHA/outputs/probe_A_iter100.log"
 fi

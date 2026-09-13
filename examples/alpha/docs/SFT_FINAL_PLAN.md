@@ -60,7 +60,9 @@ LR 은 phase-1 과 동일(2.5e-5 cosine → 1.5e-6, Ultra 비율 이식). DiLoCo
 
 1. **2-iter 스모크**(필수, 09-09 교훈): main1 `sft_128k_final` → sub1 `scripts/sub1_jit595_smoke.sh sft_128k_final_diloco sft_128k_final_blend`(jit595 우회, NFS 인덱스 캐시 공유).
 2. **DiLoCo A/B (150 iters)**: A = main1 단일 `sft_128k_final` 150 iters(`--exit-interval 150`, save 100·150)(ckpt 저장, 실패 시 본 런으로 그대로 이어감) → B = `launch_diloco.sh sft_final … sft_128k_final_diloco`(H=30, τ=2, SHARD_BLOCK=160, `NODE1_ENV=LD_LIBRARY_PATH=…/jit595`) 노드당 150 iters.
-   판정: (i) B 의 노드 loss 곡선이 iter ≤ 60 에서 A 와 동일 궤적(±0.01), (ii) iter 150 에서 B ≤ A(2× 데이터 효과), (iii) outer sync 체크섬 일치·NaN 0·저장 성공, (iv) 벽시계 노드당 iter 시간이 A 의 1.1× 이내. 통과 시 B 를 그대로 본 런으로 재개(같은 명령 재실행 = 재개). 실패 시 A 의 iter-150 ckpt 에서 단일 노드로 계속.
+   **A′(복제 런, sub1, 100 iters, 사용자 승인 09-13 04:00)**: A 와 같은 프리셋·블렌드·seed 를 sub1 에서 재실행 → (a) 595 스왑 이후 sub1 장시간 학습 안정성 증거(B 는 sub1 이 5일+ 버텨야 함) (b) 실행 간 비결정 산포 포락선(CLAUDE.md "A/B 는 같은 구성 재실행의 산포로 판정") (c) A′ iter 100 ckpt(예비).
+   판정(정정 09-13): `DILOCO_DATA_SHARD=1`·SHARD_BLOCK=GBS 에서 **node0 의 iter k 배치 = A 의 iter 2k 배치**(node1 은 2k+1)이므로 곡선을 iter 번호로 겹쳐 보지 않는다.
+   (i) 같은 배치끼리 비교: B-node0 iter k loss ↔ A iter 2k loss. 초반(k ≤ 15, outer sync 전)은 |A − A′| 포락선 안, 이후는 B ≤ A (B 가 같은 배치를 볼 때 2× 데이터를 학습한 상태) (ii) iter 150(노드당, = 전역 300 iters 상당) 에서 B 의 두 노드 평균 loss ≤ A iter 150 (iii) outer sync 체크섬 일치·NaN 0·저장 성공 (iv) 벽시계 노드당 iter 시간이 A 의 1.1× 이내. 통과 시 B 를 그대로 본 런으로 재개(같은 명령 재실행 = 재개). 실패 시 A 의 iter-150 ckpt 에서 단일 노드로 계속.
 3. **ckpt 마다(100 iters 상당)**: `eval_sft/probe_ckpt.sh` — MG→HF 변환(evaluate.sh 게이트: forward_sanity·eos 정합) → vLLM 단일 서버 → `identity_probe.py`(제작자 ≥95%·누출 0) + 유령 호출 재생(`results/reasoning_probe/bestcase_replay.py`, tools25 조건 유령률 ≤1/33).
 4. **300 iters 마다** T1(`eval_ckpt.sh … t1`: MMLU-Pro·GPQA-D·IFEval·AIME·HMMT). 두 노드가 모두 학습 중이면 GPU 가 없으므로 **사후 일괄**(런 종료 후 ckpt 순회) — 단일 노드 런이면 sub1 에서 병행.
 5. 조기중단 가드: valid loss 상승 전환 시 직전 ckpt 채택(phase-1 규칙 유지).
@@ -73,4 +75,5 @@ LR 은 phase-1 과 동일(2.5e-5 cosine → 1.5e-6, Ultra 비율 이식). DiLoCo
 ## 6. 실행 기록
 - 09-13 02:27 main1 2-iter 스모크 PASS: iter1 loss 1.069033 (515 s) → iter2 1.038569 (324.7 s, 267 TFLOP/s/GPU). 첫 시도(02:03)는 bins<100 valid 0-doc 정지(§1).
 - 09-13 11:44(sub1 시계) sub1 jit595 2-iter 스모크 PASS: loss **비트 동일**(1.069033 → 1.038569), 321.7 s/iter, max alloc 55.3 GB, munmap 0 — 캐시 462 파일 공유.
-- 09-13 02:29 A 기동 `outputs/alpha_baseline_48L_sft_128k_final_20260913_022854`(wandb alpha-posttraining 88yjmimx), iter1 loss 1.069033(스모크와 동일). 체인 `scripts/sft_final_chain.sh`(outputs/sft_final_chain.log): iter 100 → sub1 probe, A 종료 → B 자동 기동.
+- 09-13 02:29 A 기동 `outputs/alpha_baseline_48L_sft_128k_final_20260913_022854`(wandb alpha-posttraining 88yjmimx), iter1 loss 1.069033(스모크와 동일). 체인 `scripts/sft_final_chain.sh`(outputs/sft_final_chain.log): iter 100 + sub1 유휴 → sub1 probe, A 종료 → B 자동 기동.
+- 09-13 04:00 **A′** sub1 기동(`outputs/run_sft_final_Aprime_sub1.log`, `--exit-interval 100`, ≈9h). B 기동 시각(≈16:00) 불변.
