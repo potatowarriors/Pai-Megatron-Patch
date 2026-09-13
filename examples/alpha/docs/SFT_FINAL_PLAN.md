@@ -65,6 +65,12 @@ LR 은 phase-1 과 동일(2.5e-5 cosine → 1.5e-6, Ultra 비율 이식). DiLoCo
 4. **300 iters 마다** T1(`eval_ckpt.sh … t1`: MMLU-Pro·GPQA-D·IFEval·AIME·HMMT). 두 노드가 모두 학습 중이면 GPU 가 없으므로 **사후 일괄**(런 종료 후 ckpt 순회) — 단일 노드 런이면 sub1 에서 병행.
 5. 조기중단 가드: valid loss 상승 전환 시 직전 ckpt 채택(phase-1 규칙 유지).
 
-## 5. 열린 사용자 결정
-- When2Call epoch: 기본 6.4ep(미호출:호출 ≈1:1 행 기준). 엄격 2:1 은 ≈13ep(과잉 거절 편향 위험) — 게이트 결과로 판정.
-- DiLoCo A/B 실패 시 단일 노드 10.7일 진행 여부.
+## 5. 사용자 결정 (2026-09-13 02:50 확정)
+- When2Call **6.4ep 기본안**(미호출:호출 ≈1:1 행 기준) — 엄격 2:1(≈13ep) 대신 유령 호출 게이트(≤1/33)로 판정.
+- Ultra 비중 **27/27 적용 확인**(파일 원본 합 105.8 기준; 앞선 25/25 는 113.8 오류에서 나온 수치).
+- 열린 것: DiLoCo A/B 실패 시 단일 노드 10.7일 진행 여부.
+
+## 6. 실행 기록
+- 09-13 02:27 main1 2-iter 스모크 PASS: iter1 loss 1.069033 (515 s) → iter2 1.038569 (324.7 s, 267 TFLOP/s/GPU). 첫 시도(02:03)는 bins<100 valid 0-doc 정지(§1).
+- 09-13 11:44(sub1 시계) sub1 jit595 2-iter 스모크 PASS: loss **비트 동일**(1.069033 → 1.038569), 321.7 s/iter, max alloc 55.3 GB, munmap 0 — 캐시 462 파일 공유.
+- 09-13 02:29 A 기동 `outputs/alpha_baseline_48L_sft_128k_final_20260913_022854`(wandb alpha-posttraining 88yjmimx), iter1 loss 1.069033(스모크와 동일). 체인 `scripts/sft_final_chain.sh`(outputs/sft_final_chain.log): iter 100 → sub1 probe, A 종료 → B 자동 기동.
