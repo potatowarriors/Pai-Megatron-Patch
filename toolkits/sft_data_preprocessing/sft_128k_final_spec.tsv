@@ -1,10 +1,10 @@
 # 최종 단일 SFT 블렌드 스펙 (2026-09-13, 사용자 결정: phase-1/2 폐기 → Nemotron 3 Ultra 공개 블렌드 비율 단일 SFT)
 # 열: member  category  base_ep  fixed(1=에폭 고정·카테고리 배분에서 제외, 0=카테고리 목표에 맞춰 base_ep 를 공통 배율로 조정)
+# bins<100 멤버는 valid 0-doc 무한대기(rules/sft-data.md) → usab_v1 = think+nothink 병합(307 bins), *_x2 = 행 2벌(base_ep 는 고유 데이터 에폭의 1/2): kotool_v1_x2 1 ≡ 2ep, when2call_v1_x2 3 ≡ 6ep (convert_sft_128k_final_small.sh)
 # 카테고리 목표(토큰 비중)는 gen_sft_128k_final_blend.py 의 CATEGORY_TARGET — Ultra data_blend_raw.json(합 105.8) 정규화, 장문맥 1.89% 제외, identity 0.5% 추가.
 # chat / IF / 구조화 (Ultra chat_if 14.3 + structured_outputs 14.3)
 ifchat_v1_structured	chat	8	1
-usab_v1_think	chat	4	1
-usab_v1_nothink	chat	4	1
+usab_v1	chat	4	1
 ifchat_v1_chat_if	chat	1	0
 chat_v3_chat	chat	1	0
 chat_v3_if_fanout_me	chat	1	0
@@ -54,8 +54,8 @@ ntc_v1_syn_easy	agentic	0.14	0
 ntc_v1_syn_medium	agentic	0.14	0
 ntc_v1_syn_mixed	agentic	0.14	0
 agentic_v2_tc	agentic	0.14	0
-kotool_v1	agentic	2	0
-when2call_v1	agentic	6	0
+kotool_v1_x2	agentic	1	0
+when2call_v1_x2	agentic	3	0
 agentic_v2_ia	agentic	0.35	0
 agentic_v2_search	agentic	1.0	0
 search_ko_v1	agentic	0.5	0
