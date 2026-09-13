@@ -1,0 +1,115 @@
+# SFT 최종 단일 런 — DiLoCo 2노드 변형 (main1+sub1). 단일 노드 프리셋 sft_128k_final.yaml 과 LR·모델·병렬화 동일, 차이는 아래 3가지뿐.
+#
+#   NODE1_ENV=LD_LIBRARY_PATH=/home/work/vidsearch/tools/cuda_compat13/jit595 DILOCO_DATA_SHARD=1 DILOCO_SHARD_BLOCK=160 DILOCO_H=30 DILOCO_TAU=2 \
+#     bash launch_diloco.sh sft_final baseline_48L sft_128k_final_diloco sft_128k_final_blend
+#   ① train-samples 는 노드당(228,960 = 1,431 iters): DILOCO_DATA_SHARD=1 이 데이터셋을 world× 로 짓고 노드가 서로소 절반을 먹으므로 두 노드 합 = 457,920 = 블렌드 예산 60B.
+#      warmup·decay 도 노드당 samples 기준(스케줄러는 노드별 consumed 로 돈다).
+#   ② 시작 ckpt 는 load: 가 아니라 pretrained-checkpoint: — 런처가 --load <노드 ckpt dir> 를 덧붙이고, 그 dir 이 비어 있으면 Megatron 이
+#      pretrained-checkpoint 로 finetune(iter 0·optimizer 미로드)한다. finetune:/no-load-optim: 을 두면 크래시 재개 때도 iter 0 으로 리셋되므로 두지 않는다.
+#   ③ save/eval 50 = 노드당 50 iters = 전역 100 iters 상당(단일 노드 프리셋의 100 과 같은 토큰 간격).
+#
+# 데이터: configs/data/sft_128k_final_blend.yaml — Nemotron 3 Ultra 공개 SFT 블렌드(data_blend_raw.json) 카테고리 비중을
+#   토큰 기준으로 적용(chat/IF/구조화 27.4 · 코드 27.5 · 수학 16.1 · 과학 12.3 · 다국어 7.1 · 에이전틱 3.8 · 금융 2.9 · 저노력 1.9 ·
+#   safety 0.5 · identity 0.5%), 58 멤버, 트리 sft_packed_128k_final_pad16. 생성기 toolkits/sft_data_preprocessing/gen_sft_128k_final_blend.py.
+# 예산: 60.02B bin-tokens = 457,920 samples = 2,862 iters @ GBS 160 (Ultra 1단계 ≈60B 미러) ≈ 10.7일 (실측 324 s/iter, 단일 노드)
+# LR: sft_128k_full.yaml 과 동일(Ultra 비율 이식 2.5e-5 → 1.5e-6 cosine, warmup 4.7% = 134 iters).
+# 저장/평가 100 iters(2.1B tok, ≈9h) — identity 프로브·유령 호출 게이트 매 ckpt, T1 300 마다 (설계 docs/SFT_FINAL_PLAN.md).
+# 시작점: LC-B 최종 ckpt iter 320. sft_128k_final.yaml 전체 복제 후 diff 로 만들었다(09-09 교훈: 차이 키만 담은 프리셋 금지).
+
+train-mode: finetune
+
+# ── 예산 / LR ─────────────────────────────────────────────────────────────
+train-samples: 228960             # 노드당 1,431 iters @ GBS 160 — 2노드 합 2,862 iters = 60.02B (sft_128k_final_blend.yaml)
+lr-warmup-samples: 10720          # 노드당 67 iters (4.7%)
+lr-decay-samples: 228960
+lr: 2.5e-5
+min-lr: 1.5e-6
+lr-decay-style: cosine
+
+# ── 병렬화 (128K = CP8 강제; offload 로 GO — MUON_OFFLOAD_BACKPORT S5) ────
+tensor-model-parallel-size: 1
+pipeline-model-parallel-size: 1
+expert-model-parallel-size: 8
+expert-tensor-parallel-size: 1
+context-parallel-size: 8
+
+chunked-optimizer-state-offload: true
+optimizer-state-offload-chunk-size-mb: 256
+
+# ── 배치 / 시퀀스 (THD는 MBS 1 필수 — helper assert) ──────────────────────
+seq-length: 131072
+micro-batch-size: 1
+# GBS 160 = 20.97M tok/iter (사용자, 2026-08-28: Ultra SFT 18.9M 스케일).
+# 실측(2-iter 스모크): 329.7s/iter = 63.6k tok/s, 263 TFLOP/s — GBS 96(62.9k) 대비
+# +1% 로 처리량은 사실상 동일(iter 고정비 ~6s). 근거는 최적화 설계: Ultra 배치
+# 동일 스케일·스텝 2,448(Ultra 3,200 동급)·LR 비율 이식 무보정. 메모리 불변(MBS 1).
+global-batch-size: 160
+
+# ── THD 문서 격리 플래그셋 (SFT 경로: 음수 마커 기반 리셋, EOD 무관) ──────
+reset-position-ids: true
+no-create-attention-mask-in-dataloader: true
+reset-attention-mask: false
+eod-mask-loss: false
+
+# ── 리컴퓨트 ──────────────────────────────────────────────────────────────
+recompute-granularity: selective
+recompute-modules: "layernorm moe"
+
+# ── MoE 라우팅 (DSV3-strict, 전 스테이지 동일) ────────────────────────────
+moe-router-load-balancing-type: seq_aux_loss
+moe-router-score-function: sigmoid
+moe-router-enable-expert-bias: true
+moe-router-bias-update-rate: 0.001
+moe-token-dispatcher-type: alltoall
+
+# ── Optimizer (전 스테이지 연속성: Muon 유지) ─────────────────────────────
+optimizer: dist_muon
+weight-decay: 0.1
+adam-beta1: 0.9
+adam-beta2: 0.95
+muon-momentum: 0.95
+muon-use-nesterov: true
+muon-num-ns-steps: 5
+muon-scale-mode: spectral
+muon-fp32-matmul-prec: medium
+muon-tp-mode: blockwise
+muon-extra-scale-factor: 0.2
+init-method-std: 0.008
+
+clip-grad: 8.0                    # ×cp 산식 (lc_a.yaml 실측), CP8
+
+# ── LayerNorm WD ──────────────────────────────────────────────────────────
+no-weight-decay-cond-type: apply_wd_to_qk_layernorm
+
+# ── Precision ─────────────────────────────────────────────────────────────
+bf16: true
+
+# ── 체크포인트 / 평가 (2,862 iters 규모) ──────────────────────────────────
+save-interval: 50                 # 노드당 50 iters = 전역 100 iters 상당(2.1B tok) — 프로브·게이트 체인 단위
+# optimizer state 저장 기본 (63c466f) — 무봉합 재개
+ckpt-format: torch_dist
+eval-iters: 4
+eval-interval: 50
+# 58 멤버 valid 분할의 Σceil 부풀림 대비 버퍼 (KNOWN_ISSUES 09-09 IndexError)
+mid-level-dataset-surplus: 0.05
+
+# ── 로깅 / 런타임 ─────────────────────────────────────────────────────────
+log-interval: 1
+log-timers-to-tensorboard: true
+log-memory-to-tensorboard: true
+log-validation-ppl-to-tensorboard: true
+log-throughput: true
+tensorboard-queue-size: 1
+# 26종 128k 콜드 캐시 빌드 실측 25분 (64k 는 80분+) — 콜드 재빌드 대비 여유
+distributed-timeout-minutes: 180
+manual-gc: true
+manual-gc-interval: 5
+overlap-grad-reduce: true
+attention-backend: auto
+cross-entropy-loss-fusion: true
+cross-entropy-fusion-impl: te
+wandb-project: alpha-posttraining
+
+# ── 시작점 (DiLoCo: 런처가 --load <node dir> 를 덧붙임 → 비어 있으면 pretrained-checkpoint 로 finetune, 있으면 그대로 재개) ──
+# LC-B 최종 ckpt iter 320 (STATUS.md 정본). finetune:/no-load-optim: 은 두지 않는다(재개 리셋 방지, 헤더 ②).
+pretrained-checkpoint: /home/work/vidsearch/repos/project_s/Pai-Megatron-Patch/examples/alpha/outputs/alpha_baseline_48L_lc_b_resume_20260826_223836/checkpoints

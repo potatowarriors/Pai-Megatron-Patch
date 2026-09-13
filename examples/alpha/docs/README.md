@@ -48,7 +48,8 @@
 | [INTERLEAVED_THINKING.md](INTERLEAVED_THINKING.md) | 2026-08-24 | think-히스토리 규약 정비 (DSV4 분기·IF fan-out·keepthink) + 새 SFT 셋 규칙 9건 (8 = effort 렌더 플래그, 9 = tool_response 렌더 육안) |
 | [SFT_BENCHMARKS.md](SFT_BENCHMARKS.md) | 2026-08-29~ | **SFT 벤치 스위트 정본** — 운영 절차(§2.5)·구성요소(§2.6)·프론티어 규약(§3.4)·태스크 정의(§3.6·§3.9)·측정 결과(§3.8)·게이트 G1~G3·A1~A4(§7) |
 | [EVAL_DOCKER_NODE.md](EVAL_DOCKER_NODE.md) | 2026-08-29 | 에이전틱 벤치(SWE·Terminal) 실행용 외부 docker 호스트 gpu06 DinD — 접속·복구·재구축 runbook |
-| [SFT_PHASE2_PLAN.md](SFT_PHASE2_PLAN.md) | 2026-09-01~ | **SFT phase-2 계획** — phase-1 블렌드 결함 3건(opencode repr·identity 반복·chat 복원) 수정 스펙, 시작점·예산 옵션 비교, 게이트 G-P0~P7, 열린 결정 |
+| [SFT_FINAL_PLAN.md](SFT_FINAL_PLAN.md) | 2026-09-13~ | **SFT 최종 단일 런 계획(정본)** — phase-1/2/3 폐기, Ultra 공개 블렌드 비율(토큰 기준) 60B 단일 SFT, 신규 멤버(IF-Chat-v1·스크럽 Chat-v2·When2Call), 프리셋 2종, DiLoCo 2노드 A/B 프로토콜, 게이트 체인 |
+| [SFT_PHASE2_PLAN.md](SFT_PHASE2_PLAN.md) | 2026-09-01~09-13 ⛔ 폐기 | **SFT phase-2 계획** — phase-1 블렌드 결함 3건(opencode repr·identity 반복·chat 복원) 수정 스펙, 시작점·예산 옵션 비교, 게이트 G-P0~P7, 열린 결정 |
 
 ## study/ (실측·규명·스터디)
 

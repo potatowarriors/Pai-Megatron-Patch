@@ -27,6 +27,8 @@
 #                            block only at an iteration boundary with constant
 #                            GBS == block (asserted). See study/mirror_loss_aliasing.md
 #   NODE1_SEED=4321          node1 data-shuffle seed (weights are broadcast from node0)
+#   NODE1_ENV                extra env for node1 only (e.g. LD_LIBRARY_PATH=<jit595 dir> —
+#                            sub1 needs the 595 JIT link dir in front, KNOWN_ISSUES 09-04/09-09)
 #   NODE0_ARGS / NODE1_ARGS  per-node extra Megatron args; override the derived
 #                            --save/--load only for a non-standard resume
 #   EXTRA_ENV                extra "K=V K=V" passed to both nodes
@@ -77,7 +79,7 @@ mkdir -p "$CKPT0" "$CKPT1"
 echo "[launch_diloco] ckpt root=$CKPT_ROOT (stable node0/node1 dirs — re-run this command to resume)"
 
 ssh -o StrictHostKeyChecking=no sub1 \
-  "cd $ALPHA && nohup env $ENVV DILOCO_RANK=1 bash train.sh $MODEL $TRAIN $DATA $* ${NODE1_SEED_ARG} --save $CKPT1 --load $CKPT1 ${NODE1_ARGS:-} > \$HOME/run_diloco_${TAG}_node1.log 2>&1 < /dev/null & echo node1_pid=\$!"
+  "cd $ALPHA && nohup env $ENVV ${NODE1_ENV:-} DILOCO_RANK=1 bash train.sh $MODEL $TRAIN $DATA $* ${NODE1_SEED_ARG} --save $CKPT1 --load $CKPT1 ${NODE1_ARGS:-} > \$HOME/run_diloco_${TAG}_node1.log 2>&1 < /dev/null & echo node1_pid=\$!"
 
 cd "$ALPHA"
 env $ENVV DILOCO_RANK=0 bash train.sh "$MODEL" "$TRAIN" "$DATA" "$@" --save "$CKPT0" --load "$CKPT0" ${NODE0_ARGS:-} \

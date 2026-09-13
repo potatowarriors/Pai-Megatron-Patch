@@ -1,0 +1,71 @@
+# 최종 단일 SFT 블렌드 스펙 (2026-09-13, 사용자 결정: phase-1/2 폐기 → Nemotron 3 Ultra 공개 블렌드 비율 단일 SFT)
+# 열: member  category  base_ep  fixed(1=에폭 고정·카테고리 배분에서 제외, 0=카테고리 목표에 맞춰 base_ep 를 공통 배율로 조정)
+# 카테고리 목표(토큰 비중)는 gen_sft_128k_final_blend.py 의 CATEGORY_TARGET — Ultra data_blend_raw.json(합 105.8) 정규화, 장문맥 1.89% 제외, identity 0.5% 추가.
+# chat / IF / 구조화 (Ultra chat_if 14.3 + structured_outputs 14.3)
+ifchat_v1_structured	chat	8	1
+usab_v1_think	chat	4	1
+usab_v1_nothink	chat	4	1
+ifchat_v1_chat_if	chat	1	0
+chat_v3_chat	chat	1	0
+chat_v3_if_fanout_me	chat	1	0
+chat_v2_on_scrub	chat	1	0
+chat_v2_off_scrub	chat	1	0
+kochat_v3_think	chat	1	0
+kochat_v3_nothink	chat	1	0
+# 코드 (경쟁 프로그래밍 20.7 + infinibyte 2.0 → cp_v2 · SWE 3.0 → swe_v3_tools · agentic-programming 2.0 → opencode_tools · CUDA+SQL 1.0 → cuda_v1)
+cp_v2	code	0.45	0
+swe_v3_tools_keepthink	code	0.20	0
+opencode_tools	code	0.155	0
+cuda_v1	code	4	1
+# 수학 (math 9.9 + math-w-tools 4.9 → math_v4·proofs_v2 · lean 2.0 → lean)
+math_v4	math	0.86	0
+math_proofs_v2	math	0.45	0
+math_proofs_v1_lean	math	0.10	0
+# 과학
+science_v2	science	0.40	0
+science_v1	science	1.0	0
+# 다국어 (ml_ultra 9종 1.0 · ml_super 12종 0.04)
+ml_ultra-v3_code_ja_translated_final	multilingual	1.0	0
+ml_ultra-v3_code_ko_translated_final	multilingual	1.0	0
+ml_ultra-v3_code_pt_translated_final	multilingual	1.0	0
+ml_ultra-v3_math_ja_translated_final	multilingual	1.0	0
+ml_ultra-v3_math_ko_translated_final	multilingual	1.0	0
+ml_ultra-v3_math_pt_translated_final	multilingual	1.0	0
+ml_ultra-v3_stem_ja_translated_postedit_final	multilingual	1.0	0
+ml_ultra-v3_stem_ko_translated_postedit_final	multilingual	1.0	0
+ml_ultra-v3_stem_pt_translated_postedit_final	multilingual	1.0	0
+ml_super-v3_code_de_translated_final	multilingual	0.04	0
+ml_super-v3_code_es_translated_final	multilingual	0.04	0
+ml_super-v3_code_fr_translated_final	multilingual	0.04	0
+ml_super-v3_code_it_translated_final	multilingual	0.04	0
+ml_super-v3_code_ja_translated_final	multilingual	0.04	0
+ml_super-v3_code_zh_translated_final	multilingual	0.04	0
+ml_super-v3_math_de_translated_final	multilingual	0.04	0
+ml_super-v3_math_es_translated_final	multilingual	0.04	0
+ml_super-v3_math_fr_translated_final	multilingual	0.04	0
+ml_super-v3_math_it_translated_final	multilingual	0.04	0
+ml_super-v3_math_ja_translated_final	multilingual	0.04	0
+ml_super-v3_math_zh_translated_final	multilingual	0.04	0
+# 에이전틱 (terminal 1.5 → ntc_v1 · tool-calling 1.0 → agentic_v2_tc + kotool + when2call · interactive 1.0 → agentic_v2_ia · search 0.5 → agentic_v2_search + search_ko + research_ko)
+ntc_v1_code	agentic	0.14	0
+ntc_v1_math	agentic	0.14	0
+ntc_v1_swe	agentic	0.14	0
+ntc_v1_syn_easy	agentic	0.14	0
+ntc_v1_syn_medium	agentic	0.14	0
+ntc_v1_syn_mixed	agentic	0.14	0
+agentic_v2_tc	agentic	0.14	0
+kotool_v1	agentic	2	0
+when2call_v1	agentic	6	0
+agentic_v2_ia	agentic	0.35	0
+agentic_v2_search	agentic	1.0	0
+search_ko_v1	agentic	0.5	0
+research_ko_v1	agentic	0.5	0
+# 금융
+finance_v1	finance	0.165	0
+# 저노력 reasoning (Ultra low-effort 대응: 사고 예산 절단 셋)
+budget_trunc_v1_if	low_effort	2.5	0
+budget_trunc_v1_math	low_effort	2.5	0
+# safety
+safety_v2	safety	2.4	0
+# identity (alpha 추가)
+identity_v2_fanout	identity	18	0

@@ -23,3 +23,8 @@ GEN_THOROUGH=2 GEN_TEACHERS=glm53-flash,dsv4-flash JUDGE=other python3 t_generat
 ## 완료 (2026-09-12 08:45 KST)
 1차 480 + 2차 5,655 = 6,135행(자기귀속 오탐 1 제외 → 6,134): call 1,973 · direct 2,403 · clarify 642 · infeasible 1,117 = 호출:미호출 1:2.11. 교사 DSV4 3,041 / GLM 3,094, 사고 중앙값 681자.
 **bins** `sft_packed_128k_terminal_pad16/kotool_v1` 81 bins(실 10.45M·학습 4.10M tok; 도구 선언·결과는 비학습). `verify_sft_bins` PASS 81/81, `render_check` clean(`<tools>` 선언 1~8개·`<tool_response>` JSON).
+
+## When2Call 영어 미호출 셋 편입 (`when2call_v1`, 2026-09-13)
+`nvidia/When2Call` `train/when2call_train_sft.jsonl`(15,000행, cc-by-4.0)은 **전부 미호출** 예시다(실측: 되묻기 7,110 · 불가/한계 안내 7,540 · 기타 350, tool_calls 0건, 도구 0개 행 2,223). 단일턴·reasoning 없음 → no-think 규약(빈 `<think></think>`).
+`convert_when2call.py` 가 BFCL 형 스키마(`"type": "dict"`, `"str, optional"`, `List[int]`)를 JSON Schema 형(object/string/integer/number/boolean/array)으로 정규화해 Agentic-v2·kotool_v1 과 같은 `{"type":"function","function":{…}}` 선언으로 맞춘다. 중복(user+assistant+tools 동일) 124행 제외 → **14,876행** → `sft_packed_128k_final_pad16/when2call_v1` 66 bins(실 8.43M·학습 0.41M tok — 학습 스팬은 짧은 답 1턴뿐, 선언부는 비학습). `verify_sft_bins` PASS, `render_check` 봉투 0·tools 결함 0(`<tools>` 선언 1~8개 확인).
+미호출:호출 비율(행 기준, 최종 블렌드 소비량): 호출 ≈ agentic_v2_tc 0.149ep × 707k ≈ 105k + kotool call 4k / 미호출 = when2call 6.4ep × 14.9k ≈ 95k + kotool 8.7k → **≈1:1**. 2:1 로 올리려면 when2call ≈13ep 가 필요한데 정형 거절문 반복이라 과잉 거절 편향 위험이 있어 6ep 를 기본으로 두고 유령 호출 게이트(≤1/33)로 판정한다(`docs/SFT_FINAL_PLAN.md`).

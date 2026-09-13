@@ -67,3 +67,10 @@ bash train.sh baseline_48L pretrain_auxfree stage1_v5_korean_web
   - LayerNorm WD: `apply_wd_to_qk_layernorm` → `apply_wd_to_all_layernorm`
 - **실행**: `bash train.sh baseline_48L stage2_3 stage2_2`
 
+## SFT (2026-08-28 ~ ) — phase-1/2/3 폐기 → 최종 단일 런
+
+- **phase-1** `alpha_baseline_48L_sft_128k_full_swap_20260901_101523`: LC-B iter 320 시작, `sft_128k_mixed_blend(_swap)` 51.34B, 2,448 iters 완주(2026-09-07). final train 0.678 / valid 0.5734.
+- **phase-2** `alpha_baseline_48L_sft_128k_full_p2_20260907_073414`: phase-1 위 연속학습 `sft_128k_mixed_blend_p2` 602 iters 중 iter 500 도달. 회귀 3건(유령 호출·자기귀속 유입·no-think 히스토리) → `KNOWN_ISSUES` 09-09.
+- **phase-3** 터미널 보정 90 iters 중 iter 30 종료(2026-09-10, 공개 터미널 코퍼스 채택으로 폐기).
+- **⛔ 2026-09-13 사용자 결정**: 세 계보 전부 폐기(ckpt 파일 보존, 삭제는 지시 시). 전 데이터셋을 합쳐 LC-B iter 320 에서 **한 번의 SFT**(60.02B, 2,862 iters, Ultra 공개 블렌드 카테고리 비중) — 설계·게이트·DiLoCo 2노드 프로토콜은 `docs/SFT_FINAL_PLAN.md`.
+
