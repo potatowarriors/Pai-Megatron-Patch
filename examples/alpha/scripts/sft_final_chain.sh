@@ -8,7 +8,7 @@ ALPHA=/home/work/vidsearch/repos/project_s/Pai-Megatron-Patch/examples/alpha; cd
 A_RUN="${1:?A run dir}"; A_LOG="${A_LOG:-$HOME/run_sft_final_A_main1.log}"
 JIT595=/home/work/vidsearch/tools/cuda_compat13/jit595
 log() { echo "[chain $(date '+%F %T')] $*"; }
-latest() { tr -d '[:space:]' < "$A_RUN/checkpoints/latest_checkpointed_iteration.txt" 2>/dev/null || echo 0; }
+latest() { { tr -d '[:space:]' < "$A_RUN/checkpoints/latest_checkpointed_iteration.txt"; } 2>/dev/null || echo 0; }
 gpu_used() { nvidia-smi --query-gpu=memory.used --format=csv,noheader,nounits | awk '{s+=$1} END {print s+0}'; }
 sub1_gpu_used() { ssh -o ConnectTimeout=15 sub1 "nvidia-smi --query-gpu=memory.used --format=csv,noheader,nounits | awk '{s+=\$1} END {print s+0}'" 2>/dev/null || echo 999999; }
 
