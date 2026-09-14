@@ -353,9 +353,10 @@ def test_no_greeting_counts_first_assistant_miss_as_miss():
     post(port, {"messages": [SYS, {"role": "assistant", "content": "unknown turn"}, USER1]})
     s = proxy.snapshot()
     assert s["miss"] == 1 and s["miss_first_assistant"] == 0 and s["greeting"] is False
-    # 프록시가 만든 턴은 첫 assistant 여도 정상 복원
+    # 같은 prefix 로 재전송하면 프록시가 만든 턴은 복원되고, 알 수 없는 첫 턴은 다시 miss 로 센다
     up.queue.append({"content": "u</think>next"})
-    post(port, {"messages": [SYS, USER1, {"role": "assistant", "content": "ok"}, {"role": "user", "content": "?"}]})
-    assert up.requests[-1]["messages"][2]["content"] == "<think>\nt</think>ok"
+    post(port, {"messages": [SYS, {"role": "assistant", "content": "unknown turn"}, USER1,
+                             {"role": "assistant", "content": "ok"}, {"role": "user", "content": "?"}]})
+    assert up.requests[-1]["messages"][3]["content"] == "<think>\nt</think>ok"
     s = proxy.snapshot()
-    assert s["reinlined"] == 1 and s["miss"] == 1
+    assert s["reinlined"] == 1 and s["miss"] == 2 and s["miss_first_assistant"] == 0
