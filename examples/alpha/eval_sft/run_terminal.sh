@@ -32,7 +32,9 @@ OUT="$HERE/results/$RUN_NAME"; mkdir -p "$OUT"
 RID="tb$(echo "$RUN_NAME" | md5sum | cut -c1-8)"
 
 if [ "${SKIP_GATES:-0}" != "1" ]; then
-  python3 "$HERE/check_agentic_gates.py" --base-url "$BASE_URL" --min-disk-gb "${MIN_DISK_GB:-150}" || {
+  # Terminus 는 네이티브 tools 를 안 보낸다 — A5(도구호출 경로) 결함이 적용되지 않으므로 report 로 둔다.
+  python3 "$HERE/check_agentic_gates.py" --base-url "$BASE_URL" --min-disk-gb "${MIN_DISK_GB:-150}" \
+    --tool-path report || {
     echo "[term] ❌ 게이트 실패 — 중단."; exit 1; }
 fi
 

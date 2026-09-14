@@ -118,6 +118,99 @@ def gate_a4(base_url: str) -> tuple[bool, str]:
     return False, f"tool_calls 가 비어 있다. content={raw!r}{hint}"
 
 
+# ---------------------------------------------------------------- A5
+# **think + 도구호출 동시 경로** (2026-09-14, `KNOWN_ISSUES.md` 09-14).
+#
+# vLLM 0.25.1 의 도구 파서(qwen3_xml)는 reasoning 파서 없이 켜면 THINK_END 를 소비하고 마커만 떨어뜨린다.
+# 보존된 SWE 궤적 전수(iter1800 74,833턴 · iter1500 74,003턴)에서 도구호출 턴의 `</think>` 보존이 **0건**
+# 이었고, 챗 템플릿은 마커 없는 이전 턴을 `<think></think>` + 추론문(답변 취급)으로 재렌더했다.
+#
+# 기존 게이트는 이 경로를 보지 않았다. G2 는 도구 없는 T1 fleet 에서만 `</think>` 를 보고, A4 는
+# `enable_thinking: False` 로 도구 파싱만 본다. A5 는 **thinking ON + tools 선언** 으로 실제 호출을 시키고,
+# 그 턴에서 추론이 분리(reasoning 필드)되거나 보존(content 의 `</think>`)되는지 본다.
+#
+# 결함 fleet 의 통과율은 0/74,009, 정상 fleet 의 실패 패턴은 원리상 나오지 않는다(thinking ON 이면
+# 출력이 think 안에서 시작해 `</think>` 로 나와야 하고, reasoning 파서가 그것을 필드로 옮긴다). 두 분포가
+# 완전히 갈리므로 소수 표본으로 충분하다 — 결론 난 관측 2개가 일치하면 멈추고, 갈리면 3개째로 다수결.
+A5_MAX_ATTEMPTS = 8
+A5_CONCLUSIVE = 3
+
+
+def judge_a5(message: dict) -> tuple[str, str]:
+    """도구호출 턴 하나를 판정한다 (순수 함수 — 단위 테스트 대상).
+
+    반환 = (판정, 사유). 판정은 pass · fail · no_tool_call · no_reasoning 중 하나이며,
+    pass·fail 만 결론이고 나머지는 경로를 관측하지 못한 것이다.
+    """
+    tc = message.get("tool_calls") or []
+    content = message.get("content") or ""
+    if not isinstance(content, str):
+        content = json.dumps(content, ensure_ascii=False)
+    reasoning = message.get("reasoning_content") or message.get("reasoning") or ""
+    if not tc:
+        return "no_tool_call", "도구를 부르지 않아 동시 경로를 관측하지 못함"
+    if reasoning.strip():
+        if "</think>" in content:
+            return "pass", f"reasoning 필드 분리({len(reasoning)}자) — 단 content 에 </think> 잔존"
+        return "pass", f"reasoning 필드 분리({len(reasoning)}자), content 에 마커 없음"
+    if "</think>" in content:
+        return "pass", "content 에 </think> 보존 (reasoning 파서 없이 인라인)"
+    if content.strip():
+        return "fail", ("결함 — 도구호출 턴인데 reasoning 필드가 비고 content 에 </think> 가 없다. "
+                        "추론이 답변에 붙어 이력이 <think></think>+추론문으로 재렌더된다")
+    return "no_reasoning", "도구호출만 있고 추론·content 가 모두 비어 판정 불가"
+
+
+def gate_a5(base_url: str) -> tuple[bool, str]:
+    tools = [{
+        "type": "function",
+        "function": {
+            "name": "bash",
+            "description": "Run a bash command.",
+            "parameters": {"type": "object",
+                           "properties": {"command": {"type": "string", "description": "the command"}},
+                           "required": ["command"]},
+        },
+    }]
+    body = {
+        "model": "alpha",
+        "messages": [{"role": "user", "content":
+                      "Find which Python file in the current directory defines a function named main. "
+                      "Think about the right command first, then use the bash tool."}],
+        "temperature": 1.0, "top_p": 0.95, "max_tokens": 4096,
+        "seed": None, "skip_special_tokens": False,
+        "tools": tools, "tool_choice": "auto",
+        # enable_thinking 을 넣지 않는다 — 기본값(ON)이 평가 조건이다. A4 와 다른 점이 이것이다.
+    }
+    verdicts: list[tuple[str, str]] = []
+    seen = {"no_tool_call": 0, "no_reasoning": 0}
+    for _ in range(A5_MAX_ATTEMPTS):
+        ok, res = _post(base_url, body, timeout=600)
+        if not ok:
+            return False, f"요청 실패: {res}"
+        v, why = judge_a5(res["choices"][0]["message"])
+        if v in seen:
+            seen[v] += 1
+            continue
+        verdicts.append((v, why))
+        passes = sum(1 for x, _ in verdicts if x == "pass")
+        fails = len(verdicts) - passes
+        if passes >= 2 or fails >= 2 or len(verdicts) >= A5_CONCLUSIVE:
+            break
+    if not verdicts:
+        # 경로를 한 번도 못 봤다 — 통과로 쓰지 않는다 (검증 규칙: 미실행을 통과처럼 쓰지 않는다).
+        return False, (f"{A5_MAX_ATTEMPTS}회 중 결론 난 도구호출 턴 0 "
+                       f"(무호출 {seen['no_tool_call']} · 무추론 {seen['no_reasoning']}) — 경로 미관측")
+    passes = sum(1 for x, _ in verdicts if x == "pass")
+    fails = len(verdicts) - passes
+    tally = f"결론 {len(verdicts)}건 pass {passes} / fail {fails}"
+    if fails > passes:
+        why = next(w for x, w in verdicts if x == "fail")
+        return False, (f"{tally}. {why}. 수정: 에이전틱 fleet 를 REASONING_PARSER=nemotron_v3 로 띄울 것 "
+                       "(`SFT_BENCHMARKS.md` §3.14)")
+    return True, f"{tally}. {next(w for x, w in verdicts if x == 'pass')}"
+
+
 def _ssh(cmd: str, timeout: int = 40) -> tuple[int, str]:
     p = subprocess.run(
         ["ssh", "-F", SSH_CONFIG, "-o", "BatchMode=yes", "-o", "ConnectTimeout=12", CONTAINER, cmd],
@@ -176,11 +269,14 @@ def gate_a3(min_gb: int) -> tuple[bool, str]:
 
 
 def main() -> int:
-    ap = argparse.ArgumentParser(description="에이전틱 투입 전 게이트 A1~A4")
+    ap = argparse.ArgumentParser(description="에이전틱 투입 전 게이트 A1~A5")
     ap.add_argument("--base-url", required=True)
     ap.add_argument("--min-disk-gb", type=int, default=300)
     ap.add_argument("--skip-container", action="store_true",
                     help="A2·A3(컨테이너 역터널·디스크) 생략 — docker 가 필요 없는 하니스(τ-bench) 용")
+    ap.add_argument("--tool-path", choices=("required", "report"), default="required",
+                    help="A5(think+도구호출 동시 경로) 처리. required = 실패 시 차단(기본). "
+                         "report = 결과만 출력 — 네이티브 tools 를 안 쓰는 하니스(TB-1·TB-2) 용")
     a = ap.parse_args()
 
     results = {}
@@ -206,6 +302,14 @@ def main() -> int:
     ok, msg = gate_a4(a.base_url)
     print(f"   {msg}\n   → {'PASS' if ok else 'FAIL'}\n")
     results["A4"] = ok
+
+    print("── A5: think + 도구호출 동시 경로 " + "─" * 28)
+    ok, msg = gate_a5(a.base_url)
+    if a.tool_path == "required":
+        print(f"   {msg}\n   → {'PASS' if ok else 'FAIL'}\n")
+        results["A5"] = ok
+    else:
+        print(f"   {msg}\n   → {'PASS' if ok else 'FAIL'} (report — 이 하니스는 네이티브 tools 를 쓰지 않아 차단하지 않음)\n")
 
     bad = [k for k, v in results.items() if not v]
     if bad:
