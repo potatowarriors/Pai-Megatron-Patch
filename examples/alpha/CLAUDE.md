@@ -167,7 +167,6 @@ submodule `tests/unit_tests/test_step_batch_size_schedule.py`, `test_muon_optimi
 | 날짜 | 증상 | 원인 → 대응 |
 |---|---|---|
 | 09-14 | 에이전틱 fleet 가 도구호출 턴마다 `</think>` 소실 — SWE·TB 전 계열 | vLLM 0.25.1 qwen3_xml 파서가 reasoning 파서 없이 THINK_END 를 소비(보존 0/74,833턴). 템플릿이 이력을 `<think></think>`+추론문으로 재렌더 → 구조 왜곡. 수정은 reasoning 파서 + 추론 복원 경로(τ³ `tau_proxy.py` 방식) |
-| 09-14 | τ³-bench 프록시 복원 miss 57% — 도구 호출 턴 content 에 think 가 `</think>` 없이 붙어 옴 | vLLM 0.25.1 parser engine 이 tool 파서만 켜면 THINK_END 를 삼킴 → τ fleet 는 `REASONING_PARSER=nemotron_v3` 필수(게이트 T1b). **SWE/TB-2 fleet 도 같은 content** — 조치는 결정 대기. 복원 ON 0/5 vs OFF 3/5 도 결정 대기. `KNOWN_ISSUES` 09-14 |
 | 09-09 | ko_chat 일반 대화 reasoning 이 100자 안팎(영어 셋의 1/10~1/30)·얕음. phase-2 회귀 아님(전 ckpt 동일) | 교사 gemma-4-31B 는 **비-reasoning 모델** → 지시문으로 사고를 지어내 guided JSON 에 채웠다(가짜 reasoning). **reasoning 데이터는 reasoning 모델의 네이티브 사고만 유효** → ko_chat v1/v2 전량 폐기, GLM-5.3-Flash + NVIDIA Chat-v3 레시피 재합성. `KNOWN_ISSUES` 09-09 |
 | 09-09 | (phase-2 회귀) 도구 선언되면 무관 질문도 강제 도구 호출 = 유령 호출·빈 답변. iter1500 은 0/33, p2 iter500 은 8/33 | phase-2 신규 Agentic-v2 가 범용 API 호출률 96%·미호출 예시 3% → "도구 보이면 부른다" 학습. 교정: 미호출 예시 2:1(When2Call) + 한국어 도구 행. **게이트: 도구 25종 주입 재생 유령률 ≤1/33 + BFCL AST 양방향**. `KNOWN_ISSUES` 09-09 |
 | 09-09 | (phase-2 회귀) 영어 정체성 질문에 "developed by Google" 유입 (CJ 22/24→12/24) | phase-2 신규 Chat-v2 assistant 턴 205개가 교사 자기귀속("trained by Google"), 87행이 정체성 질문 답 | 누출 필터를 gemma·gemini → 벤더 전체로 확장, 해당 행 드롭 후 재변환. `KNOWN_ISSUES` 09-09 |

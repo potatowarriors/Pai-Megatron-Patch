@@ -99,7 +99,7 @@ MRCR 도 미착수. 착수 시 §6 작업 큐에 올린다.
 |---|---:|---|---|---|
 | T1 코어 · T3 판정 | 40,960 | off | — | G1·G2·G3 |
 | **에이전틱** (SWE·Terminal) | **106,496** | **on** | **`qwen3_xml`** | A1·A2·A3·A4 |
-| **τ³-bench** (같은 에이전틱 fleet, `tau_proxy` :8110 경유) | 262,144 | **on** | `qwen3_xml` + 프록시 think 분리 | A1·A4 + **T1·T2** |
+| **τ³-bench** (fleet **재기동**: + `REASONING_PARSER=nemotron_v3`, `tau_proxy` :8110 경유) | 262,144 | **on** | `qwen3_xml` + **nemotron_v3** + 프록시 복원 | A1·A4 + **T1·T1b·T2** |
 | T2 롱컨텍스트 (RULER) | 139,264 | off | — | G1·G2·G3 |
 
 잘못된 fleet 로 돌리면 **전량 0점**이 나오고, 그 0점은 모델 실패와 구분되지 않는다.
@@ -651,7 +651,30 @@ tau2 run (sub1, tools/tau2-bench/.venv)
 | 상대역 preflight (실측 09-14) | 등록 4키 · chat OK · 비용 0.0 · **tools 거절**(USER_TOOLS=0) · `extra_body`/`top_p` 수용 |
 | 라이브 fleet 왕복 (도구 없음, 3턴) | think 분리 3/3, 히스토리 복원 reinlined 2 / miss 0. 렌더(`tau_render_check.py`): 도구 시나리오 히스토리 2/2 preserved, 복원 ON 464 vs OFF 323 토큰(차 141 = think). 비도구 시나리오는 템플릿이 자르므로 복원 무효 — 규칙대로 |
 | 템플릿 동일성 | tokenizer_v5 = p2 iter602 hfmodel = phase-1 2448 hfmodel (sha1 동일) → 로컬 렌더 = vLLM 렌더 |
-| **도구 경로 스모크·differential** (`tau_smoke.sh`) | **대기** — TOOLS=1 fleet 필요. sub1 유휴 시 자동 실행(09-14 체인). 결과는 여기 갱신 |
+| **도구 경로 스모크** (`tau_smoke.sh`, airline 2×1, 09-14 16:21) | **10/10 PASS** — 도구 호출 32턴 파싱, think 분리 34/34(reasoning 필드), 히스토리 복원 reinlined 273 / miss 0, `<think>` 누출 0, reward 채점 2/2, 하니스 실패 0. 렌더: 히스토리 12턴 중 11 preserved(첫 턴 = 합성 인사), 복원 ON 8,295 vs OFF 6,396 토큰 |
+| **복원 ON/OFF differential** (airline task 0~4 × 1 trial, 09-14) | 아래 표. **n=5 관측치 — 방향이 예상과 반대**, 첫 본 측정은 양쪽 모두 돌려 n=164 로 확정할 것 |
+
+**vLLM 0.25.1 parser engine 함정 (첫 스모크에서 발견, `KNOWN_ISSUES` 09-14 "에이전틱 fleet 가 도구 호출 턴마다 `</think>` 를 삼켰다")**: TOOLS=1 만 켠 fleet 는 도구 호출 턴의
+content 가 `{think}{답변}` 으로 **`</think>` 마커 없이 붙어** 나온다(qwen3_xml = Qwen3ParserToolAdapter 가 THINK_END 토큰을
+터미널로 소비, reasoning 파서가 없으면 분리하지 않고 마커만 제거). 프록시 텍스트 분리 불가 → 복원 miss 57%, 상대역이
+think 를 읽음. **τ fleet 는 `REASONING_PARSER=nemotron_v3` 필수**(`serve_alpha.sh` env, `run_suite.sh` τ 단계가 재기동, 게이트
+T1b 가 검사). think 는 `reasoning` 필드로 오고 프록시가 그것을 캐시·복원한다. 같은 TOOLS=1 fleet 를 쓰는 **SWE·TB-2 하니스도
+같은 content 를 본다** — 히스토리에 마커 없는 think 텍스트가 답변 자리에 들어간다(템플릿은 `<think></think>` 를 앞에 붙임).
+G2 게이트 전제(`</think>` 관측)는 tool 파서 없는 fleet 에서만 성립한다. 조치는 사용자 결정 대기(측정 조건 변경).
+
+**differential — 복원 ON vs OFF (airline task 0~4, 1 trial, temp 1.0, 같은 fleet·상대역)**
+
+| | sims | reward | 평균 agent 턴 | 종료 사유 | agent prompt 토큰 | 문장+도구호출 혼합 턴 | 프록시 |
+|---|---:|---|---:|---|---:|---:|---|
+| **ON** (규칙 5, 기본) | 5 | **0/5** | 30.4 | too_many_errors 3 · max_steps 1 · user_stop 1 | 2,170,586 | 37/41 | reinlined 5,216 / miss 0 / from_field 147 |
+| **OFF** (`TAU_REATTACH=0`) | 5 | **3/5** | 10.4 | too_many_errors 2 · user_stop 3 | 290,071 | 5/29 | reinlined 284 / miss 0 / from_field 58 |
+
+관찰: 복원 ON 에서는 히스토리가 정확히 `<think>…</think>답변` 으로 재현됨을 확인했는데도(중복·결함 없음, 렌더 preserved),
+모델이 "조회하겠다"고 말만 하고 도구를 부르지 않는 턴을 반복해 100턴(max_steps) 을 채운 sim 이 있다. OFF 는 빈
+`<think></think>` 히스토리에서 오히려 도구를 부르고 3/5 를 푼다. 학습 분포에 충실한 쪽(ON)이 점수가 낮다 → **기본값
+결정은 사용자 몫**(n=5). 도구 오류 유형(스모크 2 sims): 스키마 설명의 **예시값을 실제 ID 로 사용**(`ZFA04Y` 5회,
+`sara_doe_496`), 없는 인자명(`search`·`dest`·`code`), 없는 도구(`list_all_flights`) — 도구 선언 렌더는 중첩 `$defs`
+까지 완전하므로 모델 행동이다.
 
 **실행**: `bash eval_sft/run_tau.sh <RUN_TAG> [N=0] [TRIALS=4] [W=8]` (스위트는 `run_suite.sh` 에이전틱 단계, `TAU_N/TAU_TRIALS/TAU_W`).
 스모크: `bash eval_sft/tau_smoke.sh <HF_CKPT>` (sub1, fleet 자동 기동·종료).
@@ -739,7 +762,9 @@ Google Generative Language API v1beta 엔드포인트
 - [ ] 에이전틱 컨텍스트 초과 대응 — 106,496 로도 일부 초과. 추론 히스토리 누적이 원인
 - [ ] iter600 이후 재측정으로 추이 확보 (수학 2종이 유효로 전환되는 지점 확인)
 - [ ] 오케스트레이터 상시화 — ckpt 감시 → 변환 → `run_suite.sh` → wandb
-- [ ] **τ³-bench 도구 경로 스모크·differential** (`tau_smoke.sh`, TOOLS=1 fleet 필요 — sub1 유휴 시 자동 실행 대기 09-14) → 수치를 §3.13 에 기록 후 `run_suite.sh` 에이전틱 단계로 본 측정
+- [x] τ³-bench 도구 경로 스모크 10/10 · differential (09-14, §3.13)
+- [ ] **τ³ 첫 본 측정** (retail 114 + airline 50 × 4, ON/OFF 양쪽) → 복원 기본값 확정(사용자) → `run_suite.sh` 에이전틱 단계로 정례화
+- [ ] SWE·TB-2 fleet 의 `</think>` 소실(§3.13) 조치 여부 — 사용자 결정
 - [ ] τ³ telecom — 상대역 엔드포인트가 tools 를 받으면(`--enable-auto-tool-choice`) preflight T2 가 자동 포함
 - [ ] 미착수 벤치: LiveCodeBench, MRCR. (T4 표준 11종은 범위 제외 — 사용자 결정 2026-08-30)
 
@@ -777,6 +802,7 @@ Terminal 0/10 이 그 상태였다. 실행: `python3 eval_sft/check_agentic_gate
 | # | 게이트 | 판정 | 실패 시 |
 |---|---|---|---|
 | T1 | `tau_proxy` 기동·fleet 통과 + 복원 hit-rate | `/stats` 200, `/v1/models` 200; 런 후 `miss_rate ≤ 5%`, `think_stripped > 0` | miss 는 하니스가 히스토리를 바꿔 보낸 것, think 0 은 경로 우회/파서 ON 의심 → 셀 무효(`no_answer=1.0`) |
+| T1b | fleet 가 think 를 `reasoning` 필드로 분리하는가 | 응답에 reasoning 필드, content 에 `</think>` 없음 | `REASONING_PARSER=nemotron_v3 TOOLS=1` 로 fleet 재기동 (tool 파서만 켜면 `</think>` 소실, §3.13) |
 | T2 | 상대역 LLM 응답 + tools 수용 여부 | chat 비어있지 않음(필수) · tools 200 이면 `USER_TOOLS=1` | chat 실패 → 중단. tools 거절 → telecom 자동 스킵·사유 기록 |
 | 렌더 | 복원된 요청이 템플릿에서 `<think>\n…</think>` 로 남는가 | `tau_render_check.py last_request.json` 보존 ≥1, 'other' 0 | 프록시 복원 또는 템플릿 경로 의심 |
 

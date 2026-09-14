@@ -51,26 +51,6 @@ CLAUDE.md의 "함정 표"는 이 문서의 한 줄 요약이며, 새 사고는 *
   렌더된다. τ³ 는 `tau_proxy.py` 가 추론을 캐시·복원해 학습 형식(interleaved)을 맞춘다. SWE·TB-2 에도 같은
   복원 경로가 필요하다.
 
-## vLLM 0.25.1 은 tool 파서만 켜면 `</think>` 를 삼킨다 — τ³ 프록시 복원 miss 57%, SWE/TB-2 도 같은 content (2026-09-14 ✅ τ, 🔶 SWE/TB-2 결정 대기)
-
-**증상**: τ³-bench 첫 스모크(airline 2×1)에서 도구 호출 턴의 assistant content 가 `"…booking details.I'll help you cancel…"` 처럼
-think 본문과 답변이 **마커 없이** 붙어 있었다. `tau_proxy` 가 `</think>` 를 못 찾아 think 를 떼지 못했고(복원 miss 57%),
-상대역(user simulator)이 think 를 발화로 읽었다. 도구 없는 turn·T1 fleet(TOOLS=0)에서는 `</think>` 가 살아 있었다.
-
-**원인**: vLLM 0.25.1 의 통합 parser engine(`vllm/parser/engine`). `qwen3_xml` 은 `Qwen3ParserToolAdapter` 이고 엔진은
-THINK_END 토큰을 터미널로 소비한다. reasoning 파서가 등록돼 있지 않으면 reasoning 을 분리하지 않고 **마커만 떨어뜨린 채**
-텍스트를 content 에 남긴다. `skip_special_tokens=false` 와 무관(엔진 쪽 처리). fleet 에 직접 요청해 재현: tools+auto 호출 턴
-`has_</think>=False`, 같은 fleet 의 tools+auto 비호출 턴은 `True`.
-
-**대응**: τ fleet 는 `REASONING_PARSER=nemotron_v3`(serve_chat.sh 에서 qwen3_xml 과 함께 검증된 조합)로 뜬다 — `serve_alpha.sh`
-env, `run_suite.sh` τ 단계 재기동, 게이트 **T1b**(응답에 reasoning 필드·content 에 `</think>` 없음)가 잘못된 fleet 로 돌리는
-것을 막는다. 프록시는 `reasoning` 필드를 think 로 캐시·복원(`think_from_field`). 재스모크 10/10, 복원 miss 0.
-
-**미결(사용자 결정)**: ① 같은 TOOLS=1 fleet 를 쓰는 **SWE-bench·TB-2 하니스도 마커 없는 think 텍스트를 히스토리에 재전송**해 왔다
-(템플릿은 `<think></think>` 를 앞에 붙임 → 답변 자리에 think). G2 게이트 전제는 tool 파서 없는 fleet 에서만 성립. 에이전틱 fleet
-에도 reasoning 파서를 켤지는 측정 조건 변경이라 결정 대기. ② τ differential(airline 5과제): 복원 **ON 0/5 vs OFF 3/5**, 평균 턴
-30 vs 10 — 학습 분포에 충실한 쪽이 낮다. 기본값은 첫 본 측정(양쪽) 후 확정. 상세 `SFT_BENCHMARKS.md` §3.13.
-
 ## ko_chat v1/v2 폐기 — 비-reasoning 교사(gemma-4-31B)의 가짜 reasoning (2026-09-09 ✅ 폐기 결정, GLM-5.3 재합성)
 
 **증상**: 도구가 선언되지 않은 일반 한국어 대화에서 모델 reasoning 이 100자 안팎(중앙값 ~110자)으로 짧고 얕다. 같은
