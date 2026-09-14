@@ -109,7 +109,7 @@ if has agentic; then
     echo "[suite] === τ³-bench ==="
     SKIP_GATES=1 BASE_URL="$BURL" bash "$HERE/run_tau.sh" "$RUN_TAG" "${TAU_N:-0}" "${TAU_TRIALS:-4}" "${TAU_W:-8}" || rc=1
     # 에이전틱은 컨테이너 호스트에 build cache 를 수십 GB 남긴다. 매번 회수한다.
-    # (sweb.eval 태스크 이미지는 남긴다 — 다음 체크포인트에서 재사용)
+    # sweb.eval 인스턴스 이미지도 기본 정리(09-08 표준 정책 — 레이어 공유, KNOWN_ISSUES 09-08). 남기려면 --keep-images.
     bash "$HERE/docker_gc.sh" || echo "[suite] ⚠️ docker gc 실패 (비치명)"
   fi
 fi

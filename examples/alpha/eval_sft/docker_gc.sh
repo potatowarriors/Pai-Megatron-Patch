@@ -11,10 +11,9 @@
 #         같은 repo 인스턴스끼리 공유, 고유는 1개).
 #         **정정(2026-09-08)**: 이 자리에 "지우면 500×4.77GB 를 다시 받아야 하니 디스크보다
 #         비싸다" 고 적어 두었던 것은 과장이었다. 공유 레이어를 감안하지 않은 계산이었고,
-#         그 근거로 500개를 무기한 쌓아 A3 임계를 반복해 밑돌았다.
-#         레이어를 이미지마다 중복 집계한 값, 2026-09-08 `du /var/lib/docker/containerd` 로 확인). SWE-bench Verified 인스턴스별
-#         전용 이미지로 다음 체크포인트에서 그대로 재사용된다. 지우면 500 × 4.77GB 를
-#         Docker Hub 에서 다시 받아야 하고 그 시간이 디스크보다 비싸다.
+#         그 근거로 500개를 무기한 쌓아 A3 임계를 반복해 밑돌았다. `docker images` 합산(509GB)은
+#         레이어를 이미지마다 중복 집계한 값이고 실제 점유는 ≈430GB 였다(2026-09-08
+#         `du /var/lib/docker/containerd`). 정책은 사용자 결정(09-08)대로 **실행 후 정리**다.
 #
 # **누수는 있었다 (2026-09-07 정정).** 위 문단은 docker 객체만 보고 쓴 것이다. 실제로 쌓이는
 # 것은 컨테이너 안 `/opt` 의 **에이전트 산출물**이다 — SWE 예측·궤적, Terminal 세션 기록.
@@ -37,13 +36,21 @@ CONTAINER=alpha-eval
 PURGE_IMAGES=1   # 기본값 = 표준(정리한다). --keep-images 로 끈다.
 DRY=0
 ROTATE_ONLY=0
+# 모르는 인자는 **아무것도 지우기 전에** 거부한다. 2026-09-14 `--help` 를 넘겼더니 무시되고 정리가 그대로 실행돼
+# 빌드 캐시 대부분이 지워졌다(정지 컨테이너 prune 포함, 이미지·볼륨·산출물은 도달 전 중단). 파괴적 스크립트는
+# 오타(`--dryrun` 등)에도 실행되면 안 된다.
+usage() { sed -n '/^# 사용:/,/^# 환경변수:/p' "$0" | sed 's/^# \{0,1\}//'; }
 for a in "$@"; do
-  [ "$a" = "--keep-images" ] && PURGE_IMAGES=0
-  [ "$a" = "--images" ] && PURGE_IMAGES=1   # 구 플래그 (하위호환, 기본이 이미 1)
-  [ "$a" = "--dry-run" ] && DRY=1
-  # 실행 중에는 docker prune 을 건너뛰고 산출물 회전만 한다 — builder prune 이
-  # 진행 중인 이미지 빌드의 캐시를 건드릴 수 있다.
-  [ "$a" = "--rotate-only" ] && ROTATE_ONLY=1
+  case "$a" in
+    --keep-images) PURGE_IMAGES=0 ;;
+    --images)      PURGE_IMAGES=1 ;;   # 구 플래그 (하위호환, 기본이 이미 1)
+    --dry-run)     DRY=1 ;;
+    # 실행 중에는 docker prune 을 건너뛰고 산출물 회전만 한다 — builder prune 이
+    # 진행 중인 이미지 빌드의 캐시를 건드릴 수 있다.
+    --rotate-only) ROTATE_ONLY=1 ;;
+    -h|--help)     usage; exit 0 ;;
+    *) echo "[gc] ❌ 모르는 인자: $a — 아무것도 하지 않고 종료" >&2; usage >&2; exit 2 ;;
+  esac
 done
 KEEP="${GC_KEEP_RUNS:-2}"
 SAFE="${GC_SAFE_MINUTES:-120}"
