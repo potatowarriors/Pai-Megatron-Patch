@@ -19,7 +19,7 @@ canon 은 think 유무·tool-call id·인자 직렬화 공백/키순서에 불�
 
 한계: `stream:true` 는 손대지 않고 통과(tau2 는 스트리밍 안 씀). choices[0] 만 처리(n=1).
 첫 assistant(tau2 의 합성 인사 "Hi! How can I help you today?")는 생성된 적이 없어 캐시에 없다 —
-`miss_first_assistant` 로 따로 센다.
+`miss_first_assistant` 로 따로 센다. 합성 인사가 없는 하니스는 `--no-greeting`(첫 턴 miss 도 miss).
 
 사용: python3 eval_sft/tau_proxy.py --port 8110 --upstream http://127.0.0.1:8100 \
         --stats-file results/<run>/tau_raw/proxy_stats.json --dump-dir results/<run>/tau_raw
@@ -126,9 +126,12 @@ def step(h, m):
 
 class Proxy:
     def __init__(self, upstream, reattach=True, keep_seed=False, max_entries=20000, max_bytes=1 << 30,
-                 stats_file=None, dump_dir=None, flush_every=50, timeout=1800):
+                 stats_file=None, dump_dir=None, flush_every=50, timeout=1800, greeting=True):
         self.upstream = upstream.rstrip("/")
         self.reattach = reattach
+        # greeting=True: 요청의 첫 assistant 가 캐시 miss 면 tau2 합성 인사로 보고 miss_first_assistant 로 센다.
+        # 합성 인사가 없는 하니스(mini-swe-agent 등)는 --no-greeting → 첫 턴 miss 도 miss 로 집계(miss_rate 과소 방지).
+        self.greeting = greeting
         self.keep_seed = keep_seed
         self.max_entries = max_entries
         self.max_bytes = max_bytes
@@ -156,6 +159,7 @@ class Proxy:
             d["cache_entries"] = len(self.cache)
             d["cache_bytes"] = self.cache_bytes
         d["reattach"] = self.reattach
+        d["greeting"] = self.greeting
         d["uptime_s"] = round(time.time() - self.started, 1)
         hit = d["reinlined"]; miss = d["miss"]
         d["miss_rate"] = (miss / (hit + miss)) if (hit + miss) else 0.0
@@ -215,7 +219,7 @@ class Proxy:
                 if not has_think:
                     blk = self.cache_get(h)
                     if blk is None:
-                        self.inc("miss_first_assistant" if not seen_assistant else "miss")
+                        self.inc("miss_first_assistant" if (self.greeting and not seen_assistant) else "miss")
                     else:
                         self.inc("reinlined")
                         if self.reattach:
@@ -374,6 +378,8 @@ def build(argv=None):
     ap.add_argument("--dump-dir", default=None)
     ap.add_argument("--no-reattach", action="store_true", help="히스토리 복원을 끈다(카운트는 유지) — ON/OFF differential 용")
     ap.add_argument("--keep-seed", action="store_true", help="요청의 seed 를 제거하지 않는다")
+    ap.add_argument("--no-greeting", action="store_true",
+                    help="첫 assistant 의 miss 를 miss_first_assistant 가 아니라 miss 로 센다 — 합성 인사가 없는 하니스(mini-swe-agent 등)용")
     ap.add_argument("--max-entries", type=int, default=20000)
     ap.add_argument("--max-bytes", type=int, default=1 << 30)
     ap.add_argument("--flush-every", type=int, default=50)
@@ -381,7 +387,7 @@ def build(argv=None):
     a = ap.parse_args(argv)
     proxy = Proxy(a.upstream, reattach=not a.no_reattach, keep_seed=a.keep_seed, max_entries=a.max_entries,
                   max_bytes=a.max_bytes, stats_file=a.stats_file, dump_dir=a.dump_dir,
-                  flush_every=a.flush_every, timeout=a.timeout)
+                  flush_every=a.flush_every, timeout=a.timeout, greeting=not a.no_greeting)
     srv = Threaded((a.host, a.port), make_handler(proxy))
     return proxy, srv, a
 

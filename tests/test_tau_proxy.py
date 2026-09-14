@@ -342,3 +342,20 @@ def test_double_close_splits_at_last_marker(stack):
     up.queue.append({"content": "d</think>e"})
     post(port, {"messages": [SYS, GREET, USER1, {"role": "assistant", "content": "c"}, {"role": "user", "content": "?"}]})
     assert up.requests[-1]["messages"][3]["content"] == "<think>\na</think>b</think>c"   # 원문 그대로 복원
+
+
+def test_no_greeting_counts_first_assistant_miss_as_miss():
+    """합성 인사가 없는 하니스(--no-greeting): 첫 assistant 의 miss 는 miss 로, hit 은 reinlined 로."""
+    up = FakeUpstream()
+    proxy, port = start_proxy(up.port, greeting=False)
+    # 캐시에 없는 첫 assistant(이 프록시가 생성하지 않은 턴) → miss
+    up.queue.append({"content": "t</think>ok"})
+    post(port, {"messages": [SYS, {"role": "assistant", "content": "unknown turn"}, USER1]})
+    s = proxy.snapshot()
+    assert s["miss"] == 1 and s["miss_first_assistant"] == 0 and s["greeting"] is False
+    # 프록시가 만든 턴은 첫 assistant 여도 정상 복원
+    up.queue.append({"content": "u</think>next"})
+    post(port, {"messages": [SYS, USER1, {"role": "assistant", "content": "ok"}, {"role": "user", "content": "?"}]})
+    assert up.requests[-1]["messages"][2]["content"] == "<think>\nt</think>ok"
+    s = proxy.snapshot()
+    assert s["reinlined"] == 1 and s["miss"] == 1
