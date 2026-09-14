@@ -187,9 +187,11 @@ try:
     px = json.load(open(os.path.join(outd, "terminal_proxy_stats.json")))
 except Exception:  # noqa: BLE001
     pass
+# think_unclosed_stop(b87b258) = </think> 미종결로 답변·도구호출 없이 끝난 응답 — 궤적 쪽 steps_reasoning_only 와 같은 사건을
+# 프록시에서 센다(finish=length 는 think_unclosed 로 따로). 둘이 크게 어긋나면 한쪽 집계가 틀린 것이다.
 PX_KEYS = ("requests", "reinlined", "restored", "miss", "think_stripped", "think_from_field", "think_absent",
-           "think_unclosed", "reasoning_field_inlined", "reasoning_field_dropped", "reattach", "miss_rate",
-           "finish_length", "upstream_errors")
+           "think_unclosed", "think_unclosed_stop", "reasoning_field_inlined", "reasoning_field_dropped", "reattach",
+           "miss_rate", "finish_length", "upstream_errors")
 proxy = {k: px[k] for k in PX_KEYS if k in px}
 invalid = []
 if not px:
@@ -225,7 +227,8 @@ if px:
     print(f"[term2] 프록시 — 요청 {px.get('requests',0)} · 추론(필드 {px.get('think_from_field',0)} / 인라인 "
           f"{px.get('think_stripped',0)} / 없음 {px.get('think_absent',0)}) · 복원 {px.get('restored',0)} "
           f"(필드 인라인 {px.get('reasoning_field_inlined',0)} · 캐시 {px.get('reinlined',0)} / 버림 "
-          f"{px.get('reasoning_field_dropped',0)}) · miss {px.get('miss',0)} ({px.get('miss_rate',0)*100:.1f}%)")
+          f"{px.get('reasoning_field_dropped',0)}) · miss {px.get('miss',0)} ({px.get('miss_rate',0)*100:.1f}%) · "
+          f"미종결 stop {px.get('think_unclosed_stop', '—')} / length {px.get('think_unclosed', 0)}")
 if invalid:
     print("[term2] ❌ 무효: " + " · ".join(invalid))
 if exc: print(f"[term2] 예외 분포: {exc}")
