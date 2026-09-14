@@ -94,3 +94,20 @@ def test_no_reattach_ignores_miss_rate(tmp_path):
     _write_domain(raw, "retail", [_sim("t1", 0, 1.0)], ["t1"], P0, dict(P0, requests=2, reinlined=0, miss=2, think_stripped=2))
     o = tc.combine(str(out), str(raw), 1, ["retail"], {}, "u", {}, {}, False, str(tmp_path), False, xcheck=False)
     assert o["tau_detail"]["invalid_reasons"] == [] and o["tau_detail"]["reattach"] is False
+
+
+def test_restored_fallback_for_pre_a834e48_stats(tmp_path):
+    """restored 키가 없는 과거 통계: restore 는 reinlined+필드 인라인, strip 은 필드 인라인만 (reinlined 합산 금지)."""
+    raw = tmp_path / "raw"
+    old_restore = dict(P0, requests=3, reinlined=5, reasoning_field_inlined=2, think_stripped=3, reattach=True); old_restore.pop("restored")
+    _write_domain(raw, "retail", [_sim("t1", 0, 1.0)], ["t1"], P0, old_restore)
+    d = tc.proxy_delta(str(raw), "retail")
+    assert d["restored"] == 7 and d["restored_derived"] is True
+    old_strip = dict(P0, requests=3, reinlined=66, reasoning_field_inlined=0, think_stripped=3, reattach=False); old_strip.pop("restored")
+    _write_domain(raw, "airline", [_sim("a1", 0, 1.0)], ["a1"], P0, old_strip)
+    d = tc.proxy_delta(str(raw), "airline")
+    assert d["restored"] == 0                      # 정상 strip: 적중 66 이어도 적용 0
+    new_stats = dict(P0, requests=3, reinlined=4, restored=4, think_stripped=3)
+    _write_domain(raw, "mock", [_sim("m1", 0, 1.0)], ["m1"], P0, new_stats)
+    d = tc.proxy_delta(str(raw), "mock")
+    assert d["restored"] == 4 and "restored_derived" not in d

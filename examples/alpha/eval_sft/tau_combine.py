@@ -35,6 +35,14 @@ def proxy_delta(raw: str, d: str) -> dict:
     except Exception:  # noqa: BLE001
         return {}
     dl = {k: int(b.get(k, 0)) - int(a.get(k, 0)) for k in PROXY_KEYS}
+    dl["reasoning_field_inlined"] = int(b.get("reasoning_field_inlined", 0)) - int(a.get("reasoning_field_inlined", 0))
+    if "restored" not in b:
+        # a834e48 이전 통계: restored 키가 없다. 모드별 대체 — restore 는 캐시 적중(reinlined)+필드 인라인,
+        # strip 은 필드 인라인만(strip 의 reinlined 는 적중일 뿐 적용이 아니므로 합산 금지; 77040d3 이전 strip 의
+        # 필드 인라인은 실제 누수라 그대로 restored 로 친다). 동료 세션 run_swe.sh 파서와 같은 규칙.
+        reattach = bool(b.get("reattach", True))
+        dl["restored"] = (dl["reinlined"] if reattach else 0) + dl["reasoning_field_inlined"]
+        dl["restored_derived"] = True
     hm = dl["reinlined"] + dl["miss"]
     dl["miss_rate"] = (dl["miss"] / hm) if hm else 0.0
     return dl
