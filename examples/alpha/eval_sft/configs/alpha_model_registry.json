@@ -1,0 +1,53 @@
+{
+  "_comment": "litellm 모델 레지스트리. litellm 은 미등록 모델의 비용 계산에서 예외를 낸다(KNOWN_ISSUES 2026-08-30). LITELLM_MODEL_REGISTRY_PATH 는 mini-swe-agent 의 기능이고 litellm 자체는 register_model() 이 필요하다 → tau2 venv 의 sitecustomize.py(install_tau2.sh) 가 이 파일을 읽어 등록한다. 키는 요청 모델명(openai/alpha)과 응답 모델명(alpha, google/gemma-4-12B-it — vLLM 이 served name 의 정식 이름을 돌려준다) 둘 다 필요. max_input_tokens 는 fleet 262144 - max_output.",
+  "openai/alpha": {
+    "max_tokens": 32768,
+    "max_input_tokens": 229376,
+    "max_output_tokens": 32768,
+    "input_cost_per_token": 0.0,
+    "output_cost_per_token": 0.0,
+    "litellm_provider": "openai",
+    "mode": "chat",
+    "supports_function_calling": true
+  },
+  "alpha": {
+    "max_tokens": 32768,
+    "max_input_tokens": 229376,
+    "max_output_tokens": 32768,
+    "input_cost_per_token": 0.0,
+    "output_cost_per_token": 0.0,
+    "litellm_provider": "openai",
+    "mode": "chat",
+    "supports_function_calling": true
+  },
+  "openai/gemma-4-12B-it": {
+    "max_tokens": 8192,
+    "max_input_tokens": 253952,
+    "max_output_tokens": 8192,
+    "input_cost_per_token": 0.0,
+    "output_cost_per_token": 0.0,
+    "litellm_provider": "openai",
+    "mode": "chat",
+    "supports_function_calling": false
+  },
+  "google/gemma-4-12B-it": {
+    "max_tokens": 8192,
+    "max_input_tokens": 253952,
+    "max_output_tokens": 8192,
+    "input_cost_per_token": 0.0,
+    "output_cost_per_token": 0.0,
+    "litellm_provider": "openai",
+    "mode": "chat",
+    "supports_function_calling": false
+  },
+  "gemma-4-12B-it": {
+    "max_tokens": 8192,
+    "max_input_tokens": 253952,
+    "max_output_tokens": 8192,
+    "input_cost_per_token": 0.0,
+    "output_cost_per_token": 0.0,
+    "litellm_provider": "openai",
+    "mode": "chat",
+    "supports_function_calling": false
+  }
+}
