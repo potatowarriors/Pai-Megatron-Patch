@@ -87,13 +87,16 @@ if has agentic; then
   # 그 결과 iter300~1800 SWE 는 이력이 <think></think>+추론문으로 재렌더된 조건에서 측정됐다.
   # 게이트 A5 가 이 조건을 확인한다. T1·T3 fleet 는 그대로 파서 없음 — T1 채점(split_think)이
   # content 의 </think> 로 사고 마감률을 재므로 여기와 플래그가 갈린다.
-  # TB-2 도 이 fleet 를 쓴다: 도구를 안 보내므로 결함 경로는 아니지만 content 가 JSON 만 남게 된다
-  # (추론은 필드로). TB-2 는 공식 계열이 아직 없어 끊기는 계열은 없다.
+  # TB-2 도 이 fleet 를 쓴다: 도구를 안 보내도 TOOLS=1 서버에서는 파서 없이 </think> 가 사라진다(무도구 6/6 실측).
+  # SWE·TB-2 는 컨테이너 내 tau_proxy 로 이전 턴 추론을 복원한다(restore 기본, SFT_BENCHMARKS §3.14).
   fleet_up "${AGENTIC_MAX_LEN:-262144}" 1 nemotron_v3 || exit 1
   echo "[suite] 역터널 기동"
   bash /home/work/vidsearch/tools/start_swe_tunnel.sh; sleep 10
-  python3 "$HERE/check_agentic_gates.py" --base-url "$BURL" || { echo "[suite] ❌ A1~A5 실패 — 에이전틱 건너뜀"; rc=1; }
-  if [ "$rc" -eq 0 ] || [ "${FORCE_AGENTIC:-0}" = "1" ]; then
+  # 에이전틱 실행 여부는 **이 게이트 결과만**으로 정한다. 누적 rc 로 판정하면 앞 단계(T1·T3 심판 API 일시 오류 등)
+  # 실패만으로 게이트가 통과해도 에이전틱 전체가 조용히 건너뛰어진다(2026-09-14 발견, 발생 이력 없음).
+  agentic_ok=1
+  python3 "$HERE/check_agentic_gates.py" --base-url "$BURL" || { echo "[suite] ❌ A1~A5 실패 — 에이전틱 건너뜀"; rc=1; agentic_ok=0; }
+  if [ "$agentic_ok" -eq 1 ] || [ "${FORCE_AGENTIC:-0}" = "1" ]; then
     echo "[suite] === SWE-bench ==="
     SKIP_GATES=1 BASE_URL="$BURL" bash "$HERE/run_swe.sh" "$RUN_TAG" "${SWE_N:-0}" "${SWE_W:-12}" || rc=1
     # Terminal 정본은 **TB-2**(Harbor + Terminus-2) — 사용자 결정 2026-09-07.
