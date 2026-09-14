@@ -732,8 +732,8 @@ TB-1 은 KNOWN_ISSUES 09-09 의 "평가 하니스는 전부 thinking ON" 전제�
 
 ### SWE 추론 복원 — 컨테이너 내 tau_proxy
 
-mini-swe-agent → **컨테이너 안 tau_proxy :8110** → :8199 역터널 → sub1 lb_proxy. 터널 불변, TB-2 는 프록시를
-거치지 않는다(도구 미선언 요청은 템플릿이 이력 think 를 어차피 자른다 — 복원 무의미).
+mini-swe-agent → **컨테이너 안 tau_proxy :8110** → :8199 역터널 → sub1 lb_proxy. 터널 불변. TB-2 도 자기 프록시
+(:8111)를 둔다 — 아래 "TB-2 추론 복원".
 
 | `SWE_THINK` | 동작 |
 |---|---|
@@ -769,6 +769,89 @@ tau2 는 필드를 안 보내 드러나지 않았다. integrate-tau3-bench-alpha
 
 복원이 낫다고 가정하지 않는다: τ airline 5과제 ON 0/5 vs OFF 3/5(§3.13). 복원은 매 턴 프롬프트를 추론만큼 키워
 긴 궤적에서 262144 창 초과를 늘릴 수 있다. 77040d3 로 ON/OFF 비교가 성립하므로 정식 측정에서 함께 잰다.
+
+### TB-2 추론 복원 — 컨테이너 내 tau_proxy :8111 (2026-09-14)
+
+**설계 규칙 (사용자 2026-09-14)**: 도구를 쓰는 에이전트 궤적은 **restore**(이전 턴 추론 유지), 도구 없는 일반 대화는
+**strip**(DSV4 방식). 학습 데이터도 이 기준으로 만들었다. 터미널 학습셋 `nvidia/Nemotron-Terminal-Corpus`
+(`ntc_v1_*`)는 `--keep-history-think` 로 구웠다(bins `data.stats.json` `keep_history_think: True`, 디코드 실측
+마지막 user 이전 assistant 턴 56/56 think 보존). 폐기된 alpha-SFT-Terminal 은 해당 없음.
+
+**평가는 strip 으로 돌고 있었다.** terminus-2 는 도구를 선언하지 않고 터미널 출력을 **user 메시지**로 보낸다
+(`lite_llm.py` 299행). 템플릿(28행)은 이를 비도구 시나리오로 보고 마지막 user 이전의 think 를 자른다.
+
+restore 에는 세 가지가 **모두** 필요하다. 하나라도 빠지면 오류 없이 strip 으로 돈다.
+
+| 구성 | 없으면 | 이유 |
+|---|---|---|
+| tau_proxy (:8111) | 하니스가 추론을 못 받는다 | vLLM 0.25.1 은 추론을 **`reasoning`** 키로 준다. harbor(`lite_llm.py` 428행)는 **`reasoning_content`** 만 읽는다. 프록시가 응답에 `reasoning_content` 를 써 넣고, 다음 요청에서 이력 content 에 `<think>\n…</think>` 로 인라인한다 |
+| `--ak interleaved_thinking=true` | 하니스가 추론을 이력에 안 싣는다 | terminus-2 `chat.py` 114행. 이 인자는 그 한 줄에만 쓰인다 |
+| `truncate_history_thinking=false` | 템플릿이 자른다 | `llm_call_kwargs.extra_body.chat_template_kwargs` 로 전달 |
+
+**첫 시도는 조용히 실패했다**: 프록시 없이 아래 두 개만 켰다. upstream 기록 요청에서 kwargs 는 도착했지만
+이력 assistant 2턴 중 `reasoning_content` 0, 재전송 prompt_tokens 차이 0. 인자가 받아들여졌다고 동작한 것은
+아니다 — **upstream 요청 본문과 prompt_tokens 로 확인한다.** (`/tokenize` 는 `reasoning_content` 를 버려 렌더
+검증에 쓸 수 없다.)
+
+**검증 (sub1 phase-1 swap hfmodel_0002448, `fix-git` 1과제 × 모드별 1회, 하니스 → 프록시 → 역터널 → 기록기 → lb_proxy)**
+
+| 항목 | restore | strip |
+|---|---|---|
+| upstream 이력 assistant 의 `<think>` | **매 요청 전부** (425턴 요청까지 0+1+…) | **0** / 263 |
+| upstream `chat_template_kwargs` | `truncate_history_thinking: false` | 없음 |
+| 이력의 `reasoning_content` 필드 잔존 | 0 (프록시가 인라인으로 정규화) | 0 (하니스가 안 실음) |
+| 프록시 `restored` | **90,525** = 0+1+…+425 | **0** (캐시 적중 34,716 은 미적용) |
+| miss · upstream 오류 | 0 · 0 | 0 · 0 |
+| 무효 판정 | 없음 | 없음 |
+
+| 렌더 differential (restore 19턴 요청, prompt_tokens) | 값 |
+|---|---:|
+| 그대로 (인라인 think + truncate=false) | **10,993** |
+| `chat_template_kwargs` 제거 (템플릿 기본) | 7,914 (−3,079) |
+| 인라인 think 제거 | 7,914 (−3,079) |
+
+복원 형식은 `<think>\n{추론}</think>{JSON 답변}` — 템플릿 114행이 학습 행 `reasoning_content` 를 렌더하는 공식과 같다.
+
+kwargs 제거와 think 제거가 **같은 토큰 수**다 — 템플릿 기본값은 이력 추론을 전부 자른다는 뜻이다.
+
+**모델 행동 관찰 — restore 가 `</think>` 미종결 턴을 되먹여 루프를 굳혔다 (n=1, 판정 아님)**
+
+같은 스모크에서 두 모드 모두 시간 초과(900초)로 0점이었지만 궤적이 달랐다.
+
+| 같은 과제·체크포인트 | restore | strip |
+|---|---:|---:|
+| 에이전트 스텝 | 425 | 262 |
+| 명령 추출 | 20 (4.7%) | 80 (30.5%) |
+| **추론만 있고 답변 빈 스텝** (`steps_reasoning_only`) | **385 (91%)** | 38 (15%) |
+| 첫 미종결 턴 → 이후 | 턴 38 → **끝까지 연속** | 스텝 1 → 산발, 매번 회복 |
+
+미종결 턴은 모델이 JSON 을 다 쓰고 `</think>` 를 닫지 않은 턴이다. reasoning 파서가 출력 전체를 추론으로 분류해 답변이
+비고, 하니스는 "No valid JSON found" 로 되받는다. **두 모드 모두에서 나왔다** — restore 가 만든 실패가 아니다.
+restore 에서는 그 턴이 이력에 `<think>{JSON}</think>` + 빈 답변으로 되돌아가고, 모델이 그 모양을 그대로 베꼈다
+(마지막 5턴 think 길이 841자 동일). strip 에서는 같은 턴이 빈 답변으로만 보여 고립됐다.
+
+해석의 한계:
+- 표본이 과제 1개 × 1회다.
+- 스모크 체크포인트(phase-1 swap, 09-01 시작)는 **NTC 를 학습하지 않았다**(설정 스냅샷에 `ntc_v1` 없음).
+- NTC 학습 턴은 깨끗하다: 6개 멤버 표본 7,683턴 전부 `</think>` 종결 + JSON 답변, 미종결·think 안 JSON 0.
+
+NTC 를 학습한 체크포인트에서 `steps_reasoning_only` 가 0 에 가까우면 이 경로는 드러나지 않는다. 러너가 매 실행마다
+이 수치를 기록한다.
+
+| `TB2_THINK` | 동작 |
+|---|---|
+| `restore`(기본) | 위 세 구성 모두 — NTC 학습 조건 |
+| `strip` | 프록시 `--no-reattach`, 나머지 둘 끔 — 비교용 |
+
+프록시 포트를 SWE(:8110)와 나눈 이유: 같은 컨테이너에서 겹쳐 돌면 기동 시 `pkill` 이 상대 프록시를 죽인다.
+업스트림 대기 상한은 `--timeout 7200` — 65K 토큰 생성이 기본 1800초를 넘으면 프록시가 502 로 끊는데, 프록시가
+없던 시절에는 없던 실패다. 스모크용 과제 필터 `TB2_INCLUDE=<glob>`(harbor `-i`, 결과는 부분 표본으로 표시).
+
+**무효 규칙** (`terminal_detail.invalid`, `run_swe.sh` 와 동일 + 하니스 측 확인): 프록시 통계 없음 · 추론 미관측 ·
+restore 인데 다회차에서 `restored == 0` · restore 인데 `miss_rate > 0.05` · strip 인데 `restored > 0` ·
+restore 인데 궤적 `reasoning_content` 가 있는 스텝 0.
+
+과거 TB-2 수치(09-07 스모크 등)는 strip 이다. 복원은 매 턴 프롬프트를 추론만큼 키운다(위 19턴에서 +39%).
 
 ## 3.10 반복 실행 워크플로 (학습 중 체크포인트마다)
 
@@ -855,7 +938,7 @@ Google Generative Language API v1beta 엔드포인트
 - [ ] 오케스트레이터 상시화 — ckpt 감시 → 변환 → `run_suite.sh` → wandb
 - [x] τ³-bench 도구 경로 스모크 10/10 · differential (09-14, §3.13)
 - [ ] **τ³ 첫 본 측정** (retail 114 + airline 50 × 4, ON/OFF 양쪽) → 복원 기본값 확정(사용자) → `run_suite.sh` 에이전틱 단계로 정례화
-- [ ] SWE·TB-2 fleet 의 `</think>` 소실(§3.13) 조치 여부 — 사용자 결정
+- [x] SWE·TB-2 fleet 의 `</think>` 소실 조치 — nemotron_v3 fleet · A5 · SWE/TB-2 추론 복원 (09-14, §3.14)
 - [ ] τ³ telecom — 상대역 엔드포인트가 tools 를 받으면(`--enable-auto-tool-choice`) preflight T2 가 자동 포함
 - [ ] 미착수 벤치: LiveCodeBench, MRCR. (T4 표준 11종은 범위 제외 — 사용자 결정 2026-08-30)
 

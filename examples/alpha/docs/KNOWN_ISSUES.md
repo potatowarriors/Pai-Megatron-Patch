@@ -61,8 +61,22 @@ guided decoding 이 추론을 문법으로 차단했다(iter1500 15,819 에피�
   렌더된다. τ³ 는 `tau_proxy.py` 가 추론을 캐시·복원해 학습 형식(interleaved)을 맞춘다. SWE·TB-2 에도 같은
   복원 경로가 필요하다.
 
+**정정 2 — TB-2 는 복원 대상이다 (같은 날)**. 한때 "도구 미선언 요청은 템플릿이 이력 think 를 어차피 잘라 복원이
+무의미" 로 보고 TB-2 를 프록시 없이 두었다. 설계 규칙(사용자)은 **도구를 쓰는 궤적은 restore** 이고, 터미널 학습셋
+NTC 가 `keep_history_think: True` 로 구워져 있다. 평가만 strip 이었다 — terminus-2 가 터미널 출력을 user 메시지로
+보내 템플릿이 비도구 시나리오로 판정했기 때문이다.
+
+첫 교정(`interleaved_thinking=true` + `truncate_history_thinking=false`)도 **아무것도 바꾸지 못했다**. 인자는 upstream
+까지 도착했지만 vLLM 0.25.1 이 추론을 `reasoning` 키로 주고 harbor 는 `reasoning_content` 만 읽어, 하니스가 추론을
+받지 못했다(이력 assistant 2턴 중 0 · prompt_tokens 차이 0). SWE 가 받았던 것은 경로에 tau_proxy 가 있었기 때문이다.
+TB-2 에도 프록시(:8111)를 두자 매 요청 이력 추론 전부 복원, 19턴 요청 prompt_tokens 7,914 → 10,993.
+교훈: **인자가 받아들여졌다는 것과 동작했다는 것은 다르다** — upstream 요청 본문과 토큰 수로 닫는다.
+같은 스모크에서 모델이 `</think>` 를 닫지 않고 JSON 을 쓴 턴이 restore 이력에 되돌아가 루프로 굳었다(restore 385/425
+스텝 vs strip 38/262, n=1, NTC 미학습 체크포인트) — 관찰·해석 한계는 `SFT_BENCHMARKS.md` §3.14.
+
 **수정 (2026-09-14)**: 에이전틱 fleet 를 `nemotron_v3` 로(30df05b), 게이트 A5 추가(b674997 · TB-2 required),
-SWE 는 컨테이너 내 tau_proxy 로 추론 복원(30df05b). 실측 검증과 운영 규칙은 `SFT_BENCHMARKS.md` §3.14.
+SWE 는 컨테이너 내 tau_proxy 로 추론 복원(30df05b), TB-2 도 같은 방식(:8111, `TB2_THINK`). 실측 검증과 운영 규칙은
+`SFT_BENCHMARKS.md` §3.14.
 
 ## ko_chat v1/v2 폐기 — 비-reasoning 교사(gemma-4-31B)의 가짜 reasoning (2026-09-09 ✅ 폐기 결정, GLM-5.3 재합성)
 

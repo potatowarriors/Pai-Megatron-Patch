@@ -50,8 +50,8 @@ fi
 # 재전송하지 않으므로 tau_proxy 가 캐시했다가 다음 요청 이력에 되돌린다(τ³ 와 같은 방식).
 #
 # 프록시는 **컨테이너 안, 하니스 옆**에 둔다: mini-swe-agent → :8110 프록시 → :8199 역터널 → sub1.
-# 터널을 건드리지 않고, 같은 :8199 를 쓰는 TB-2 는 프록시를 거치지 않는다(도구를 안 보내므로
-# 템플릿이 이력 think 를 어차피 잘라 복원이 무의미 — integrate-tau3-bench-alpha 세션 확인).
+# 터널은 건드리지 않는다. TB-2 도 같은 방식으로 자기 프록시(:8111)를 둔다 — 학습 데이터(NTC)가 restore 라
+# 이력 추론을 되돌려야 하고, harbor 는 vLLM 의 `reasoning` 키를 못 읽는다(run_terminal_tb2.sh 헤더).
 #
 # SWE_THINK: restore(기본) = 이력에 추론 복원(학습 형식) · strip = 분리만, 복원 안 함(--no-reattach).
 # 복원이 낫다고 가정하지 말 것 — τ airline 5과제에서 ON 0/5 vs OFF 3/5 였다(n=5). ON/OFF 를 같이 잰다.
