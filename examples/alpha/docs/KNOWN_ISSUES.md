@@ -4,6 +4,73 @@
 CLAUDE.md의 "함정 표"는 이 문서의 한 줄 요약이며, 새 사고는 **여기에 서사를 쓰고 CLAUDE.md 표에는 한 줄만** 추가한다.
 날짜는 절대 표기. 두 스테이지 이상 지난 항목은 스테이지 경계에서 `archive/`로 이동.
 
+## 에이전틱 fleet 가 도구 호출 턴마다 `</think>` 를 삼켰다 — SWE·Terminal 수치 전 계열 (2026-09-14 🔶)
+
+**계기**: τ³ 온보딩 중 다른 세션이 원인을 찾았다(커밋 `6246524`). vLLM 0.25.1 의 도구 파서(qwen3_xml =
+`Qwen3ParserToolAdapter`)는 THINK_END 를 터미널 토큰으로 소비하는데, reasoning 파서가 없으면 분리하지 않고
+**마커만 떨어뜨린다**. 커밋 메시지에 "같은 TOOLS=1 fleet 를 쓰는 SWE/TB-2 하니스도 같은 content 를 보고 있다
+— 별도 보고" 로 남아 있어, 디스크에 보존된 SWE 궤적으로 영향 범위를 쟀다.
+
+**실측 (GPU 불필요, 보존된 궤적 전수)**
+
+| 실행 | assistant 턴 | 도구호출 + `</think>` 보존 | 도구호출 + 마커 없는 텍스트 | 도구호출 + 빈 content |
+|---|---:|---:|---:|---:|
+| iter1800 | 74,833 | **0** | 74,009 (98.9%) | 824 (1.1%) |
+| iter1500 | 74,003 | **0** | 73,263 (99.0%) | 740 (1.0%) |
+
+- **보존율 0.0%** — 확률적 모델 행동이 아니라 결정론적 서빙 결함이다. 종료 사유(Submitted · LimitsExceeded ·
+  RepeatedFormatError)와 무관하게 전부 0.
+- **서버가 원래 이렇게 돌려줬다**: `extra.response`(vLLM 원응답)에서도 `</think>` 없음, `reasoning_content`·
+  `reasoning` 빈 문자열, `finish_reason=tool_calls`. 에이전트 후처리 아님.
+- 결함이 한 문자열에 보인다: `"…find the coordinates module.Let me explore the astropy package…"` — 추론과
+  답변 사이의 `</think>` 가 사라져 두 문장이 붙었다.
+- 도구호출 없는 턴은 0건(전 턴이 도구호출) — 행동은 `tool_calls` 구조체로 뽑히므로 **명령 추출 자체는 동작했다**.
+
+**영향 — 모델이 보는 이력의 형식이 바뀐다** (챗 템플릿 렌더 대조, hfmodel_0001800):
+
+```
+마커 보존:  <|im_start|>assistant\nLet me look…</think>Let me explore…\n<tool_call>…
+마커 소실:  <|im_start|>assistant\n<think></think>Let me look…Let me explore…\n<tool_call>…
+```
+
+템플릿은 content 에 `</think>` 가 없으면 전체를 답변으로 보고 **빈 `<think></think>` 를 끼워 넣는다**. 토큰 수는
+거의 같다(306 vs 307) — 컨텍스트 팽창이 아니라 **구조 왜곡**이다. 평가 내내 모델은 자기 이전 턴을 전부 "생각
+없이 추론문을 답변으로 말한 턴" 으로 봤다. 09-09 검토의 "phase-2 도구 영역 학습 토큰 43.6%가 `<think></think>`
+타깃" 과 겹쳐, 궤적 중반 무사고 모드로 기울 조건이 학습·평가 양쪽에 있었다.
+
+**게이트가 못 잡은 이유**: G2 는 도구 없는 T1 fleet 에서만 `</think>` 를 보고, A4 는 `enable_thinking: False`
+로 도구 파싱만 본다. **"think + 도구호출이 한 턴에 같이 나오는 경로" 를 검사한 게이트가 없었다.**
+
+**판정**:
+- iter300~1800 의 SWE-bench · Terminal-Bench(TB-1) 수치는 **같은 결함 조건에서 일관되게** 측정됐다 — 계열 내
+  추이 비교는 유효하나, 의도한 평가 조건이 아니며 외부 수치와 비교할 수 없다.
+- 형식 오류로 해석했던 SWE `RepeatedFormatError` 10.2% · TB-1 `parse_error` 10.0% · TB-2 스모크 명령 추출 50% 는
+  모델 형식 미숙이 아니라 이 결함의 기여를 배제할 수 없다. 원인 분리는 수정 후 재측정으로만 된다.
+- **수정은 reasoning 파서 추가만으로 끝나지 않는다.** 파서를 켜면 추론이 `reasoning_content` 로 빠지는데,
+  mini-swe-agent·terminus-2 는 그 필드를 이력에 재전송하지 않는다 → 이전 턴이 다시 `<think></think>답변` 으로
+  렌더된다. τ³ 는 `tau_proxy.py` 가 추론을 캐시·복원해 학습 형식(interleaved)을 맞춘다. SWE·TB-2 에도 같은
+  복원 경로가 필요하다.
+
+## vLLM 0.25.1 은 tool 파서만 켜면 `</think>` 를 삼킨다 — τ³ 프록시 복원 miss 57%, SWE/TB-2 도 같은 content (2026-09-14 ✅ τ, 🔶 SWE/TB-2 결정 대기)
+
+**증상**: τ³-bench 첫 스모크(airline 2×1)에서 도구 호출 턴의 assistant content 가 `"…booking details.I'll help you cancel…"` 처럼
+think 본문과 답변이 **마커 없이** 붙어 있었다. `tau_proxy` 가 `</think>` 를 못 찾아 think 를 떼지 못했고(복원 miss 57%),
+상대역(user simulator)이 think 를 발화로 읽었다. 도구 없는 turn·T1 fleet(TOOLS=0)에서는 `</think>` 가 살아 있었다.
+
+**원인**: vLLM 0.25.1 의 통합 parser engine(`vllm/parser/engine`). `qwen3_xml` 은 `Qwen3ParserToolAdapter` 이고 엔진은
+THINK_END 토큰을 터미널로 소비한다. reasoning 파서가 등록돼 있지 않으면 reasoning 을 분리하지 않고 **마커만 떨어뜨린 채**
+텍스트를 content 에 남긴다. `skip_special_tokens=false` 와 무관(엔진 쪽 처리). fleet 에 직접 요청해 재현: tools+auto 호출 턴
+`has_</think>=False`, 같은 fleet 의 tools+auto 비호출 턴은 `True`.
+
+**대응**: τ fleet 는 `REASONING_PARSER=nemotron_v3`(serve_chat.sh 에서 qwen3_xml 과 함께 검증된 조합)로 뜬다 — `serve_alpha.sh`
+env, `run_suite.sh` τ 단계 재기동, 게이트 **T1b**(응답에 reasoning 필드·content 에 `</think>` 없음)가 잘못된 fleet 로 돌리는
+것을 막는다. 프록시는 `reasoning` 필드를 think 로 캐시·복원(`think_from_field`). 재스모크 10/10, 복원 miss 0.
+
+**미결(사용자 결정)**: ① 같은 TOOLS=1 fleet 를 쓰는 **SWE-bench·TB-2 하니스도 마커 없는 think 텍스트를 히스토리에 재전송**해 왔다
+(템플릿은 `<think></think>` 를 앞에 붙임 → 답변 자리에 think). G2 게이트 전제는 tool 파서 없는 fleet 에서만 성립. 에이전틱 fleet
+에도 reasoning 파서를 켤지는 측정 조건 변경이라 결정 대기. ② τ differential(airline 5과제): 복원 **ON 0/5 vs OFF 3/5**, 평균 턴
+30 vs 10 — 학습 분포에 충실한 쪽이 낮다. 기본값은 첫 본 측정(양쪽) 후 확정. 상세 `SFT_BENCHMARKS.md` §3.13.
+
 ## ko_chat v1/v2 폐기 — 비-reasoning 교사(gemma-4-31B)의 가짜 reasoning (2026-09-09 ✅ 폐기 결정, GLM-5.3 재합성)
 
 **증상**: 도구가 선언되지 않은 일반 한국어 대화에서 모델 reasoning 이 100자 안팎(중앙값 ~110자)으로 짧고 얕다. 같은
