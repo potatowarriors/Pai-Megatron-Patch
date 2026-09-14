@@ -9,7 +9,7 @@
 # |---|---|---|
 # | T1 코어 | 표준 fleet 40960 | G1·G2·G3 |
 # | T3 판정 | 표준 fleet (동일) | G1·G2·G3 |
-# | 에이전틱 | **TOOLS=1** fleet **262144** + 역터널 | A1·A2·A3·A4 |
+# | 에이전틱 | **TOOLS=1** fleet **262144** + 역터널 | A1·A2·A3·A4 (+ τ³: T1 프록시·T2 상대역) |
 # | T2 롱 | **롱 fleet 139264** | G1·G2·G3 |
 #
 # 사용: bash eval_sft/run_suite.sh <HF_CKPT> <RUN_TAG> [STAGES]
@@ -20,6 +20,7 @@
 #   SWE_N      SWE 부분 표본 수 (0=전량, 기본 0)
 #   TERM_N     Terminal 부분 표본 수 (0=전량, 기본 0)
 #   SWE_W      SWE 동시 워커 (기본 12). TERM_W  Terminal 동시 워커 (기본 8).
+#   TAU_N / TAU_TRIALS / TAU_W   τ³-bench 부분 표본(0=전량)·trial 수·동시 시뮬레이션 (기본 0/4/8)
 #              2026-08-31 상향(6/4→12/8): iter300 실측에서 GPU 절반 유휴 + vLLM 대기열 0,
 #              컨테이너 호스트 64 CPU 에 load 1.2. 병목은 연산이 아니라 동시성이었다.
 set -uo pipefail
@@ -94,6 +95,10 @@ if has agentic; then
     TERM_RUNNER="run_terminal_tb2.sh"
     [ "${TERMINAL_HARNESS:-tb2}" = "tb1" ] && TERM_RUNNER="run_terminal.sh"
     SKIP_GATES=1 BASE_URL="$BURL" bash "$HERE/$TERM_RUNNER" "$RUN_TAG" "${TERM_N:-0}" "${TERM_W:-8}" || rc=1
+    # τ³-bench (tau2-bench, docker 불요) — sub1 직접, 같은 TOOLS=1 fleet 를 tau_proxy(:8110) 너머로 쓴다.
+    # 상대역은 외부 gemma 엔드포인트 (run_tau.sh 헤더). τ 단독 실행: bash eval_sft/run_tau.sh <TAG>
+    echo "[suite] === τ³-bench ==="
+    SKIP_GATES=1 BASE_URL="$BURL" bash "$HERE/run_tau.sh" "$RUN_TAG" "${TAU_N:-0}" "${TAU_TRIALS:-4}" "${TAU_W:-8}" || rc=1
     # 에이전틱은 컨테이너 호스트에 build cache 를 수십 GB 남긴다. 매번 회수한다.
     # (sweb.eval 태스크 이미지는 남긴다 — 다음 체크포인트에서 재사용)
     bash "$HERE/docker_gc.sh" || echo "[suite] ⚠️ docker gc 실패 (비치명)"

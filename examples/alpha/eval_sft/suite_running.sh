@@ -29,9 +29,9 @@ BENCH_HOST="${BENCH_HOST:-sub1}"
 read -r -d '' PROBE <<'AWK'
 ps -eo args --no-headers | awk '
   # 셸이 우리 스크립트를 직접 실행 중인가 (argv1 이 파일 경로)
-  $1 ~ /(^|\/)(ba)?sh$/ && $2 ~ /(run_suite|eval_new_ckpt|run_tier1|run_tier2|run_swe|run_terminal|run_convert)\.sh$/ { print; next }
+  $1 ~ /(^|\/)(ba)?sh$/ && $2 ~ /(run_suite|eval_new_ckpt|run_tier1|run_tier2|run_swe|run_terminal|run_terminal_tb2|run_tau|install_tau2|run_convert)\.sh$/ { print; next }
   # 파이썬 러너 · lm_eval (argv0 이 python 일 때만)
-  $1 ~ /(^|\/)python3?$/ && $0 ~ /(run_simpleqa\.py|run_logickor\.py|lm_eval)/ { print; next }
+  $1 ~ /(^|\/)python3?$/ && $0 ~ /(run_simpleqa\.py|run_logickor\.py|lm_eval|bin\/tau2 run)/ { print; next }
 '
 AWK
 

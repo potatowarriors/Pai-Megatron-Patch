@@ -8,6 +8,7 @@ GPUS="${1:-0,1,2,3,4,5,6,7}"
 
 # 1) 프록시 먼저 (새 요청 차단)
 pkill -TERM -f "eval_sft/lb_proxy.py" 2>/dev/null || true
+pkill -TERM -f "eval_sft/tau_proxy.py" 2>/dev/null || true
 # 2) vLLM 서버들에 SIGTERM (setsid 프로세스그룹째) — 정상 종료 유도
 for pid in $(pgrep -f "alpha_serve_venv/bin/vllm"); do
     pgid=$(ps -o pgid= -p "$pid" 2>/dev/null | tr -d ' ')

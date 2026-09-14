@@ -46,6 +46,12 @@ python3 -c "import langdetect, immutabledict, wonderwords; from importlib.metada
 echo "== 3) 검증 =="
 PIP_CONSTRAINT= $VENV/bin/python -c "import torch; assert torch.cuda.is_available(), 'CUDA 미인식(compat 실패?)'; import vllm; import vllm_alpha_plugin; vllm_alpha_plugin.register(); from vllm import ModelRegistry; assert 'AlphaForCausalLM' in ModelRegistry.get_supported_archs(); print('  serve venv OK: torch', torch.__version__, '| vllm', vllm.__version__, '| 플러그인 등록 True')" || { echo "  ❌ serve venv 검증 실패"; exit 1; }
 PYTHONPATH=$T/lmeval0412 python3 -c "import lm_eval; print('  lm_eval', lm_eval.__version__, 'OK')" 2>/dev/null | tail -1
+# τ³-bench 하니스 (NFS, eval_sft/install_tau2.sh) — 없으면 설치 안내만 (비치명)
+if [ -x "$T/tau2-bench/.venv/bin/tau2" ] && PIP_CONSTRAINT= "$T/tau2-bench/.venv/bin/tau2" --help >/dev/null 2>&1; then
+  echo "  tau2-bench OK ($(cut -c1-8 "$T/tau2-bench/.pinned_commit" 2>/dev/null))"
+else
+  echo "  ⚠️ tau2-bench 미설치/깨짐 — bash eval_sft/install_tau2.sh"
+fi
 [ -f $T/alpha_ref_logits_iter320.pt ] && echo "  참조로짓 OK" || echo "  ⚠️ 참조로짓 없음(재생성: tools/gen_ref_logits_iter320.py)"
 [ -d /home/work/Datasets/benchmarks ] && echo "  HF 벤치캐시 OK" || echo "  ⚠️ HF 캐시 없음"
 echo "== 복원 완료. 서빙: bash eval_sft/serve_fleet.sh <hfmodel> 49152 8 =="

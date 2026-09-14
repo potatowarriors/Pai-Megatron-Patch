@@ -17,6 +17,7 @@ A1·A4 는 서빙 시 `TOOLS=1 TOOL_PARSER=qwen3_xml` 로 해결한다. T1 용 f
 
 사용:
     python3 check_agentic_gates.py --base-url http://localhost:8100/v1 [--min-disk-gb 300]
+    python3 check_agentic_gates.py --base-url ... --skip-container   # τ-bench: A1·A4 만 (docker 불요)
 """
 
 from __future__ import annotations
@@ -178,6 +179,8 @@ def main() -> int:
     ap = argparse.ArgumentParser(description="에이전틱 투입 전 게이트 A1~A4")
     ap.add_argument("--base-url", required=True)
     ap.add_argument("--min-disk-gb", type=int, default=300)
+    ap.add_argument("--skip-container", action="store_true",
+                    help="A2·A3(컨테이너 역터널·디스크) 생략 — docker 가 필요 없는 하니스(τ-bench) 용")
     a = ap.parse_args()
 
     results = {}
@@ -186,15 +189,18 @@ def main() -> int:
     print(f"   {msg}\n   → {'PASS' if ok else 'FAIL'}\n")
     results["A1"] = ok
 
-    print("── A2: 컨테이너 역터널 " + "─" * 39)
-    ok, msg = gate_a2()
-    print(f"   {msg}\n   → {'PASS' if ok else 'FAIL'}\n")
-    results["A2"] = ok
+    if a.skip_container:
+        print("── A2·A3: 생략 (--skip-container)\n")
+    else:
+        print("── A2: 컨테이너 역터널 " + "─" * 39)
+        ok, msg = gate_a2()
+        print(f"   {msg}\n   → {'PASS' if ok else 'FAIL'}\n")
+        results["A2"] = ok
 
-    print("── A3: 컨테이너 디스크 여유 " + "─" * 34)
-    ok, msg = gate_a3(a.min_disk_gb)
-    print(f"   {msg}\n   → {'PASS' if ok else 'FAIL'}\n")
-    results["A3"] = ok
+        print("── A3: 컨테이너 디스크 여유 " + "─" * 34)
+        ok, msg = gate_a3(a.min_disk_gb)
+        print(f"   {msg}\n   → {'PASS' if ok else 'FAIL'}\n")
+        results["A3"] = ok
 
     print("── A4: 파서가 모델 형식을 실제로 파싱 " + "─" * 24)
     ok, msg = gate_a4(a.base_url)
@@ -206,7 +212,7 @@ def main() -> int:
         print(f"❌ 게이트 실패: {', '.join(sorted(bad))} — 에이전틱을 돌리지 말 것. "
               "이 상태의 0점은 모델 실패와 구분되지 않는다.")
         return 1
-    print("✅ 에이전틱 게이트 통과 (A1·A2·A3·A4)")
+    print("✅ 에이전틱 게이트 통과 (" + "·".join(results) + ")")
     return 0
 
 

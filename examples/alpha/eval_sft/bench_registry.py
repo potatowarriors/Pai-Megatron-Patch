@@ -42,6 +42,13 @@ HEADLINE: dict[str, tuple[str | tuple[str, ...], str]] = {
     # ── 에이전틱
     "swe_bench_verified":     ("resolved",     "swe_verified"),
     "terminal_bench":         ("resolved",     "terminal_bench"),
+    # run_terminal_tb2.sh 는 `terminal_bench_2` 키를 쓴다 — 미등록이라 TB-2 가 TRACKING.md 에서 빠져 있었다 (2026-09-14 수정)
+    "terminal_bench_2":       ("resolved",     "terminal_bench_2"),
+    # ── τ³-bench (tau2-bench v1.0.1, eval_sft/run_tau.sh). 대표 = pass^1 (리더보드 주지표); pass^2~4 는 JSON 에.
+    "tau_retail":             ("pass1",        "tau3_retail"),
+    "tau_airline":            ("pass1",        "tau3_airline"),
+    "tau_telecom":            ("pass1",        "tau3_telecom"),
+    "tau_bench":              ("pass1",        "tau3_bench"),
 }
 
 # 표 컬럼 순서
@@ -51,7 +58,8 @@ TASK_ORDER = [
     "ruler_niah_multikey_1_aa", "ruler_niah_multivalue_aa",
     "ruler_niah_single_1_512k", "ruler_niah_single_2_512k",
     "ruler_niah_multikey_1_512k", "ruler_niah_multivalue_512k",
-    "simpleqa_verified", "logickor", "swe_bench_verified", "terminal_bench",
+    "simpleqa_verified", "logickor", "swe_bench_verified", "terminal_bench", "terminal_bench_2",
+    "tau_retail", "tau_airline", "tau_telecom", "tau_bench",
 ]
 
 # 측정이 성립했는지 보는 진단 지표 (점수가 아니라 **게이트**).
