@@ -42,23 +42,63 @@ else
   echo "[swe] 전량(SWE-bench Verified 500)"
 fi
 
-echo "[swe] 예측 생성 (mini-swe-agent, W=$W workers, temp 1.0)"
-ssh -F "$SSHC" -o BatchMode=yes alpha-eval "
-  export HF_TOKEN=$HFTOK OPENAI_API_KEY=dummy OPENAI_API_BASE=http://localhost:8199/v1
-  # litellm 은 미등록 모델의 비용을 계산하다 RuntimeError 로 죽는다 (2026-08-30 실측:
-  # 3/3 인스턴스가 3초 만에 실패). 로컬 모델은 레지스트리로 등록하는 것이 정식 경로.
+# ── 추론 분리·복원 (2026-09-14, KNOWN_ISSUES 09-14) ────────────────────────
+# 에이전틱 fleet 가 reasoning 파서 없이 뜨면 vLLM 0.25.1 qwen3_xml 이 도구호출 턴의 </think> 를
+# 소비한다 — 보존된 궤적 전수에서 0/148,836턴. 이력이 <think></think>+추론문으로 재렌더됐다.
+# 수정은 둘이 함께 필요하다: (1) fleet 를 REASONING_PARSER=nemotron_v3 로 띄워 추론을 필드로 분리
+# (run_suite 에이전틱 단계, 게이트 A5 가 확인), (2) mini-swe-agent 는 reasoning 필드를 이력에
+# 재전송하지 않으므로 tau_proxy 가 캐시했다가 다음 요청 이력에 되돌린다(τ³ 와 같은 방식).
+#
+# 프록시는 **컨테이너 안, 하니스 옆**에 둔다: mini-swe-agent → :8110 프록시 → :8199 역터널 → sub1.
+# 터널을 건드리지 않고, 같은 :8199 를 쓰는 TB-2 는 프록시를 거치지 않는다(도구를 안 보내므로
+# 템플릿이 이력 think 를 어차피 잘라 복원이 무의미 — integrate-tau3-bench-alpha 세션 확인).
+#
+# SWE_THINK: restore(기본) = 이력에 추론 복원(학습 형식) · strip = 분리만, 복원 안 함(--no-reattach).
+# 복원이 낫다고 가정하지 말 것 — τ airline 5과제에서 ON 0/5 vs OFF 3/5 였다(n=5). ON/OFF 를 같이 잰다.
+# 복원은 매 턴 프롬프트를 추론만큼 키우므로 긴 궤적에서 262144 창 초과가 늘 수 있다.
+SWE_THINK="${SWE_THINK:-restore}"
+case "$SWE_THINK" in
+  restore) REATTACH="" ;;
+  strip)   REATTACH="--no-reattach" ;;
+  *) echo "[swe] ❌ SWE_THINK=$SWE_THINK — restore 또는 strip"; exit 1 ;;
+esac
+export SWE_THINK   # 결과 파서(파이썬)가 모드를 기록하려면 환경변수여야 한다
+RAW_C="/opt/swebench/preds_${RUN_NAME}/proxy_raw"
+# 컨테이너의 프록시는 항상 리포 버전으로 덮는다 (표준 라이브러리만 쓴다).
+ssh -F "$SSHC" -o BatchMode=yes alpha-eval "cat > /opt/swebench/tau_proxy.py" < "$HERE/tau_proxy.py" || {
+  echo "[swe] ❌ tau_proxy.py 복사 실패"; exit 1; }
+
+echo "[swe] 예측 생성 (mini-swe-agent, W=$W workers, temp 1.0, think=$SWE_THINK)"
+# 원격 스크립트는 stdin 으로 넘긴다 — 인라인 ssh "..." 는 따옴표가 중첩돼 원격 변수가 로컬에서 먹힌다.
+ssh -F "$SSHC" -o BatchMode=yes alpha-eval 'bash -s' <<EOF
+  export HF_TOKEN=$HFTOK OPENAI_API_KEY=dummy OPENAI_API_BASE=http://localhost:8110/v1
+  # litellm 은 미등록 모델의 비용을 계산하다 RuntimeError 로 죽는다 (2026-08-30 실측).
   export LITELLM_MODEL_REGISTRY_PATH=/opt/swebench/alpha_model_registry.json
   export MSWEA_COST_TRACKING=ignore_errors
   cd /opt/swebench
+  mkdir -p $RAW_C
+  pkill -f '[t]au_proxy.py --port 8110' 2>/dev/null; sleep 1
+  # --no-greeting: mini-swe-agent 는 합성 인사가 없어 첫 턴 miss 를 miss 로 세야 miss_rate 가 정직하다.
+  # --max-entries 100000: SWE 는 총 턴 ~7.5만 — 기본 2만이면 살아 있는 궤적 초기 턴이 밀려나 miss.
+  setsid python3 /opt/swebench/tau_proxy.py --port 8110 --upstream http://127.0.0.1:8199 \
+    --no-greeting --max-entries 100000 $REATTACH \
+    --stats-file $RAW_C/proxy_stats.json --dump-dir $RAW_C > $RAW_C/proxy.log 2>&1 < /dev/null &
+  PX=\$!
+  for i in \$(seq 1 30); do curl -s -m 2 -o /dev/null http://localhost:8110/stats && break; sleep 1; done
+  curl -s -m 2 -o /dev/null http://localhost:8110/stats || { echo "[swe] ❌ tau_proxy 기동 실패"; tail -5 $RAW_C/proxy.log; exit 1; }
   ./venv/bin/mini-extra swebench --subset SWE-bench/SWE-bench_Verified --split test \
     $SLICE --workers $W --redo-existing \
     -m openai/alpha -c swebench.yaml \
-    -c model.model_kwargs.api_base=http://localhost:8199/v1 \
+    -c model.model_kwargs.api_base=http://localhost:8110/v1 \
     -c model.model_kwargs.temperature=1.0 \
     -c model.model_kwargs.top_p=0.95 \
     -c model.model_kwargs.max_tokens=${SWE_MAX_TOKENS:-32768} \
     -o /opt/swebench/preds_${RUN_NAME} 2>&1 | tail -8
-"
+  kill \$PX 2>/dev/null; sleep 2   # SIGTERM → 프록시가 stats 를 flush 하고 종료
+EOF
+ssh -F "$SSHC" -o BatchMode=yes alpha-eval "cat $RAW_C/proxy_stats.json 2>/dev/null" \
+  > "$OUT/swe_proxy_stats.json" 2>/dev/null || true
+
 echo "[swe] 채점 (swebench eval)"
 ssh -F "$SSHC" -o BatchMode=yes alpha-eval "
   export HF_TOKEN=$HFTOK; cd /opt/swebench
@@ -76,6 +116,7 @@ import json, sys, os
 outd, sub = sys.argv[1], sys.argv[2] == "true"
 raw = os.path.join(outd, "swe_report_raw.json")
 resolved = total = 0
+d = {}   # 리포트 로드가 실패해도 아래 게이트 집계가 NameError 로 죽지 않게 (2026-09-14 수정)
 try:
     d = json.load(open(raw))
     resolved = d.get("resolved_instances", d.get("resolved", 0)) or 0
@@ -95,15 +136,42 @@ if sub or total == 0:
 empty = int(d.get("empty_patch_instances", 0) or 0)
 errs = int(d.get("error_instances", 0) or 0)
 comp = int(d.get("completed_instances", 0) or 0)
+# ── 추론 분리·복원 프록시 (2026-09-14) — τ³ 의 tau_combine 과 같은 무효 규칙 ──
+px = {}
+try:
+    px = json.load(open(os.path.join(outd, "swe_proxy_stats.json")))
+except Exception:
+    pass
+PX_KEYS = ("requests", "reinlined", "miss", "miss_first_assistant", "think_stripped",
+           "think_from_field", "think_absent", "think_unclosed", "tool_calls", "reattach", "miss_rate")
+proxy = {k: px[k] for k in PX_KEYS if k in px}
+invalid = []
+if not px:
+    invalid.append("프록시 통계 없음 — 추론 분리 경로를 거쳤는지 확인 불가")
+else:
+    if px.get("reattach") and px.get("miss_rate", 0) > 0.05:
+        invalid.append(f"복원 켠 채 miss_rate {px['miss_rate']:.3f} > 0.05 — 이력 복원이 새고 있다")
+    if px.get("requests", 0) and (px.get("think_stripped", 0) + px.get("think_from_field", 0)) == 0:
+        invalid.append("추론 미관측 — fleet 가 reasoning 을 분리하지 않는다(REASONING_PARSER 확인)")
+if invalid:
+    res["no_answer,none"] = 1.0
 json.dump({"results": {"swe_bench_verified": res},
            "swe_detail": {"resolved": resolved, "total": total, "subsampled": sub,
                           "empty_patch": empty, "errors": errs, "completed": comp,
                           "empty_patch_rate": (empty / total if total else 0.0),
-                          "resolved_given_completed": (resolved / comp if comp else 0.0)}},
+                          "resolved_given_completed": (resolved / comp if comp else 0.0),
+                          "think_mode": os.environ.get("SWE_THINK", "restore"),
+                          "proxy": proxy, "invalid": invalid}},
           open(os.path.join(outd, "results_swe.json"), "w"), indent=2)
 mark = "  [부분표본 → 무효]" if sub else ("  [리포트 없음 → 무효]" if total == 0 else "")
+if invalid:
+    mark += "  [무효: " + " · ".join(invalid) + "]"
 print(f"[swe] resolved {resolved}/{total} = {acc*100:.1f}%{mark}")
 print(f"[swe] 게이트 — 빈패치 {empty}/{total} = {empty/max(total,1)*100:.1f}% · "
       f"평가오류 {errs} · 채점기준 적중 {resolved}/{comp} = {resolved/max(comp,1)*100:.1f}%")
+if px:
+    print(f"[swe] 프록시 — 모드 {os.environ.get('SWE_THINK','restore')} · 요청 {px.get('requests',0)} · "
+          f"추론(필드 {px.get('think_from_field',0)} / 인라인 {px.get('think_stripped',0)} / 없음 {px.get('think_absent',0)}) · "
+          f"복원 {px.get('reinlined',0)} · miss {px.get('miss',0)} ({px.get('miss_rate',0)*100:.1f}%)")
 PY
 echo "== SWE 완료: $OUT =="

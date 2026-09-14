@@ -81,10 +81,18 @@ if has agentic; then
   # 2026-09-01: 262144 로 올린다. 하이브리드라 KV 가 토큰당 12KB(24층 중 attention 6층만)
   # 이므로 시퀀스당 3.0GB — fleet 전체가 동시 112 시퀀스를 수용한다. 메모리가 아니라
   # 턴당 출력 예산이 병목이었다.
-  fleet_up "${AGENTIC_MAX_LEN:-262144}" 1 || exit 1
+  #
+  # 2026-09-14: **reasoning 파서를 켠다(nemotron_v3).** 없으면 vLLM 0.25.1 qwen3_xml 도구 파서가
+  # 도구호출 턴의 </think> 를 소비한다 — 보존된 SWE 궤적 전수 0/148,836턴(KNOWN_ISSUES 09-14).
+  # 그 결과 iter300~1800 SWE 는 이력이 <think></think>+추론문으로 재렌더된 조건에서 측정됐다.
+  # 게이트 A5 가 이 조건을 확인한다. T1·T3 fleet 는 그대로 파서 없음 — T1 채점(split_think)이
+  # content 의 </think> 로 사고 마감률을 재므로 여기와 플래그가 갈린다.
+  # TB-2 도 이 fleet 를 쓴다: 도구를 안 보내므로 결함 경로는 아니지만 content 가 JSON 만 남게 된다
+  # (추론은 필드로). TB-2 는 공식 계열이 아직 없어 끊기는 계열은 없다.
+  fleet_up "${AGENTIC_MAX_LEN:-262144}" 1 nemotron_v3 || exit 1
   echo "[suite] 역터널 기동"
   bash /home/work/vidsearch/tools/start_swe_tunnel.sh; sleep 10
-  python3 "$HERE/check_agentic_gates.py" --base-url "$BURL" || { echo "[suite] ❌ A1~A3 실패 — 에이전틱 건너뜀"; rc=1; }
+  python3 "$HERE/check_agentic_gates.py" --base-url "$BURL" || { echo "[suite] ❌ A1~A5 실패 — 에이전틱 건너뜀"; rc=1; }
   if [ "$rc" -eq 0 ] || [ "${FORCE_AGENTIC:-0}" = "1" ]; then
     echo "[suite] === SWE-bench ==="
     SKIP_GATES=1 BASE_URL="$BURL" bash "$HERE/run_swe.sh" "$RUN_TAG" "${SWE_N:-0}" "${SWE_W:-12}" || rc=1
