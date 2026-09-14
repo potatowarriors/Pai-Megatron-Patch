@@ -10,7 +10,7 @@
 # | T1 코어 | 표준 fleet 40960 | G1·G2·G3 |
 # | T3 판정 | 표준 fleet (동일) | G1·G2·G3 |
 # | 에이전틱 | **TOOLS=1 + nemotron_v3** fleet **262144** + 역터널 | A1·A2·A3·A4·A5 (+ τ³: T1·T1b·T2, 같은 fleet) |
-# | T2 롱 | **롱 fleet 139264** | G1·G2·G3 |
+# | T2 롱 | **롱 fleet 262144** (`T2_MAX_LEN`) | G1·G2·G3 |
 #
 # 사용: bash eval_sft/run_suite.sh <HF_CKPT> <RUN_TAG> [STAGES]
 #   STAGES: 쉼표 목록 (t1,t3,agentic,t2). 기본 전부.
