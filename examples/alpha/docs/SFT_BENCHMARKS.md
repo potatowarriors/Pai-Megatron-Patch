@@ -910,7 +910,7 @@ TRACKING.md 를 매번 새로 쓰므로 그 파일에 손으로 쓴 기록은 �
 | swap iter1800 | ✅ | ✅ | ✗ | ✅ | ✗ | 사용자 결정(09-07): SWE 까지만 재고 중단 |
 | p2 iter500 | ⛔ 48% | LogicKor 만 | ✗ | ✗ | ✗ | 09-09 T1 중단 — 데이터 결함 재변환이 sub1 GPU 필요(사용자). 결과 없음 |
 | p2 iter602 | ⛔ 43% | ✗ | ✗ | ✗ | ✗ | 09-09 fleet 연결 끊김(`Connection closed`, 다른 세션 실행). 결과 없음 |
-| **swap iter2448 (phase-1 최종)** | ⛔ **94.3%** | ✗ | ✗ | ✗ | ✗ | 09-14 11:07 KST `eval_ckpt.sh … t1,t3` 기동, ~16:05 KST sub1 이 τ³ 스모크·프로브로 재배정되며 결과 없이 중단. 프로브만 남음(identity FAIL · 유령 호출 1/33 PASS) |
+| **swap iter2448 (phase-1 최종)** | ⛔ **94.3%** | ✗ | ✗ | ✗ | ✗ | 09-14 11:07 KST `eval_ckpt.sh … t1,t3` 기동, ~16:05 KST sub1 이 τ³ 스모크·프로브로 재배정되며 결과 없이 중단. 프로브만 남음(identity FAIL · 유령 호출 1/33 PASS). **전 티어 재측정**(사용자): 21:22 KST 1차는 sub1 HOME 볼륨 ENOSPC 로 fleet 기동 실패(`KNOWN_ISSUES` 09-14) → 캐시 이전 후 21:51 KST 재기동 |
 
 - **p2 계열은 재측정하지 않는다** — phase-2·3 계보가 09-13 폐기됐다.
 - **09-14 이전 에이전틱 값(SWE·TB-1)은 reasoning 파서 없는 fleet 조건**이다 — 이력 `</think>` 가 전 턴에서 사라진 채
@@ -978,7 +978,7 @@ Google Generative Language API v1beta 엔드포인트
 - [ ] **τ³ 첫 본 측정** (retail 114 + airline 50 × 4, ON/OFF 양쪽) → 복원 기본값 확정(사용자) → `run_suite.sh` 에이전틱 단계로 정례화
 - [x] SWE·TB-2 fleet 의 `</think>` 소실 조치 — nemotron_v3 fleet · A5 · SWE/TB-2 추론 복원 (09-14, §3.14)
 - [ ] τ³ telecom — 상대역 엔드포인트가 tools 를 받으면(`--enable-auto-tool-choice`) preflight T2 가 자동 포함
-- [ ] **phase-1 최종 iter2448 기준선** — 09-14 T1 이 94.3% 에서 결과 없이 중단(§3.10 측정 이력). 전 티어 재측정 실행 중(09-14 12:22 UTC~, 사용자 결정: 현행 규약 첫 기준선)
+- [ ] **phase-1 최종 iter2448 기준선** — 09-14 T1 이 94.3% 에서 결과 없이 중단(§3.10 측정 이력). 전 티어 재측정 실행 중(09-14 12:51 UTC~, 사용자 결정: 현행 규약 첫 기준선)
 - [ ] 09-14 이전 에이전틱 수치(iter300~1800 SWE·TB-1) 표기 — 구 조건 계열로 둘지 무효로 내릴지 (사용자 결정 대기)
 - [ ] NTC 학습 체크포인트에서 TB-2 `steps_reasoning_only`·`think_unclosed_stop` 확인 → 미종결 턴 복원 제외 옵션 필요 여부 판단 (§3.14 관찰)
 - [ ] 미착수 벤치: LiveCodeBench, MRCR. (T4 표준 11종은 범위 제외 — 사용자 결정 2026-08-30)
