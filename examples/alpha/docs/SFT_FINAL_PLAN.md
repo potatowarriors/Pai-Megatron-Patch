@@ -72,7 +72,7 @@ LR 은 phase-1 과 동일(2.5e-5 cosine → 1.5e-6, Ultra 비율 이식). DiLoCo
 ## 5. 사용자 결정 (2026-09-13 02:50 확정)
 - When2Call **6.4ep 기본안**(미호출:호출 ≈1:1 행 기준) — 엄격 2:1(≈13ep) 대신 유령 호출 게이트(≤1/33)로 판정.
 - Ultra 비중 **27/27 적용 확인**(파일 원본 합 105.8 기준; 앞선 25/25 는 113.8 오류에서 나온 수치).
-- 열린 것: DiLoCo A/B 실패 시 단일 노드 10.7일 진행 여부.
+- DiLoCo A/B 결과 **단일 노드 확정**(09-14 01:00), phase-1 이어가기 대신 LC-B 새 런 유지(01:15).
 
 ## 6. 실행 기록
 - 09-13 02:27 main1 2-iter 스모크 PASS: iter1 loss 1.069033 (515 s) → iter2 1.038569 (324.7 s, 267 TFLOP/s/GPU). 첫 시도(02:03)는 bins<100 valid 0-doc 정지(§1).
@@ -84,3 +84,6 @@ LR 은 phase-1 과 동일(2.5e-5 cosine → 1.5e-6, Ultra 비율 이식). DiLoCo
 - 09-13 15:47 **B 1차 기동 실패**: 런처가 `CUDA_DEVICE_MAX_CONNECTIONS=32` 를 강제(프리트레인 CP=1 전제) → CP8 프리셋에서 Megatron assert 로 양 노드 즉사. 런처가 프리셋의 CP/TP>1 이면 1 로 두도록 수정(1b7ffe5). **B 재기동 16:12** `outputs/diloco_sft_final/node{0,1}`, 로그 ~/run_diloco_sft_final_node{0,1}.log.
 - probe 체인 실측: MG→HF 변환은 **main1 8 GPU** 에서 PASS(forward_sanity), sub1 2 GPU 는 저장 단계 SIGSEGV(원인 미상, 09-13 13:29). vLLM(alpha_serve_venv, CUDA 13 torch)은 **sub1 에서만** 뜬다(main1 드라이버 12.8 "too old"). → 사후 평가는 변환 main1 · 서빙 sub1 로 분담.
 - A iter 100 probe(09-14 01:09 sub1 시계): 제작자 0/30(OpenAI/챗GPT 자칭), 유령 호출 4/33 — LC-B 시작점(FAIL·4/33)과 동일. iter 100 = 예산의 3.5%·워밍업 중·identity 0.5% 라 아직 판정 의미 없음, 이후 ckpt 추이로 본다.
+- 09-14 00:55 **B 중단(iter 94, 사용자 결정)** — A/B 결과 `study/diloco_sft_ab.md`: 같은 데이터 효율 0.60~0.63, 벽시계 1.2×/2×GPU. 사용자 판단: outer momentum(0.6) 이 제대로 동작하는지 보려면 210 iters 이상 지켜봐야 하고, 그 실험 시간까지 더하면 단일 노드가 낫다.
+- 09-14 01:15 **phase-1 이어가기 vs LC-B 새로 시작** 재검토 후 **A(LC-B 새로, 현재 런) 유지** 결정 — 근거: phase-1 은 폐기 데이터(kochat v1/v2 2.6B·identity_v1 반복·ARC)가 학습 스팬에 있고 코드 50% 혼합이라 Ultra 비율·계보·인과 추적이 깨짐; 시간 차 4~5일. iter 300 T1 이 phase-1(47.0/32.0/65.6) 대비 열세면 그때 phase-1 이어가기로 전환(손실 1.3일).
+- 09-14 01:12 **본 런 재개** `outputs/alpha_baseline_48L_sft_128k_final_resume_20260914_011200` (프리셋 `sft_128k_final_resume.yaml`: load = A iter 150, finetune/no-load-optim 없음 → optimizer·스케줄러·consumed 24,000 승계), 잔여 2,712 iters ≈ 9.8일 → 종료 ≈ 09-23 23:00. sub1 `scripts/sft_final_eval_watch.sh`: 100 iters 마다 probe(변환 sub1 8 GPU + 서빙), 300 iters 마다 T1.
