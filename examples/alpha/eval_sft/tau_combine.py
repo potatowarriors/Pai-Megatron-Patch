@@ -6,7 +6,7 @@ run_tau.sh 의 마지막 단계. 도메인마다 tau2-bench 의 `simulations/<ri
     tau2 자체 compute_metrics 가 import 되면 pass^1 을 대조한다(불일치 = 무효).
   - no_answer: 하니스 측 실패 비율 (infrastructure/unexpected/user_error/timeout/agent_error) — 모델 실패(max_steps,
     too_many_errors, context_window_exceeded)는 점수에 반영되고 여기 안 들어간다.
-  - think_closed: 프록시 카운터(think_stripped / (stripped+unclosed)).
+  - think_closed: 프록시 카운터((think_stripped+think_from_field) / (…+unclosed)).
 무효 조건(→ 모든 tau 셀 no_answer=1.0, bench_registry.invalid_reasons 가 자동 무효 처리):
   부분 표본 · 도메인 results.json 부재 · sims < tasks×trials · reattach 켠 채 miss_rate>0.05 · 프록시가 think 를 하나도 못 봄 ·
   pass^1 자체계산 ≠ tau2 계산.
@@ -20,7 +20,7 @@ import math
 import os
 
 HARNESS_FAIL = {"infrastructure_error", "unexpected_error", "user_error", "timeout", "agent_error"}
-PROXY_KEYS = ("requests", "reinlined", "miss", "miss_first_assistant", "think_stripped", "think_absent", "think_unclosed",
+PROXY_KEYS = ("requests", "reinlined", "miss", "miss_first_assistant", "think_stripped", "think_from_field", "think_absent", "think_unclosed",
               "tool_calls", "mixed_content_and_tools", "finish_length", "upstream_errors", "seed_stripped")
 
 
@@ -86,7 +86,7 @@ def summarize_domain(raw: str, d: str, K: int, reattach: bool, xcheck: bool = Tr
     harness_fail = sum(v for k, v in term.items() if k in HARNESS_FAIL)
     no_answer = (harness_fail / n_sims) if n_sims else 1.0
     pd = proxy_delta(raw, d)
-    st, un = pd.get("think_stripped", 0), pd.get("think_unclosed", 0)
+    st, un = pd.get("think_stripped", 0) + pd.get("think_from_field", 0), pd.get("think_unclosed", 0)
     think_closed = (st / (st + un)) if (st + un) else 0.0
     if n_sims < len(tasks) * K:
         invalid.append(f"{d}: sims {n_sims} < {len(tasks)}×{K}")

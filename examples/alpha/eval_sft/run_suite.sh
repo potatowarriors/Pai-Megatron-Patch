@@ -35,11 +35,11 @@ LOGD=/home/work/vidsearch/tools/bench_logs; mkdir -p "$LOGD"
 
 has() { case ",$STAGES," in *",$1,"*) return 0;; *) return 1;; esac; }
 
-fleet_up() {  # $1=max_len  $2=tools(0/1)
-  echo "[suite] fleet 기동 (max_len=$1 TOOLS=$2 GPUS=$GPUS)"
+fleet_up() {  # $1=max_len  $2=tools(0/1)  $3=reasoning parser (τ³ 전용, 기본 없음)
+  echo "[suite] fleet 기동 (max_len=$1 TOOLS=$2 reasoning=${3:-off} GPUS=$GPUS)"
   bash "$HERE/stop_fleet.sh" "$GPUS" >/dev/null 2>&1 || true
   sleep 5
-  ( export PIP_CONSTRAINT= TOOLS="$2" GPUS="$GPUS"
+  ( export PIP_CONSTRAINT= TOOLS="$2" GPUS="$GPUS" REASONING_PARSER="${3:-}"
     setsid bash "$HERE/serve_fleet.sh" "$CKPT" "$1" "$NGPU" "$PROXY" \
       > "$LOGD/fleet_${RUN_TAG}.log" 2>&1 < /dev/null & )
   for i in $(seq 1 60); do
@@ -95,10 +95,15 @@ if has agentic; then
     TERM_RUNNER="run_terminal_tb2.sh"
     [ "${TERMINAL_HARNESS:-tb2}" = "tb1" ] && TERM_RUNNER="run_terminal.sh"
     SKIP_GATES=1 BASE_URL="$BURL" bash "$HERE/$TERM_RUNNER" "$RUN_TAG" "${TERM_N:-0}" "${TERM_W:-8}" || rc=1
-    # τ³-bench (tau2-bench, docker 불요) — sub1 직접, 같은 TOOLS=1 fleet 를 tau_proxy(:8110) 너머로 쓴다.
-    # 상대역은 외부 gemma 엔드포인트 (run_tau.sh 헤더). τ 단독 실행: bash eval_sft/run_tau.sh <TAG>
-    echo "[suite] === τ³-bench ==="
-    SKIP_GATES=1 BASE_URL="$BURL" bash "$HERE/run_tau.sh" "$RUN_TAG" "${TAU_N:-0}" "${TAU_TRIALS:-4}" "${TAU_W:-8}" || rc=1
+    # τ³-bench (tau2-bench, docker 불요) — sub1 직접, tau_proxy(:8110) 경유. **fleet 재기동**: TOOLS=1 에 더해
+    # reasoning 파서(nemotron_v3)가 필요하다 — vLLM 0.25.1 parser engine 은 tool 파서만 켜면 </think> 가 사라진다
+    # (SFT_BENCHMARKS §3.13). 상대역은 외부 gemma 엔드포인트 (run_tau.sh 헤더). τ 단독: bash eval_sft/run_tau.sh <TAG>
+    echo "[suite] === τ³-bench (fleet 재기동: TOOLS=1 + reasoning nemotron_v3) ==="
+    if fleet_up "${AGENTIC_MAX_LEN:-262144}" 1 nemotron_v3 && python3 "$HERE/check_agentic_gates.py" --base-url "$BURL" --skip-container; then
+      SKIP_GATES=1 BASE_URL="$BURL" bash "$HERE/run_tau.sh" "$RUN_TAG" "${TAU_N:-0}" "${TAU_TRIALS:-4}" "${TAU_W:-8}" || rc=1
+    else
+      echo "[suite] ❌ τ³ fleet/게이트 실패 — 건너뜀"; rc=1
+    fi
     # 에이전틱은 컨테이너 호스트에 build cache 를 수십 GB 남긴다. 매번 회수한다.
     # (sweb.eval 태스크 이미지는 남긴다 — 다음 체크포인트에서 재사용)
     bash "$HERE/docker_gc.sh" || echo "[suite] ⚠️ docker gc 실패 (비치명)"

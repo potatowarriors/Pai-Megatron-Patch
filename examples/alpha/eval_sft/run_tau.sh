@@ -5,8 +5,9 @@
 #   tau2 run (sub1) ─ agent: litellm openai/alpha ─▶ tau_proxy(:8110) ─▶ lb_proxy(:8100) ─▶ TOOLS=1 fleet
 #                   └ user : litellm $TAU_USER_LLM  ─▶ 외부 엔드포인트 (기본 gemma-4-12B-it, 비용 0)
 #   - docker 불요(도구는 JSON DB 위의 순수 파이썬) → gpu06 컨테이너·역터널 없이 sub1 에서 직접.
-#   - fleet 는 reasoning 파서 없이 뜬다(G2). tau2 는 reasoning_content 를 재전송하지 않으므로 tau_proxy 가
-#     응답에서 think 를 떼고(상대역·COMMUNICATE 채점기에는 발화만) 다음 요청의 히스토리에 원문을 복원한다(규칙 5).
+#   - fleet 는 **TOOLS=1 + REASONING_PARSER=nemotron_v3** 로 뜬다(run_suite τ 단계가 재기동; 게이트 T1b). vLLM 0.25.1
+#     parser engine 은 tool 파서만 켜면 </think> 를 소비해 think 가 답변에 붙으므로 reasoning 필드로 받는다.
+#     tau2 는 reasoning 을 재전송하지 않으므로 tau_proxy 가 think 를 캐시해 다음 요청의 히스토리에 복원한다(규칙 5).
 #   - 기본 도메인 retail(114)+airline(50), base split. telecom(114, dual-control) 은 상대역이 도구를 써야 하는데
 #     기본 상대역 엔드포인트가 tools 요청을 400 으로 거절한다 → preflight T2 가 판정해 건너뛰고 사유를 기록.
 #   - 상대역이 12B 라 리더보드(gpt-5.2 user-sim)·보고서 수치와 직접 비교 불가. ckpt 간 추이가 목적이며
@@ -69,6 +70,19 @@ curl -s -m 2 -o /dev/null "http://localhost:$PROXY_PORT/stats" || { echo "[tau] 
 [ "$(curl -s -m 5 -o /dev/null -w '%{http_code}' "http://localhost:$PROXY_PORT/v1/models")" = "200" ] \
   || { echo "[tau] ❌ 프록시 → fleet(${BASE_URL}) 통과 실패"; exit 1; }
 echo "[tau] T1 프록시 :$PROXY_PORT → ${BASE_URL%/v1} (reattach=$TAU_REATTACH)"
+# T1b: fleet 가 think 를 분리해 주는가 — reasoning 파서(nemotron_v3)가 켜져 있어야 한다. tool 파서만 켜진 fleet 는
+# 도구 턴에서 </think> 가 사라져 think 가 답변에 붙는다(2026-09-14 스모크: 복원 miss 57%, 상대역이 think 를 읽음).
+python3 - "$BASE_URL" <<'PY' || { echo "[tau] ❌ T1b: fleet 응답에 reasoning 필드가 없다 — REASONING_PARSER=nemotron_v3 TOOLS=1 로 fleet 를 재기동할 것"; exit 1; }
+import json, sys, urllib.request
+body = {"model": "alpha", "messages": [{"role": "user", "content": "Reply with exactly: OK"}], "max_tokens": 1024,
+        "temperature": 1.0, "top_p": 0.95, "skip_special_tokens": False}
+req = urllib.request.Request(sys.argv[1].rstrip("/") + "/chat/completions", data=json.dumps(body).encode(), headers={"Content-Type": "application/json"})
+m = json.load(urllib.request.urlopen(req, timeout=300))["choices"][0]["message"]
+field = m.get("reasoning_content") or m.get("reasoning")
+ok = isinstance(field, str) and field.strip() and "</think>" not in (m.get("content") or "")
+print(f"[tau] T1b fleet reasoning 필드 {'OK' if ok else '없음'} (content={repr((m.get('content') or '')[:60])})")
+sys.exit(0 if ok else 1)
+PY
 
 # ── T2: 상대역 preflight (chat 1회 + tools 1회) ───────────────────────────────
 T2_OUT=$("$PY" - "$TAU_USER_LLM" "$TAU_USER_ARGS" <<'PY' 2>"$RAW/user_preflight.err"

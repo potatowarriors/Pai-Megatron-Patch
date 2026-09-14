@@ -42,6 +42,16 @@ def main() -> int:
     tok = AutoTokenizer.from_pretrained(a.tokenizer)
     body = json.load(open(a.request_json))
     msgs, tools = body["messages"], body.get("tools")
+    # OpenAI 규약대로 재전송된 tool_calls.arguments 는 JSON **문자열**이다. vLLM 은 렌더 전에 dict 로 바꾸지만
+    # transformers apply_chat_template 은 안 하므로(템플릿 `|items` 가 TypeError) 여기서 맞춘다.
+    for m in msgs:
+        for tc in (m.get("tool_calls") or []) if m.get("role") == "assistant" else []:
+            fn = tc.get("function", tc)
+            if isinstance(fn.get("arguments"), str):
+                try:
+                    fn["arguments"] = json.loads(fn["arguments"])
+                except Exception:  # noqa: BLE001
+                    pass
 
     def render(ms):
         return tok.apply_chat_template(ms, tools=tools, tokenize=False, add_generation_prompt=True)

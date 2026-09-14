@@ -28,9 +28,16 @@ if [ "${TOOLS:-0}" = "1" ]; then
   # (에이전트는 텍스트 파싱이라 파서 종류 무관; hermes 로 요청만 통과시킴)
   TOOL_FLAGS="--enable-auto-tool-choice --tool-call-parser ${TOOL_PARSER:-qwen3_xml}"
 fi
-echo "[serve] ckpt=$CKPT max_len=$MAX_LEN DP=$DP port=$PORT tools=${TOOLS:-0}"
+REASON_FLAGS=""
+if [ -n "${REASONING_PARSER:-}" ]; then
+  # chat API 하니스(τ-bench)용: think 를 reasoning 필드로 분리. vLLM 0.25.1 parser engine 은 tool 파서가 켜지면
+  # </think> 토큰을 터미널로 소비해, reasoning 파서 없이는 content 가 think+답변이 마커 없이 붙는다 (2026-09-14 실측,
+  # SFT_BENCHMARKS §3.13). G2 게이트(</think> 관측)와는 양립하지 않으므로 T1/T3/SWE/Terminal fleet 에는 켜지 않는다.
+  REASON_FLAGS="--reasoning-parser $REASONING_PARSER"
+fi
+echo "[serve] ckpt=$CKPT max_len=$MAX_LEN DP=$DP port=$PORT tools=${TOOLS:-0} reasoning=${REASONING_PARSER:-off}"
 exec $VENV/bin/vllm serve "$CKPT" \
-  $TOOL_FLAGS \
+  $TOOL_FLAGS $REASON_FLAGS \
   --served-model-name alpha \
   --trust-remote-code \
   --tensor-parallel-size 1 \

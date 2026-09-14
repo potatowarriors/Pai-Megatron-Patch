@@ -86,6 +86,8 @@ class FakeUpstream:
                 msg = {"role": "assistant", "content": spec.get("content")}
                 if spec.get("tool_calls"):
                     msg["tool_calls"] = spec["tool_calls"]
+                if spec.get("reasoning") is not None:          # reasoning 파서가 켜진 fleet 흉내 (vLLM 0.25.1 필드명)
+                    msg["reasoning"] = spec["reasoning"]
                 body = json.dumps({"id": "x", "object": "chat.completion", "model": "alpha",
                                    "choices": [{"index": 0, "message": msg,
                                                 "finish_reason": spec.get("finish_reason", "stop")}],
@@ -300,3 +302,43 @@ def test_concurrency_counters_add_up(stack):
     assert not errors
     s = proxy.snapshot()
     assert s["requests"] == 320 and s["think_stripped"] == 320 and s["cache_entries"] == 320
+
+
+def test_reasoning_field_path_text_and_tool_turns(stack):
+    """reasoning 파서가 켜진 fleet: think 는 `reasoning` 필드, content 는 답변만 → 캐시·복원은 텍스트 경로와 동일."""
+    up, proxy, port = stack
+    up.queue.append({"content": None, "reasoning": "need lookup", "tool_calls": TC, "finish_reason": "tool_calls"})
+    _, r1 = post(port, {"messages": [SYS, GREET, USER1]})
+    m1 = r1["choices"][0]["message"]
+    assert m1["content"] is None and m1["reasoning_content"] == "need lookup" and m1["tool_calls"] == TC
+    up.queue.append({"content": "Here you go.", "reasoning": "answer now"})
+    _, r2 = post(port, {"messages": [SYS, GREET, USER1, {"role": "assistant", "content": None, "tool_calls": TC_RESENT}, TOOL]})
+    assert r2["choices"][0]["message"]["content"] == "Here you go."
+    assert up.requests[-1]["messages"][3]["content"] == "<think>\nneed lookup</think>"
+    up.queue.append({"content": "bye", "reasoning": "z"})
+    post(port, {"messages": [SYS, GREET, USER1, {"role": "assistant", "content": None, "tool_calls": TC_RESENT}, TOOL,
+                             {"role": "assistant", "content": "Here you go."}, {"role": "user", "content": "thanks"}]})
+    sent = up.requests[-1]["messages"]
+    assert sent[3]["content"] == "<think>\nneed lookup</think>" and sent[5]["content"] == "<think>\nanswer now</think>Here you go."
+    s = proxy.snapshot()
+    assert s["think_from_field"] == 3 and s["think_stripped"] == 0 and s["miss"] == 0 and s["reinlined"] == 3
+
+
+def test_reasoning_field_unclosed_not_cached(stack):
+    up, proxy, port = stack
+    up.queue.append({"content": "", "reasoning": "partial thinking", "finish_reason": "length"})
+    _, r = post(port, {"messages": [SYS, GREET, USER1]})
+    assert r["choices"][0]["message"]["content"] == ""
+    s = proxy.snapshot()
+    assert s["think_unclosed"] == 1 and s["think_from_field"] == 0 and s["cache_entries"] == 0
+
+
+def test_double_close_splits_at_last_marker(stack):
+    up, proxy, port = stack
+    up.queue.append({"content": "a</think>b</think>c"})
+    _, r = post(port, {"messages": [SYS, GREET, USER1]})
+    assert r["choices"][0]["message"]["content"] == "c"          # 상대역에는 마지막 답변부만
+    assert r["choices"][0]["message"]["reasoning_content"] == "a</think>b"
+    up.queue.append({"content": "d</think>e"})
+    post(port, {"messages": [SYS, GREET, USER1, {"role": "assistant", "content": "c"}, {"role": "user", "content": "?"}]})
+    assert up.requests[-1]["messages"][3]["content"] == "<think>\na</think>b</think>c"   # 원문 그대로 복원

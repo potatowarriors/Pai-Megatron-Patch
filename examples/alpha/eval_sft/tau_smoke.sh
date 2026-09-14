@@ -1,6 +1,6 @@
 #!/bin/bash
 # tau_smoke.sh — τ³-bench 온보딩 스모크 + 복원 ON/OFF differential (docs/SFT_BENCHMARKS.md §3.13 검증 (b)·(c)).
-#   sub1 에서 실행. TOOLS=1 fleet 를 직접 띄우고(기본 GPU 0~3, 262144) 끝나면 내린다.
+#   sub1 에서 실행. TOOLS=1 + reasoning nemotron_v3 fleet 를 직접 띄우고(기본 GPU 0~3, 262144) 끝나면 내린다.
 #   1) A1·A4 게이트 → 2) airline N_TASKS×1 trial W=2 스모크 → 3) 결과 검사(도구 호출 파싱·think 없는 발화·프록시
 #   miss 0·reward 존재·렌더 보존) → 4) airline 앞 DIFF_N 과제를 복원 ON/OFF 로 각 1 trial → differential.json
 #   모든 런은 부분 표본이라 결과는 무효 표기된다(집계 대상 아님).
@@ -17,8 +17,8 @@ log() { echo "[tau-smoke $(date +%H:%M:%S)] $*"; }
 bash "$HERE/suite_running.sh" && { log "❌ 벤치 스위트가 돌고 있다 — 중단"; exit 1; }
 pgrep -f "alpha_serve_venv/bin/[v]llm" >/dev/null && { log "❌ vLLM 이 이미 떠 있다 — 중단"; exit 1; }
 
-log "fleet 기동 TOOLS=1 GPUS=$GPUS max_len=${MAX_LEN:-262144} ckpt=$CKPT"
-( export TOOLS=1 GPUS="$GPUS"; setsid bash "$HERE/serve_fleet.sh" "$CKPT" "${MAX_LEN:-262144}" "$NGPU" "$PROXY" \
+log "fleet 기동 TOOLS=1 reasoning=${REASONING_PARSER:-nemotron_v3} GPUS=$GPUS max_len=${MAX_LEN:-262144} ckpt=$CKPT"
+( export TOOLS=1 GPUS="$GPUS" REASONING_PARSER="${REASONING_PARSER:-nemotron_v3}"; setsid bash "$HERE/serve_fleet.sh" "$CKPT" "${MAX_LEN:-262144}" "$NGPU" "$PROXY" \
     > "$LOGD/fleet_${TAG}.log" 2>&1 < /dev/null & )
 trap 'log "fleet 종료"; bash "$HERE/stop_fleet.sh" "$GPUS" >/dev/null 2>&1 || true' EXIT
 ready=0
@@ -51,12 +51,12 @@ chk(not leak, f"assistant content 에 <think> 누출 0 (실제 {len(leak)})")
 rw = [s for s in sims if (s.get("reward_info") or {}).get("reward") is not None]
 chk(len(rw) > 0, f"reward 채점된 sim {len(rw)}/{len(sims)}; 값 {[ (s['reward_info']['reward']) for s in rw ]}")
 term = {}; [term.__setitem__(s["termination_reason"], term.get(s["termination_reason"], 0) + 1) for s in sims]
-chk(all(k in ("user_stop", "agent_stop", "max_steps") for k in term), f"종료 사유 {term}")
+chk(not any(k in ("infrastructure_error", "unexpected_error", "user_error", "timeout", "agent_error") for k in term), f"하니스 측 종료 사유 없음 — 실제 {term} (too_many_errors/max_steps 는 모델 행동)")
 a = json.load(open(os.path.join(raw, "proxy_airline_before.json"))); b = json.load(open(os.path.join(raw, "proxy_airline_after.json")))
-d = {k: b.get(k, 0) - a.get(k, 0) for k in ("requests", "reinlined", "miss", "miss_first_assistant", "think_stripped", "think_unclosed", "tool_calls", "mixed_content_and_tools", "upstream_errors", "seed_stripped", "sst_forced")}
+d = {k: b.get(k, 0) - a.get(k, 0) for k in ("requests", "reinlined", "miss", "miss_first_assistant", "think_stripped", "think_from_field", "think_unclosed", "tool_calls", "mixed_content_and_tools", "upstream_errors", "seed_stripped", "sst_forced")}
 print("  proxy delta:", d)
 chk(d["upstream_errors"] == 0, "프록시 upstream 오류 0")
-chk(d["think_stripped"] > 0, "think 분리 발생 (skip_special_tokens=false 도달)")
+chk(d["think_stripped"] + d["think_from_field"] > 0, f"think 분리 발생 (텍스트 {d['think_stripped']} / reasoning 필드 {d['think_from_field']})")
 chk(d["miss"] == 0, f"히스토리 복원 miss 0 (reinlined {d['reinlined']})")
 chk(d["miss_first_assistant"] == d["requests"], "합성 인사 = 요청당 1회")
 detail = json.load(open(os.path.join(raw, "..", "results_tau.json")))["tau_detail"]
@@ -97,7 +97,7 @@ for mode in ("on", "off"):
     pr = json.load(open(os.path.join(root, f"{tag}_{mode}", "tau_raw", "proxy_airline_after.json")))
     out[mode] = {"n_sims": len(sims), "agent_prompt_tokens": ptok, "agent_completion_tokens": ctok,
                  "avg_agent_turns": sum(turns) / len(turns) if turns else None, "rewards": rewards, "term": term,
-                 "proxy": {k: pr.get(k) for k in ("reinlined", "miss", "think_stripped", "think_unclosed", "mixed_content_and_tools", "tool_calls")}}
+                 "proxy": {k: pr.get(k) for k in ("reinlined", "miss", "think_stripped", "think_from_field", "think_unclosed", "mixed_content_and_tools", "tool_calls")}}
 json.dump(out, open(os.path.join(root, tag, "differential.json"), "w"), indent=2)
 for m, d in out.items():
     print(f"  [{m:3s}] sims={d['n_sims']} prompt_tok={d['agent_prompt_tokens']} compl_tok={d['agent_completion_tokens']} turns={d['avg_agent_turns']} "

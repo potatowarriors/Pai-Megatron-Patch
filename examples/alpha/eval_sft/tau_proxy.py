@@ -48,7 +48,7 @@ COUNTERS = (
     "requests", "reinlined", "miss", "miss_first_assistant", "seed_stripped", "sst_forced",
     "reasoning_field_inlined",
     # 응답 쪽
-    "think_stripped", "think_absent", "think_unclosed", "tool_calls", "mixed_content_and_tools",
+    "think_stripped", "think_from_field", "think_absent", "think_unclosed", "tool_calls", "mixed_content_and_tools",
     "finish_length", "upstream_errors", "resp_parse_error", "passthrough",
 )
 
@@ -58,12 +58,14 @@ COUNTERS = (
 def split_think(text):
     """`{think}</think>{sep}{answer}` → dict(think, sep, answer, unclosed).
 
+    **마지막** `</think>` 에서 가른다(runners/gen_common.split_think 와 같은 규약) — 모델이 한 턴에 `</think>` 를
+    두 번 내는 경우(2026-09-14 스모크 실측)에도 상대역에는 마지막 답변부만 보인다. 복원은 원문 전체라 무관.
     선행 `<think>`(+개행 1개)는 think 에서 뺀다. `</think>` 가 없고 `<think>` 만 있으면 unclosed.
     둘 다 없으면 think=None, answer=text.
     """
     if not isinstance(text, str):
         return {"think": None, "sep": "", "answer": text, "unclosed": False}
-    i = text.find(THINK_CLOSE)
+    i = text.rfind(THINK_CLOSE)
     if i < 0:
         if THINK_OPEN in text:
             return {"think": None, "sep": "", "answer": "", "unclosed": True}
@@ -253,8 +255,25 @@ class Proxy:
         msg = ch.get("message") or {}
         tcs = msg.get("tool_calls") or []
         c = msg.get("content")
+        # reasoning 파서가 켜진 fleet(τ 규약): think 는 `reasoning`(vLLM 0.25.1) / `reasoning_content` 필드, content 는 답변만.
+        # vLLM 0.25.1 parser engine 은 tool 파서가 켜지면 </think> 토큰을 터미널로 소비하므로 reasoning 파서 없이는
+        # content 가 think+답변이 마커 없이 붙어 나온다(2026-09-14 실측) → τ fleet 는 반드시 reasoning 파서와 함께 뜬다.
+        field = msg.get("reasoning_content") or msg.get("reasoning")
         st = split_think(c) if isinstance(c, str) else None
-        if st is not None and st["think"] is not None:
+        if (st is None or st["think"] is None) and isinstance(field, str) and field.strip():
+            answer = (c or "").strip() if isinstance(c, str) else ""
+            if ch.get("finish_reason") == "length" and not answer and not tcs:
+                msg["content"] = ""
+                self.inc("think_unclosed")
+            else:
+                full = THINK_OPEN + "\n" + field + THINK_CLOSE + (c if isinstance(c, str) else "")
+                new_content = answer if answer else (None if tcs else "")
+                reply = {"role": "assistant", "content": new_content, "tool_calls": tcs}
+                self.cache_put(step(h_req, reply), full)
+                msg["content"] = new_content
+                msg["reasoning_content"] = field
+                self.inc("think_from_field")
+        elif st is not None and st["think"] is not None:
             answer = st["answer"].strip()
             full = c if c.lstrip().startswith(THINK_OPEN) else THINK_OPEN + "\n" + c
             new_content = answer if answer else (None if tcs else "")
