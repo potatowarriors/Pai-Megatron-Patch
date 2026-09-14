@@ -147,7 +147,7 @@ except Exception:
     pass
 PX_KEYS = ("requests", "reinlined", "miss", "miss_first_assistant", "think_stripped",
            "think_from_field", "think_absent", "think_unclosed", "tool_calls", "reattach", "miss_rate",
-           "reasoning_field_inlined", "reasoning_field_dropped")
+           "reasoning_field_inlined", "reasoning_field_dropped", "restored")
 proxy = {k: px[k] for k in PX_KEYS if k in px}
 invalid = []
 if not px:
@@ -157,18 +157,26 @@ else:
         invalid.append(f"복원 켠 채 miss_rate {px['miss_rate']:.3f} > 0.05 — 이력 복원이 새고 있다")
     if px.get("requests", 0) and (px.get("think_stripped", 0) + px.get("think_from_field", 0)) == 0:
         invalid.append("추론 미관측 — fleet 가 reasoning 을 분리하지 않는다(REASONING_PARSER 확인)")
-    # SWE 는 mini-swe-agent(litellm)가 이력에 reasoning_content 를 **다시 실어 보낸다** (tau2 와 다름).
-    # 그래서 복원은 캐시(reinlined)가 아니라 필드 인라인(reasoning_field_inlined)으로 일어나고 miss 가
-    # 원천적으로 0/0 이다 — 위 miss_rate 규칙은 SWE 에서 아무것도 못 잡는다. 대신 두 가지를 본다.
-    restored = px.get("reinlined", 0) + px.get("reasoning_field_inlined", 0)
+    # 복원 판정은 tau_proxy 의 restored(= 이력 content 에 실제로 넣은 총수, a834e48)로 한다.
+    # 캐시 복원과 reasoning_content 필드 인라인을 둘 다 센다. SWE 는 mini-swe-agent(litellm)가 이력에
+    # reasoning_content 를 **다시 실어 보내므로** 복원이 전부 필드 경로로 일어나고 reinlined·miss 는 0/0 —
+    # 위 miss_rate 규칙은 SWE 에서 아무것도 못 잡는다. 이 두 규칙이 그 자리를 메운다.
+    if "restored" in px:
+        applied = px["restored"]
+    elif px.get("reattach"):
+        # a834e48 이전 통계: restore 에서는 reinlined 가 곧 적용 수다.
+        applied = px.get("reinlined", 0) + px.get("reasoning_field_inlined", 0)
+    else:
+        # a834e48 이전 strip 통계: reinlined 는 **캐시 적중일 뿐 적용되지 않는다**. 합산하면 정상 strip 을
+        # 누수로 오판한다(2026-09-14 재검증 strip: reinlined 66 · 이력 0/10).
+        applied = px.get("reasoning_field_inlined", 0)
     multi = px.get("requests", 0) > 1
-    if px.get("reattach") and multi and restored == 0:
+    if px.get("reattach") and multi and applied == 0:
         invalid.append("복원 켰는데 다회차 요청에서 복원 0건 — 이력에 추론이 들어가지 않았다")
-    # tau_proxy 의 필드 인라인 경로가 --no-reattach 를 확인하지 않던 버그(2026-09-14 발견, 77040d3 수정)의
-    # 재발 방지. strip 인데 추론이 이력에 들어갔으면 restore 와 구분되지 않아 ON/OFF 비교가 오염된다.
-    if px.get("reattach") is False and px.get("reasoning_field_inlined", 0) > 0:
-        invalid.append(f"strip 모드인데 추론이 이력에 {px['reasoning_field_inlined']}회 인라인됨 — "
-                       "restore 와 구분되지 않는다(tau_proxy 필드 경로가 reattach 를 무시)")
+    # 77040d3 이전 tau_proxy 는 필드 인라인 경로가 --no-reattach 를 무시했다 → strip 에서도 추론이 이력에
+    # 들어가 restore 와 구분되지 않았다. 재발 시 ON/OFF 비교가 오염되므로 무효.
+    if px.get("reattach") is False and applied > 0:
+        invalid.append(f"strip 모드인데 추론이 이력에 {applied}회 삽입됨 — restore 와 구분되지 않는다")
 if invalid:
     res["no_answer,none"] = 1.0
 json.dump({"results": {"swe_bench_verified": res},
@@ -188,7 +196,7 @@ print(f"[swe] 게이트 — 빈패치 {empty}/{total} = {empty/max(total,1)*100:
 if px:
     print(f"[swe] 프록시 — 모드 {os.environ.get('SWE_THINK','restore')} · 요청 {px.get('requests',0)} · "
           f"추론(필드 {px.get('think_from_field',0)} / 인라인 {px.get('think_stripped',0)} / 없음 {px.get('think_absent',0)}) · "
-          f"캐시복원 {px.get('reinlined',0)} · 필드 인라인 {px.get('reasoning_field_inlined',0)} / 버림 "
-          f"{px.get('reasoning_field_dropped',0)} · miss {px.get('miss',0)} ({px.get('miss_rate',0)*100:.1f}%)")
+          f"복원 {px.get('restored','—')} (캐시적중 {px.get('reinlined',0)} · 필드 인라인 {px.get('reasoning_field_inlined',0)} / 버림 "
+          f"{px.get('reasoning_field_dropped',0)}) · miss {px.get('miss',0)} ({px.get('miss_rate',0)*100:.1f}%)")
 PY
 echo "== SWE 완료: $OUT =="

@@ -753,14 +753,19 @@ mini-swe-agent → **컨테이너 안 tau_proxy :8110** → :8199 역터널 → 
 **tau_proxy 버그와 수정**: `on_request()` 의 필드 인라인 블록이 `self.reattach` 를 확인하지 않았다(캐시 경로만 확인).
 tau2 는 필드를 안 보내 드러나지 않았다. integrate-tau3-bench-alpha 세션이 77040d3 에서 고쳤다 — reattach OFF 면
 필드를 떼기만 하고 `reasoning_field_dropped` 로 센다. 수정 후 SWE 경로 실측에서 두 모드가 갈렸다(위 표).
-참고: strip 에서도 `reinlined` 가 증가하는데, 이는 "캐시 적중" 계수일 뿐 적용은 `reattach` 가 막는다 — 판단은 upstream 이력으로.
+참고: strip 에서도 `reinlined`(캐시 적중)는 증가한다. 실제 삽입은 `restored`(a834e48)가 센다 — strip 은 0.
 
-**무효 규칙** (`run_swe.sh` 파서, `swe_detail.invalid`):
+**무효 규칙** (`run_swe.sh` 파서, `swe_detail.invalid`). 복원 판정은 tau_proxy 의 **`restored`**
+(= 이력 content 에 실제로 넣은 총수, 캐시 복원 + 필드 인라인, a834e48) 하나로 한다:
 - 프록시 통계 없음
-- 복원 켠 채 `miss_rate > 0.05` (τ³ 와 동일 — SWE 에서는 사실상 발동 안 함)
+- 복원 켠 채 `miss_rate > 0.05` (τ³ 와 동일 — SWE 는 필드 경로라 miss 가 0/0 이어서 사실상 발동 안 함)
 - 추론 미관측 (`think_stripped + think_from_field == 0`)
-- **복원 켰는데 다회차 요청에서 복원 0건** (`reinlined + reasoning_field_inlined == 0`)
-- **strip 인데 `reasoning_field_inlined > 0`** — 위 버그의 재발 방지
+- **restore 인데 다회차 요청에서 `restored == 0`**
+- **strip 인데 `restored > 0`** — 77040d3 이전 버그의 재발 방지
+
+`restored` 가 없는 과거 통계는 모드별로 대체한다. restore 는 `reinlined + reasoning_field_inlined`, strip 은
+`reasoning_field_inlined` 만 — **strip 의 `reinlined` 는 캐시 적중일 뿐 적용되지 않으므로 합산하면 정상 strip 을
+누수로 오판한다**(수정 후 strip 실측: 적중 66 · 이력 0/10). 스모크 통계 4건 재판정으로 확인했다.
 
 복원이 낫다고 가정하지 않는다: τ airline 5과제 ON 0/5 vs OFF 3/5(§3.13). 복원은 매 턴 프롬프트를 추론만큼 키워
 긴 궤적에서 262144 창 초과를 늘릴 수 있다. 77040d3 로 ON/OFF 비교가 성립하므로 정식 측정에서 함께 잰다.
