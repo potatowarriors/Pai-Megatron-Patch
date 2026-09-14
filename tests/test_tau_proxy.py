@@ -212,7 +212,8 @@ def test_reasoning_content_field_is_inlined(stack):
     post(port, {"messages": [SYS, {"role": "assistant", "content": "hello", "reasoning_content": "why"}, USER1]})
     sent = up.requests[-1]["messages"]
     assert sent[1]["content"] == "<think>\nwhy</think>hello" and "reasoning_content" not in sent[1]
-    assert proxy.snapshot()["reasoning_field_inlined"] == 1
+    s = proxy.snapshot()
+    assert s["reasoning_field_inlined"] == 1 and s["restored"] == 1 and s["reinlined"] == 0   # 필드 경로도 restored 에 합산
 
 
 def test_unclosed_think_and_length(stack):

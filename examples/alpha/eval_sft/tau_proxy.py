@@ -45,7 +45,9 @@ H0 = hashlib.sha256(b"tau_proxy_v1").digest()
 
 COUNTERS = (
     # 요청 쪽
-    # reinlined = 캐시 적중(복원 가능), restored = 실제로 content 에 넣은 수. --no-reattach 는 reinlined 만 오르고 restored=0.
+    # reinlined = 캐시 적중(복원 가능 턴). restored = 실제로 content 에 think 를 넣은 **총수**(캐시 복원 + 필드 인라인).
+    # --no-reattach 는 reinlined 만 오르고 restored=0. 필드를 재전송하는 하니스(mini-swe-agent)는 캐시 대신 필드 경로로
+    # 복원되므로 reinlined=0 이어도 restored=reasoning_field_inlined 가 된다 — "복원됐는가"는 restored 하나로 판정.
     "requests", "reinlined", "restored", "miss", "miss_first_assistant", "seed_stripped", "sst_forced",
     "reasoning_field_inlined", "reasoning_field_dropped",
     # 응답 쪽
@@ -217,6 +219,7 @@ class Proxy:
                     if self.reattach:
                         m["content"] = THINK_OPEN + "\n" + rc + THINK_CLOSE + (c or "")
                         self.inc("reasoning_field_inlined")
+                        self.inc("restored")
                     else:
                         self.inc("reasoning_field_dropped")
             h = step(h, m)
