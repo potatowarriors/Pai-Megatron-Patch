@@ -51,7 +51,8 @@ COUNTERS = (
     "requests", "reinlined", "restored", "miss", "miss_first_assistant", "seed_stripped", "sst_forced",
     "reasoning_field_inlined", "reasoning_field_dropped",
     # 응답 쪽
-    "think_stripped", "think_from_field", "think_absent", "think_unclosed", "tool_calls", "mixed_content_and_tools",
+    "think_stripped", "think_from_field", "think_absent", "think_unclosed", "think_unclosed_stop",
+    "tool_calls", "mixed_content_and_tools",
     "finish_length", "upstream_errors", "resp_parse_error", "passthrough",
 )
 
@@ -281,6 +282,11 @@ class Proxy:
                 msg["content"] = ""
                 self.inc("think_unclosed")
             else:
+                if not answer and not tcs:
+                    # 모델이 </think> 를 닫지 않고 답을 쓴 채 종료(finish=stop): 파서가 전부 reasoning 으로 분류해 답변이 빈다.
+                    # 복원하면 이력에 `<think>{답}</think>`+빈 답변이 남아 모델이 그 패턴을 베끼며 루프로 굳을 수 있다
+                    # (2026-09-14 TB-2 실측: restore 385/425 vs strip 38/262 스텝). 동작은 유지하고 여기서 센다.
+                    self.inc("think_unclosed_stop")
                 full = THINK_OPEN + "\n" + field + THINK_CLOSE + (c if isinstance(c, str) else "")
                 new_content = answer if answer else (None if tcs else "")
                 reply = {"role": "assistant", "content": new_content, "tool_calls": tcs}

@@ -373,3 +373,13 @@ def test_no_reattach_drops_reasoning_content_field():
     assert sent["content"] == "ok" and "reasoning_content" not in sent and "</think>" not in sent["content"]
     s = proxy.snapshot()
     assert s["reasoning_field_dropped"] == 1 and s["reasoning_field_inlined"] == 0
+
+
+def test_unclosed_think_at_stop_is_counted_but_still_cached(stack):
+    """finish=stop 인데 reasoning 만 있고 답변·도구호출이 없음 = 모델이 </think> 를 안 닫고 답을 쓴 턴. 카운트하고 동작은 유지."""
+    up, proxy, port = stack
+    up.queue.append({"content": "", "reasoning": "the answer written inside think", "finish_reason": "stop"})
+    _, r = post(port, {"messages": [SYS, GREET, USER1]})
+    assert r["choices"][0]["message"]["content"] == ""
+    s = proxy.snapshot()
+    assert s["think_unclosed_stop"] == 1 and s["think_from_field"] == 1 and s["think_unclosed"] == 0 and s["cache_entries"] == 1
