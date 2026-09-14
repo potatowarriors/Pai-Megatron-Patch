@@ -145,11 +145,17 @@ keepthink 렌더 + agentic 카테고리 5% 내부 재비례가 경로).
 3. **64k/128k 버킷은 항상 같은 템플릿 세대로 쌍 변환** (§4 여집합 규칙).
 4. **서빙/RL/평가는 tokenizer_v5 디렉토리의 apply_chat_template만 사용** —
    커스텀 프롬프트 조립은 시나리오 분기를 우회해 분포를 깨뜨린다. Terminus식
-   (tool 결과를 role=user로 주입) 하네스는 보존 혜택이 없다.
+   (tool 결과를 role=user로 주입) 하네스는 템플릿 **기본값으로는** 보존 혜택이 없다(비도구 시나리오로 판정).
+   **사용자 규칙(2026-09-14): 도구를 쓰는 궤적은 restore, 도구 없는 대화는 strip** — 시나리오 판정이 아니라 의미로
+   가른다. 터미널 학습셋 NTC 는 이 규칙대로 `--keep-history-think` 로 보존 렌더했으므로, Terminus식 하니스를 평가할
+   때는 `truncate_history_thinking=false` 를 명시해야 학습과 맞는다(`SFT_BENCHMARKS.md` §3.14 TB-2).
 5. **에이전트 하네스 요건**: 보존 혜택을 받으려면 하네스가 assistant 턴의
    reasoning_content를 messages에 유지·재전달해야 한다 (없으면 남길 게 없음).
    재전달하지 않는 하니스(tau2-bench 등)는 `eval_sft/tau_proxy.py` 를 사이에 둔다 — 응답에서 think 를 떼고 다음 요청
-   히스토리에 원문을 복원한다(`SFT_BENCHMARKS.md` §3.13).
+   히스토리에 원문을 복원한다(`SFT_BENCHMARKS.md` §3.13). SWE(mini-swe-agent)·TB-2(terminus-2)도 같은 프록시를 쓴다(§3.14).
+   **함정: vLLM 0.25.1 은 추론을 `reasoning` 키로 돌려준다.** `reasoning_content` 만 읽는 하니스(harbor)는 재전달 옵션을
+   켜도 받은 게 없어 조용히 strip 으로 돈다 — 프록시가 `reasoning_content` 로 옮겨 적는다. 재전달 여부는 옵션이 아니라
+   **upstream 요청 본문과 prompt_tokens** 로 확인한다(`/tokenize` 는 `reasoning_content` 를 버려 검증에 못 쓴다).
 6. **구 bins 디렉토리 삭제 금지** — 본 런 개시·검증 후 공간 회수 시점에 정리.
 7. 블렌드 yaml 갱신 시 헤더의 재산출 규칙(카테고리 설계단위 고정 + 내부
    real-token 비례 + swe 1.0ep 앵커)을 따를 것 — 수동 가중치 수정 금지.

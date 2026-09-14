@@ -9,13 +9,17 @@ instruct 능력을 측정한다. 참조 좌표는 DSV4 post-training 표 + Nemot
 > (원인·증거: [KNOWN_ISSUES.md](KNOWN_ISSUES.md) 2026-08-30). 새 T1 은 §3.6, 게이트는 §7.
 > 게이트 G1~G3 를 통과하기 전에는 어떤 수치도 `results/TRACKING.md` 에 기록하지 않는다.
 
-## 0. 결정 로그 (사용자, 2026-08-29)
+## 0. 결정 로그 (사용자)
 
 | 결정 | 내용 |
 |---|---|
 | SWE-bench·Terminal-Bench | **필수 요구**. Backend.AI 노드는 docker 불가(§4) → **외부 docker 호스트 gpu06 DinD 컨테이너로 해결·검증 완료**(2026-08-29, [EVAL_DOCKER_NODE.md](EVAL_DOCKER_NODE.md)). 하니스 구축 대기 |
 | judge | **gemini-3.7-flash** 확정(사용자, 2026-08-29). 키 검증 완료(`examples/alpha/.env`). 러너는 provider-agnostic(Gemini/OpenAI 호환) |
 | 실행 노드 | sub1 (유휴 8×H100). main1은 SFT 학습 전용 |
+| Terminal-Bench 버전 (09-07) | TB-1 → **TB 2.0 + Harbor + Terminus-2** 가 정본, TB-1 은 참고치. 학습 데이터가 Terminus-2 스키마다 (§3.11) |
+| SWE 인스턴스 이미지 (09-08) | **표준 정책** — 인스턴스별 이미지 500개를 상시 보존하지 않고 실행 후 정리(`docker_gc.sh` 기본). 레이어는 공유된다 (§7 디스크, `KNOWN_ISSUES` 09-08) |
+| 평가 대상 (09-13) | phase-1·2·3 계보 폐기 → 최종 단일 SFT(`SFT_FINAL_PLAN.md`). phase-1 최종 iter2448 은 **기준선**으로 잰다 |
+| 에이전틱 추론 조건 (09-14) | **도구를 쓰는 평가 = restore**(이전 턴 think 보존), **도구 없는 평가 = strip**(DSV4). SFT 데이터가 이 기준으로 만들어졌다. 에이전틱 fleet 는 reasoning 파서 `nemotron_v3` + 게이트 A5, SWE·TB-2 는 `tau_proxy` 로 복원 (§3.14) |
 
 ## 1. DSV4 테이블 26종 판정
 
@@ -98,9 +102,12 @@ MRCR 도 미착수. 착수 시 §6 작업 큐에 올린다.
 | 단계 | `--max-model-len` | TOOLS | 파서 | 게이트 |
 |---|---:|---|---|---|
 | T1 코어 · T3 판정 | 40,960 | off | — | G1·G2·G3 |
-| **에이전틱** (SWE·Terminal) | **106,496** | **on** | **`qwen3_xml`** | A1·A2·A3·A4 |
-| **τ³-bench** (fleet **재기동**: + `REASONING_PARSER=nemotron_v3`, `tau_proxy` :8110 경유) | 262,144 | **on** | `qwen3_xml` + **nemotron_v3** + 프록시 복원 | A1·A4 + **T1·T1b·T2** |
-| T2 롱컨텍스트 (RULER) | 139,264 | off | — | G1·G2·G3 |
+| **에이전틱** (SWE · TB-2) | **262,144** | **on** | **`qwen3_xml` + reasoning 파서 `nemotron_v3`** · 컨테이너 내 `tau_proxy`(SWE :8110 · TB-2 :8111) | A1·A2·A3·A4·**A5** |
+| **τ³-bench** (에이전틱 fleet 그대로, 재기동 없음 — 3799c62) | 262,144 | **on** | 같은 fleet + sub1 `tau_proxy` :8110 | + **T1·T1b·T2** |
+| T2 롱컨텍스트 (RULER) | 262,144 | off | — | G1·G2·G3 |
+
+길이는 `run_suite.sh` 가 정본이다(`AGENTIC_MAX_LEN`·`T2_MAX_LEN` 로 덮어쓴다). 에이전틱 fleet 에 reasoning 파서가 빠지면
+**도구 선언 여부와 무관하게 모든 응답의 `</think>` 가 사라진다** — 2026-09-14 이전 SWE·TB 수치가 그 조건이었다(§3.14).
 
 잘못된 fleet 로 돌리면 **전량 0점**이 나오고, 그 0점은 모델 실패와 구분되지 않는다.
 2026-08-30 SWE 0/20 · Terminal 0/10 이 그 상태였다.
@@ -121,14 +128,14 @@ bash eval_sft/run_tier1.sh http://localhost:8100/v1 <RUN_TAG>
 python3 eval_sft/runners/run_simpleqa.py --base-url http://localhost:8100/v1 --run-name <RUN_TAG>
 python3 eval_sft/runners/run_logickor.py --base-url http://localhost:8100/v1 --run-name <RUN_TAG>
 
-# 2) 에이전틱 — TOOLS fleet + 역터널
+# 2) 에이전틱 — TOOLS + reasoning 파서 fleet + 역터널
 bash eval_sft/stop_fleet.sh 0,1,2,3,4,5,6,7
-TOOLS=1 TOOL_PARSER=qwen3_xml GPUS=0,1,2,3,4,5,6,7 bash eval_sft/serve_fleet.sh $CK 106496 8 8100
+TOOLS=1 TOOL_PARSER=qwen3_xml REASONING_PARSER=nemotron_v3 GPUS=0,1,2,3,4,5,6,7 bash eval_sft/serve_fleet.sh $CK 262144 8 8100
 bash /home/work/vidsearch/tools/start_swe_tunnel.sh
-python3 eval_sft/check_agentic_gates.py --base-url http://localhost:8100/v1        # A1~A4
-bash eval_sft/run_swe.sh <RUN_TAG> 0 6        # 0 = 전량 500
-bash eval_sft/run_terminal.sh <RUN_TAG> 0 4   # 0 = 전량 80
-bash eval_sft/run_tau.sh <RUN_TAG> 0 4 8      # τ³ retail+airline 전량 × 4 trials (docker·역터널 불요, 프록시 자동 기동)
+python3 eval_sft/check_agentic_gates.py --base-url http://localhost:8100/v1        # A1~A5
+bash eval_sft/run_swe.sh <RUN_TAG> 0 12          # 0 = 전량 500. SWE_THINK=restore(기본)|strip
+bash eval_sft/run_terminal_tb2.sh <RUN_TAG> 0 8  # 0 = 전량 89 × 8회. TB2_THINK=restore(기본)|strip
+bash eval_sft/run_tau.sh <RUN_TAG> 0 4 8         # τ³ retail+airline 전량 × 4 trials (docker·역터널 불요, 프록시 자동 기동)
 
 # 3) T2 — 롱 fleet
 bash eval_sft/stop_fleet.sh 0,1,2,3,4,5,6,7
@@ -175,6 +182,11 @@ python3 eval_sft/aggregate_results.py --results-dir eval_sft/results --out eval_
 (`bench/<task>`, `bench/<task>/<metric>`, `diag/`, `latest/` 4세대)가 섞여 있었다.
 정리 후 **36개 / 13섹션**.
 
+**계보가 이어지는 런은 한 곡선으로 합친다.** `log_eval_wandb.py` 의 `RUN_ALIASES` 가 swap 런
+(`…_full_swap_20260901_101523`)을 `…_full_20260828_081911` 곡선에 잇는다 — iter900 에서 블렌드 경로 2개만 바꿔 재개한
+같은 모델이다(LR·loss 연속 확인). 교체 지점은 run config `blend_swap_at_iter=900` 으로 남긴다. phase-1 최종 iter2448 도
+이 곡선의 마지막 점으로 기록된다.
+
 `summary` 에 `latest/` 사본을 만들지 않는다. wandb 가 `run.log` 의 마지막 값을 자동으로
 summary 에 넣으므로, 사본을 만들면 패널 목록이 두 배가 된다.
 
@@ -194,7 +206,7 @@ summary 에 넣으므로, 사본을 만들면 패널 목록이 두 배가 된다
 | **게이트** | |
 | `../tools/emit_generation_config.py` | **G1** — `generation_config.json` 생성·eos 정합 검사. `run_convert.sh` 에 내장 |
 | `check_gates.py` | **G1·G2·G3** — eos 정합 / `</think>` 관측 / 서빙 스모크 |
-| `check_agentic_gates.py` | **A1~A4** — `tool_choice` 수용 / 역터널 / 디스크 / **파서가 실제로 파싱하는지** |
+| `check_agentic_gates.py` | **A1~A5** — `tool_choice` 수용 / 역터널 / 디스크 / **파서가 실제로 파싱하는지** / **think + 도구호출 턴에서 추론이 분리되는지**(`--tool-path required\|report`) |
 | **태스크** | |
 | `tasks/*_aa.yaml` + `tasks/aa_utils.py` | T1 5종 (AA 규약: 0-shot·8단 폴백·avg@k·사고 분리) |
 | `tasks/ruler_niah_*_aa.yaml` + `tasks/ruler_utils.py` | T2 4종 (Reasoning-Off) |
@@ -203,9 +215,13 @@ summary 에 넣으므로, 사본을 만들면 패널 목록이 두 배가 된다
 | `run_tier1.sh` / `run_tier2.sh` | T1 / T2. 설정은 태스크 yaml 정본, CLI 덮어쓰기 없음 |
 | `runners/gen_common.py` | T3 공용 생성 헬퍼 — T1 과 같은 파라미터 정본 |
 | `runners/run_simpleqa.py` / `run_logickor.py` / `gemini_judge.py` | T3 판정 + 심판 |
-| `run_swe.sh` / `run_terminal.sh` | 에이전틱. 전량이 기본, 부분 표본은 무효 표시 |
+| `run_swe.sh` / `run_terminal_tb2.sh` | 에이전틱 정본. 전량이 기본, 부분 표본은 무효 표시. 컨테이너 안에 `tau_proxy` 를 띄워 추론을 복원(SWE :8110 · TB-2 :8111, `SWE_THINK`·`TB2_THINK`) — 프록시 통계로 무효 판정 (§3.14) |
+| `run_terminal.sh` | TB-1 (참고치, `TERMINAL_HARNESS=tb1`) |
 | `run_tau.sh` / `tau_proxy.py` / `tau_combine.py` | **τ³-bench** 러너(sub1 직접) / think 분리·히스토리 복원 프록시(:8110) / pass^k 합산·무효 규칙. 설치 `install_tau2.sh`, 검증 `tau_smoke.sh`·`tau_render_check.py`·`tau_tasks_count.py`, litellm 레지스트리 `configs/alpha_model_registry.json` (§3.13) |
 | `run_suite.sh` | 전 티어 오케스트레이터 (fleet 교체·게이트·판정·집계) |
+| `eval_new_ckpt.sh <RUN_DIR> <ITER> [stages]` | **체크포인트 하나의 정본 진입점** — MG→HF 변환(있으면 `tools/verify_hf_export.py` 로 검증 후 재사용) → `run_suite.sh` |
+| `suite_running.sh` | 스위트 실행 여부 판정 — argv 구조로 본다. 감시·체인 스크립트는 `pgrep -f` 대신 이것을 쓴다(`KNOWN_ISSUES` 09-05) |
+| `docker_gc.sh` | 에이전틱 후 컨테이너 호스트 회수 — build cache·SWE 인스턴스 이미지(기본 정리, `--keep-images`)·산출물 회전(`GC_KEEP_RUNS`) |
 | **집계** | |
 | `bench_registry.py` | **태스크↔지표 매핑 정본**. 이름을 바꾸면 여기만 고친다 |
 | `summarize.py` | 유효/무효 판정 (`no_answer>10%` 또는 `think_closed<50%` → 무효) |
@@ -860,7 +876,8 @@ restore 인데 궤적 `reasoning_content` 가 있는 스텝 0.
 
 | 스크립트 | 역할 |
 |---|---|
-| `eval_ckpt.sh <RUN_DIR> [ITER\|latest] [tiers]` | 한 체크포인트 전체: 변환(MG→HF)→fleet 기동→티어 실행→**깨끗한 종료**→집계 |
+| **`eval_new_ckpt.sh <RUN_DIR> <ITER> [stages]`** | **전 티어 정본 진입점** — 변환 → `run_suite.sh`(티어별 fleet 교체·게이트 G1~G3·A1~A5·`summarize.py` 판정·집계·wandb). 에이전틱을 포함하면 반드시 이 경로 |
+| `eval_ckpt.sh <RUN_DIR> [ITER\|latest] [tiers]` | 08월 말 경량 래퍼: 변환→fleet(maxlen 49,152)→티어 실행→종료→집계. `summarize.py` 판정 출력·에이전틱 규약(§3.14) 없음 — **T1·T3 전용**(최종 SFT 계획의 300 iter T1 이 이것을 쓴다) |
 | `eval_watch.sh <RUN_DIR> [tiers] [poll_s]` | 새 체크포인트 감시→자동 평가 (무인 반복). 중단: `touch <RUN_DIR>/.eval_watch_stop` |
 | `serve_fleet.sh` / `lb_proxy.py` | 단일GPU 서버 N개 + 라운드로빈 프록시 (vLLM DP munmap 우회) |
 | `stop_fleet.sh [GPUS]` | 프로세스그룹 SIGTERM→GPU 회수 검증→필요시 SIGKILL (누수 방지) |
@@ -880,6 +897,27 @@ GPUS=0,1,2,3,4,5,6,7 bash eval_sft/eval_watch.sh outputs/<sft_run> t1 600
 GPUS=0,1,2,3,4,5,6,7 bash eval_sft/eval_ckpt.sh outputs/<sft_run> 300 t1
 ```
 결과: `eval_sft/results/<run>_iter<N>/` (lm_eval 원자료) + `results/TRACKING.md`(iter별 추이).
+
+### 측정 이력 — 체크포인트별 범위와 중단 기록 (2026-09-14 기준)
+
+수치는 `results/TRACKING.md`(자동 생성)에만 둔다. 여기에는 **무엇을 쟀고 무엇이 왜 빠졌는지**를 적는다 — 집계기가
+TRACKING.md 를 매번 새로 쓰므로 그 파일에 손으로 쓴 기록은 사라진다(09-09 중단 기록이 그렇게 지워졌다).
+
+| 체크포인트 | T1 | T3 | T2 | SWE | Terminal | 비고 |
+|---|---|---|---|---|---|---|
+| full_0828 iter300·600·900 | ✅ | ✅ | ✅ | ✅ | ✅ TB-1 | AIME·HMMT 무효(사고 마감률) |
+| swap iter1200·1500 | ✅ | ✅ | ✅ | ✅ | ✅ TB-1 | 1500 은 첫 변환 실패(09-05) 후 재실행 |
+| swap iter1800 | ✅ | ✅ | ✗ | ✅ | ✗ | 사용자 결정(09-07): SWE 까지만 재고 중단 |
+| p2 iter500 | ⛔ 48% | LogicKor 만 | ✗ | ✗ | ✗ | 09-09 T1 중단 — 데이터 결함 재변환이 sub1 GPU 필요(사용자). 결과 없음 |
+| p2 iter602 | ⛔ 43% | ✗ | ✗ | ✗ | ✗ | 09-09 fleet 연결 끊김(`Connection closed`, 다른 세션 실행). 결과 없음 |
+| **swap iter2448 (phase-1 최종)** | ⛔ **94.3%** | ✗ | ✗ | ✗ | ✗ | 09-14 11:07 KST `eval_ckpt.sh … t1,t3` 기동, ~16:05 KST sub1 이 τ³ 스모크·프로브로 재배정되며 결과 없이 중단. 프로브만 남음(identity FAIL · 유령 호출 1/33 PASS) |
+
+- **p2 계열은 재측정하지 않는다** — phase-2·3 계보가 09-13 폐기됐다.
+- **09-14 이전 에이전틱 값(SWE·TB-1)은 reasoning 파서 없는 fleet 조건**이다 — 이력 `</think>` 가 전 턴에서 사라진 채
+  측정됐다. 계열 내 추이는 같은 조건끼리라 유효하나 외부 수치·현행 규약 수치와 비교할 수 없다(§3.14). 표기 방식은
+  사용자 결정 대기.
+- lm_eval 은 끝에서만 결과를 쓴다 — T1 중단은 진행률과 무관하게 **결과 0**이다. 다른 세션이 sub1 을 쓰기 전에
+  `suite_running.sh` 로 실행 여부를 확인한다.
 
 **반복성 불변식**:
 - lm_eval 0.4.12 고정, 태스크·few-shot·seed·gen 파라미터 러너에 하드코딩(`run_tier1.sh`).
@@ -940,6 +978,9 @@ Google Generative Language API v1beta 엔드포인트
 - [ ] **τ³ 첫 본 측정** (retail 114 + airline 50 × 4, ON/OFF 양쪽) → 복원 기본값 확정(사용자) → `run_suite.sh` 에이전틱 단계로 정례화
 - [x] SWE·TB-2 fleet 의 `</think>` 소실 조치 — nemotron_v3 fleet · A5 · SWE/TB-2 추론 복원 (09-14, §3.14)
 - [ ] τ³ telecom — 상대역 엔드포인트가 tools 를 받으면(`--enable-auto-tool-choice`) preflight T2 가 자동 포함
+- [ ] **phase-1 최종 iter2448 기준선** — 09-14 T1 이 94.3% 에서 결과 없이 중단(§3.10 측정 이력). 현행 규약(§3.14)으로 재측정
+- [ ] 09-14 이전 에이전틱 수치(iter300~1800 SWE·TB-1) 표기 — 구 조건 계열로 둘지 무효로 내릴지 (사용자 결정 대기)
+- [ ] NTC 학습 체크포인트에서 TB-2 `steps_reasoning_only`·`think_unclosed_stop` 확인 → 미종결 턴 복원 제외 옵션 필요 여부 판단 (§3.14 관찰)
 - [ ] 미착수 벤치: LiveCodeBench, MRCR. (T4 표준 11종은 범위 제외 — 사용자 결정 2026-08-30)
 
 ## 7. 투입 전 게이트 (2026-08-30 신설, 필수)
@@ -968,6 +1009,7 @@ Terminal 0/10 이 그 상태였다. 실행: `python3 eval_sft/check_agentic_gate
 | A4 | 파서가 모델 형식을 **실제로 파싱** | `tool_calls` 가 채워짐 | **`TOOL_PARSER=qwen3_xml`**. alpha 는 XML `<function=…><parameter=…>` 형식을 배웠다 — hermes(JSON 본문)는 A1 을 통과하고 여기서 걸린다 |
 | A2 | 컨테이너 역터널 | 컨테이너 `:8199` → 200 | `ssh sub1 'bash /home/work/vidsearch/tools/start_swe_tunnel.sh'` |
 | A3 | 컨테이너 디스크 | SWE 300GB / Terminal 150GB 여유 | `docker image prune` |
+| A5 | think + 도구호출 턴에서 추론 분리 | thinking ON + tools 로 호출을 시켜 추론이 reasoning 필드 또는 content 의 `</think>` 로 남음. 결론 2건 일치 시 종료, 최대 8회, 미관측 = FAIL | fleet 를 `REASONING_PARSER=nemotron_v3` 로 재기동. TB-2 도 required(도구 미선언이어도 결함 발생), TB-1 만 report (§3.14) |
 
 에이전틱 fleet 는 **`--max-model-len 106496`** 로 띄운다(T1 의 40960 은 좁아 `ContextWindowExceededError` 가 난다). litellm 은 `alpha_model_registry.json` 의 `max_input_tokens` 로 초과를 판정하므로 서빙 창과 함께 올려야 한다. 러너는 `LITELLM_MODEL_REGISTRY_PATH` 를 export 한다 — 미등록 모델은 비용 계산에서 죽는다.
 
@@ -987,14 +1029,15 @@ Terminal 0/10 이 그 상태였다. 실행: `python3 eval_sft/check_agentic_gate
 
 | 항목 | 크기 | 처리 |
 |---|---:|---|
-| `sweb.eval` 태스크 이미지 498개 | **479.7 GB** | **남긴다.** SWE-bench Verified 인스턴스별 전용 이미지로 다음 체크포인트에서 재사용된다. 지우면 500 × 4.77GB 를 Docker Hub 에서 다시 받아야 하고 그 시간이 디스크보다 비싸다 |
+| `sweb.eval` 태스크 이미지 498개 | 479.7 GB (명목 합산) | **실행 후 정리한다 (09-08 표준 정책).** 인스턴스 이미지는 base → environment → instance 3층 중 맨 위 얇은 층이라 레이어 대부분이 공유된다. 08-31 에는 "남긴다" 로 적었으나 공유 레이어를 빼고 계산한 과장이었다(`KNOWN_ISSUES` 09-08) |
 | build cache | 48 GB (회수가능 31.8) | **매 실행 후 회수** |
 | 미사용 볼륨 · 정지 컨테이너 · dangling 이미지 | 소량 | 회수 |
 | Terminal-Bench 태스크 이미지 | 0개 | 누적하지 않는다 — 태스크마다 빌드하고 정리한다 |
 
 **`bash eval_sft/docker_gc.sh`** 가 회수를 담당하고 `run_suite.sh` 의 에이전틱 단계가
-끝날 때 자동 호출된다. `--images` 를 주면 `sweb.eval` 까지 지우지만 재다운로드 비용을
-감수할 때만 쓴다.
+끝날 때 자동 호출된다. 기본값이 `sweb.eval` 이미지 정리이고, 재취득 시간을 아껴야 할 때만
+`--keep-images` 로 남긴다. 컨테이너 `/opt` 의 에이전트 산출물(궤적·세션 기록)은 docker 명령에
+안 보이는 누적원이라 실행별 디렉토리를 최근 `GC_KEEP_RUNS`(기본 2)개만 남긴다(`KNOWN_ISSUES` 09-07).
 
 게이트 A3 은 `df` 여유에 **build cache 회수 가능량을 더해** 판정한다 — 여유만 보면
 실제보다 적게 보인다(실측: 여유 589GB + 회수가능 31.8GB).
@@ -1002,7 +1045,7 @@ Terminal 0/10 이 그 상태였다. 실행: `python3 eval_sft/check_agentic_gate
 **부분 표본은 무효로 기록한다.** `run_swe.sh`/`run_terminal.sh` 에 N 을 주면 결과 JSON 에
 `subsampled=true` 와 `no_answer=1.0` 이 박혀 집계기가 `무효` 로 표시한다 — NVIDIA 재현
 문서의 *"Never report sub-sampled / limited runs"* 를 코드로 강제한 것이다. 기본은 전량
-(SWE Verified 500 / terminal-bench-core 80).
+(SWE Verified 500 / terminal-bench@2.0 89 × 8회).
 
 부수 불변량:
 - `--max-model-len` ≥ `max_gen_toks` + 프롬프트 최대치. 32768 모델길이에 32768 생성예산은 성립 불가.

@@ -153,7 +153,7 @@ distillation, Nemotron 3 Super 는 단일 혼합 2단계 SFT(2단계가 1단계 
 |---|---|
 | 도구 영역 학습 토큰 중 `<think></think>` 타깃 비중 | p1 ≈35% → **p2 43.6%** → p3 22.9% (평가 하니스는 전부 thinking ON) |
 | 100% 무사고 셋 | swe_v1_r2e·swe_v2_openhands·opencode (p2 도구 영역 학습 토큰의 38.4%); 부분 무사고 swe_v3 38.5%·terminus_keephist 50.2%·cuda 64.4% |
-| agentic_v2_ia 사용자 경계 reasoning 보존 학습 행 | 75%. TB-2·search 하니스는 재전달하나 채팅 서빙(`--reasoning-parser`)은 분리 후 미재전송 — DSV4 결정의 알려진 한계 |
+| agentic_v2_ia 사용자 경계 reasoning 보존 학습 행 | 75%. TB-2·search 하니스는 재전달하나 채팅 서빙(`--reasoning-parser`)은 분리 후 미재전송 — DSV4 결정의 알려진 한계. **정정(09-14)**: TB-2 는 `interleaved_thinking=true` 와 프록시 없이는 재전달하지 않았다(vLLM `reasoning` 키 불일치, `SFT_BENCHMARKS.md` §3.14) |
 | tool_call 인자 non-string 값 | agentic_v2_tc 28.5% 호출(bool 81·int 162·list 61) — 템플릿이 bool 을 Python `True/False` 로 렌더(upstream 동일). 서빙 파서 복원 미검증 |
 | `</think>` 뒤 공백 | swe_v3 22% 만 `</think>\n\n답`, 나머지 `</think>답`; reasoning 끝 개행은 agentless 100%·swe_v3 72%·arc 50% vs 나머지 0 |
 | phase-3 Terminus 이중 렌더 | 같은 3.5k 대화가 swe_v3_keepthink(제거 렌더 3.4M tok)·terminus_keephist(보존 122M tok)에 공존 — 무시 가능. phase-1 은 122M 전량을 제거 렌더로 1ep 학습 |
@@ -387,7 +387,7 @@ docker 는 레이어를 공유한다.
 
 | 구성 | 크기(09-07) | 성격 |
 |---|---:|---|
-| sweb.eval 이미지 500개 | 509GB | 일회성 · 의도적 보존 |
+| sweb.eval 이미지 500개 | 509GB | 일회성 · 당시 의도적 보존 → 09-08 실행 후 정리로 변경(위 절) |
 | build cache | 100GB | 누적 (prune -f 는 dangling 만) |
 | **/opt/swebench** | **69GB** | **누적 · gc 대상 아님** |
 | **/opt/terminalbench** | **39GB** | **누적 · gc 대상 아님** |
