@@ -978,7 +978,7 @@ Google Generative Language API v1beta 엔드포인트
 - [ ] **τ³ 첫 본 측정** (retail 114 + airline 50 × 4, ON/OFF 양쪽) → 복원 기본값 확정(사용자) → `run_suite.sh` 에이전틱 단계로 정례화
 - [x] SWE·TB-2 fleet 의 `</think>` 소실 조치 — nemotron_v3 fleet · A5 · SWE/TB-2 추론 복원 (09-14, §3.14)
 - [ ] τ³ telecom — 상대역 엔드포인트가 tools 를 받으면(`--enable-auto-tool-choice`) preflight T2 가 자동 포함
-- [ ] **phase-1 최종 iter2448 기준선** — 09-14 T1 이 94.3% 에서 결과 없이 중단(§3.10 측정 이력). 현행 규약(§3.14)으로 재측정
+- [ ] **phase-1 최종 iter2448 기준선** — 09-14 T1 이 94.3% 에서 결과 없이 중단(§3.10 측정 이력). 전 티어 재측정 실행 중(09-14 12:54 UTC~, 사용자 결정: 현행 규약 첫 기준선)
 - [ ] 09-14 이전 에이전틱 수치(iter300~1800 SWE·TB-1) 표기 — 구 조건 계열로 둘지 무효로 내릴지 (사용자 결정 대기)
 - [ ] NTC 학습 체크포인트에서 TB-2 `steps_reasoning_only`·`think_unclosed_stop` 확인 → 미종결 턴 복원 제외 옵션 필요 여부 판단 (§3.14 관찰)
 - [ ] 미착수 벤치: LiveCodeBench, MRCR. (T4 표준 11종은 범위 제외 — 사용자 결정 2026-08-30)
