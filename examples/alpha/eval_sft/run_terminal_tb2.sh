@@ -36,9 +36,10 @@ OUT="$HERE/results/$RUN_NAME"; mkdir -p "$OUT"
 RID="tb2$(echo "$RUN_NAME" | md5sum | cut -c1-8)"
 
 if [ "${SKIP_GATES:-0}" != "1" ]; then
-  # Terminus 는 네이티브 tools 를 안 보낸다 — A5(도구호출 경로) 결함이 적용되지 않으므로 report 로 둔다.
-  python3 "$HERE/check_agentic_gates.py" --base-url "$BASE_URL" --min-disk-gb "${MIN_DISK_GB:-150}" \
-    --tool-path report || {
+  # A5 는 required 다. terminus-2 는 요청에 tools 를 안 보내지만, **TOOLS=1 fleet 에서 reasoning 파서가
+  # 없으면 도구 미선언 요청도 </think> 를 잃는다** — 2026-09-14 실측 6/6(추론문 975자가 마커 없이 JSON 앞에
+  # 붙음). 파서 엔진은 요청의 tools 가 아니라 서버 플래그로 켜진다. A5 PASS = fleet 가 추론을 분리한다.
+  python3 "$HERE/check_agentic_gates.py" --base-url "$BASE_URL" --min-disk-gb "${MIN_DISK_GB:-150}" || {
     echo "[term2] ❌ 게이트 실패 — 중단."; exit 1; }
 fi
 

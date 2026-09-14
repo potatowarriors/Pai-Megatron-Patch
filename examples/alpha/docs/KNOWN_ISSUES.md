@@ -4,7 +4,7 @@
 CLAUDE.md의 "함정 표"는 이 문서의 한 줄 요약이며, 새 사고는 **여기에 서사를 쓰고 CLAUDE.md 표에는 한 줄만** 추가한다.
 날짜는 절대 표기. 두 스테이지 이상 지난 항목은 스테이지 경계에서 `archive/`로 이동.
 
-## 에이전틱 fleet 가 도구 호출 턴마다 `</think>` 를 삼켰다 — SWE·Terminal 수치 전 계열 (2026-09-14 🔶)
+## 에이전틱 fleet 가 `</think>` 를 삼켰다 — SWE·TB-2 전 계열, 도구호출 여부 무관 (2026-09-14 ✅ 수정)
 
 **계기**: τ³ 온보딩 중 다른 세션이 원인을 찾았다(커밋 `6246524`). vLLM 0.25.1 의 도구 파서(qwen3_xml =
 `Qwen3ParserToolAdapter`)는 THINK_END 를 터미널 토큰으로 소비하는데, reasoning 파서가 없으면 분리하지 않고
@@ -41,6 +41,16 @@ CLAUDE.md의 "함정 표"는 이 문서의 한 줄 요약이며, 새 사고는 *
 **게이트가 못 잡은 이유**: G2 는 도구 없는 T1 fleet 에서만 `</think>` 를 보고, A4 는 `enable_thinking: False`
 로 도구 파싱만 본다. **"think + 도구호출이 한 턴에 같이 나오는 경로" 를 검사한 게이트가 없었다.**
 
+**정정 — 범위가 더 넓었다 (같은 날 실측)**. 처음엔 도구호출 턴만의 문제로 보고 "TB-2 는 요청에 tools 를 안 보내
+도구 파서 경로가 아니다" 고 판단했다. **틀렸다.** sub1 에 파서 없는 TOOLS=1 백엔드를 띄워 도구 미선언 thinking ON
+요청을 6회 보내니 **6/6 모두 추론문이 마커 없이 JSON 앞에 붙었다**(`…as indicated.{"analysis": …`). 파서 엔진은
+요청의 tools 가 아니라 **서버 플래그**로 켜지고, 켜지면 모든 응답의 THINK_END 를 소비한다. TB-2 도 영향을 받았고
+09-07 TB-2 스모크의 명령 추출 4/8 이 이것으로 설명된다. 소스(terminus-2 가 tools 를 안 보냄)는 맞게 읽었지만
+**vLLM 동작을 가정한 것**이 오류였다 — 가정은 실측으로 닫아야 한다.
+
+별도로 **TB-1 은 이 결함과 무관한 다른 왜곡**이었다: `terminus_1.py` 가 `response_format=json_schema` 를 보내
+guided decoding 이 추론을 문법으로 차단했다(iter1500 15,819 에피소드 100% `{` 로 시작).
+
 **판정**:
 - iter300~1800 의 SWE-bench · Terminal-Bench(TB-1) 수치는 **같은 결함 조건에서 일관되게** 측정됐다 — 계열 내
   추이 비교는 유효하나, 의도한 평가 조건이 아니며 외부 수치와 비교할 수 없다.
@@ -50,6 +60,9 @@ CLAUDE.md의 "함정 표"는 이 문서의 한 줄 요약이며, 새 사고는 *
   mini-swe-agent·terminus-2 는 그 필드를 이력에 재전송하지 않는다 → 이전 턴이 다시 `<think></think>답변` 으로
   렌더된다. τ³ 는 `tau_proxy.py` 가 추론을 캐시·복원해 학습 형식(interleaved)을 맞춘다. SWE·TB-2 에도 같은
   복원 경로가 필요하다.
+
+**수정 (2026-09-14)**: 에이전틱 fleet 를 `nemotron_v3` 로(30df05b), 게이트 A5 추가(b674997 · TB-2 required),
+SWE 는 컨테이너 내 tau_proxy 로 추론 복원(30df05b). 실측 검증과 운영 규칙은 `SFT_BENCHMARKS.md` §3.14.
 
 ## ko_chat v1/v2 폐기 — 비-reasoning 교사(gemma-4-31B)의 가짜 reasoning (2026-09-09 ✅ 폐기 결정, GLM-5.3 재합성)
 

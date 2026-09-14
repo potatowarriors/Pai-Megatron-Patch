@@ -679,6 +679,92 @@ G2 게이트 전제(`</think>` 관측)는 tool 파서 없는 fleet 에서만 성
 **실행**: `bash eval_sft/run_tau.sh <RUN_TAG> [N=0] [TRIALS=4] [W=8]` (스위트는 `run_suite.sh` 에이전틱 단계, `TAU_N/TAU_TRIALS/TAU_W`).
 스모크: `bash eval_sft/tau_smoke.sh <HF_CKPT>` (sub1, fleet 자동 기동·종료).
 
+## 3.14 에이전틱 fleet 의 추론 분리 — reasoning 파서 · 게이트 A5 · SWE 추론 복원 (2026-09-14)
+
+사고 서사: `KNOWN_ISSUES.md` 2026-09-14. 이 절은 **평가 조건과 운영 규칙**이다.
+
+### 핵심 사실 — TOOLS=1 fleet 는 reasoning 파서가 없으면 **모든 응답**의 `</think>` 를 잃는다
+
+vLLM 0.25.1 의 파서 엔진(qwen3_xml)은 서버 플래그 `--enable-auto-tool-choice --tool-call-parser qwen3_xml`
+로 켜지고, reasoning 파서가 없으면 THINK_END 를 소비하고 마커만 떨어뜨린다. **요청의 `tools` 필드와 무관하다.**
+
+| 실측 (sub1, hfmodel_0002448, 2026-09-14) | 파서 없음 (:8000) | nemotron_v3 (:8001) |
+|---|---|---|
+| A5 (도구 선언 + thinking ON) | **FAIL** (결론 2건 fail 2) | **PASS** (reasoning 필드 319자) |
+| 도구 미선언 + thinking ON × 6 | **6/6 추론문이 마커 없이 JSON 앞에 붙음** | content 가 `{` 로 바로 시작, reasoning 필드 4,476자 |
+
+"도구를 안 보내면 도구 파서 경로를 안 타니 안전하다" 는 가정은 **틀렸다** — T1 fleet(TOOLS=0)에서 G2 가
+늘 `</think>` 를 본 것과 차이는 TOOLS 플래그뿐이다.
+
+### 세 하니스는 서로 다른 추론 조건에서 측정됐다 (iter300~1800)
+
+| 하니스 | 요청 tools | response_format | 실제 추론 조건 | 근거 |
+|---|---|---|---|---|
+| SWE (mini-swe-agent) | 보냄 | 없음 | thinking ON, `</think>` 소실 → 이력이 `<think></think>`+추론문으로 재렌더 | 보존 궤적 0/148,836턴 |
+| **TB-1** (terminus v1) | 안 보냄 | **json_schema** | **추론이 문법으로 차단** — 한 번도 생성되지 않음 | iter1500 에피소드 15,819건 100% `{` 로 시작 |
+| TB-2 (terminus-2) | 안 보냄 | 없음 | thinking ON, `</think>` 소실 → 추론문이 JSON 앞에 붙음 | 위 6/6 · 09-07 스모크 명령 추출 4/8 |
+
+TB-1 은 KNOWN_ISSUES 09-09 의 "평가 하니스는 전부 thinking ON" 전제가 성립하지 않는다. 계열 내 추이는
+같은 조건끼리라 유효하나 세 하니스를 서로, 또 외부 수치와 비교할 수 없다.
+
+### fleet 플래그 규칙 — 티어마다 갈린다
+
+| fleet | TOOLS | reasoning 파서 | 이유 |
+|---|---|---|---|
+| T1 · T3 | 0 | **없음** | T1 채점(`split_think`)이 content 의 `</think>` 로 사고 마감률을 잰다. 파서가 켜지면 전부 0 |
+| 에이전틱 (SWE · TB-2) · τ³ | 1 | **nemotron_v3** | 없으면 위 결함. `run_suite.sh` 에이전틱 블록 `fleet_up … 1 nemotron_v3`(30df05b) |
+
+τ³ 단계는 에이전틱 fleet 를 그대로 쓴다(재기동 제거 3799c62).
+
+### 게이트 A5 — think + 도구호출 동시 경로
+
+`check_agentic_gates.py`. thinking ON + tools 선언으로 실제 호출을 시키고, 그 턴에서 추론이 **reasoning 필드로
+분리**되거나 **content 의 `</think>` 로 보존**되면 PASS. 결론 난 관측 2개가 일치하면 멈추고 갈리면 3개째 다수결,
+최대 8회. 경로를 한 번도 못 보면 FAIL(미관측을 통과로 쓰지 않는다).
+
+| 러너 | `--tool-path` | 이유 |
+|---|---|---|
+| `run_swe.sh` · `run_tau.sh` · `tau_smoke.sh` · 스위트 에이전틱 블록 | required(기본) | 결함이 측정을 오염 |
+| `run_terminal_tb2.sh` | **required** | 도구 미선언이어도 TOOLS=1 fleet 에서 결함 발생(위 6/6) |
+| `run_terminal.sh` (TB-1) | report | json_schema 라 추론 자체가 없어 결함 무관 |
+
+단위 테스트 `tests/test_check_agentic_gates.py` 18건 — 결함 표본은 iter1800 SWE 궤적의 vLLM 원응답 3건.
+
+### SWE 추론 복원 — 컨테이너 내 tau_proxy
+
+mini-swe-agent → **컨테이너 안 tau_proxy :8110** → :8199 역터널 → sub1 lb_proxy. 터널 불변, TB-2 는 프록시를
+거치지 않는다(도구 미선언 요청은 템플릿이 이력 think 를 어차피 자른다 — 복원 무의미).
+
+| `SWE_THINK` | 동작 |
+|---|---|
+| `restore`(기본) | 이력에 추론 인라인 — 학습 형식(도구 시나리오 interleaved) |
+| `strip` | `--no-reattach` — 이력의 추론 필드를 떼어 버린다(`reasoning_field_dropped`) |
+
+**mini-swe-agent 는 이력에 `reasoning_content` 를 다시 실어 보낸다**(tau2 와 다름). 그래서 SWE 에서 복원은 캐시
+(`reinlined`)가 아니라 **필드 인라인**(`reasoning_field_inlined`)으로 일어나고 miss 가 원천적으로 0/0 이다.
+
+| 스모크 (1인스턴스 · step 12) | 필드 인라인 | 필드 버림 | upstream 이력의 `<think>` |
+|---|---:|---:|---:|
+| restore (수정 전) | 66 (=1+…+11) | — | 11/11 |
+| strip (수정 전) | **66** | — | **11/11** ← strip 이 안 됨 |
+| **restore (77040d3 후)** | **66** | 0 | **9/9** |
+| **strip (77040d3 후)** | 0 | **66** | **0/10** |
+
+**tau_proxy 버그와 수정**: `on_request()` 의 필드 인라인 블록이 `self.reattach` 를 확인하지 않았다(캐시 경로만 확인).
+tau2 는 필드를 안 보내 드러나지 않았다. integrate-tau3-bench-alpha 세션이 77040d3 에서 고쳤다 — reattach OFF 면
+필드를 떼기만 하고 `reasoning_field_dropped` 로 센다. 수정 후 SWE 경로 실측에서 두 모드가 갈렸다(위 표).
+참고: strip 에서도 `reinlined` 가 증가하는데, 이는 "캐시 적중" 계수일 뿐 적용은 `reattach` 가 막는다 — 판단은 upstream 이력으로.
+
+**무효 규칙** (`run_swe.sh` 파서, `swe_detail.invalid`):
+- 프록시 통계 없음
+- 복원 켠 채 `miss_rate > 0.05` (τ³ 와 동일 — SWE 에서는 사실상 발동 안 함)
+- 추론 미관측 (`think_stripped + think_from_field == 0`)
+- **복원 켰는데 다회차 요청에서 복원 0건** (`reinlined + reasoning_field_inlined == 0`)
+- **strip 인데 `reasoning_field_inlined > 0`** — 위 버그의 재발 방지
+
+복원이 낫다고 가정하지 않는다: τ airline 5과제 ON 0/5 vs OFF 3/5(§3.13). 복원은 매 턴 프롬프트를 추론만큼 키워
+긴 궤적에서 262144 창 초과를 늘릴 수 있다. 77040d3 로 ON/OFF 비교가 성립하므로 정식 측정에서 함께 잰다.
+
 ## 3.10 반복 실행 워크플로 (학습 중 체크포인트마다)
 
 학습이 진행되며 체크포인트(300 iters마다)가 나오면 반복 평가한다. 스크립트는 모두
