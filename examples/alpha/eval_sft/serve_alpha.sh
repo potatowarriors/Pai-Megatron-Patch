@@ -22,6 +22,18 @@ export TOKENIZERS_PARALLELISM=false
 # IB admin-disabled 클러스터 (ko_chat serve 전례)
 export NCCL_IB_DISABLE=1 NCCL_SOCKET_IFNAME=eth0 GLOO_SOCKET_IFNAME=eth0
 
+# vLLM 컴파일 캐시(torch_compile_cache 등)의 기본 위치는 ~/.cache/vllm 이다. sub1 의 HOME(/home/work)은 **49GB 루프
+# 볼륨**이라 uv·pip·HF 캐시와 나눠 쓰다 가득 찼고, 2026-09-14 iter2448 fleet 8대가 profile_run 의 컴파일 결과 저장에서
+# `OSError: [Errno 28] No space left on device` 로 전부 기동 실패했다(스위트는 준비 대기 20분 뒤에야 끝난다).
+# 기본을 로컬 오버레이 /tmp(수백 GB)로 둔다. 컨테이너 재시작 시 사라지지만 캐시라 재컴파일로 복구된다.
+export VLLM_CACHE_ROOT="${VLLM_CACHE_ROOT:-/tmp/vllm_cache}"
+mkdir -p "$VLLM_CACHE_ROOT"
+CACHE_AVAIL_GB=$(df -BG --output=avail "$VLLM_CACHE_ROOT" | tail -1 | tr -dc '0-9')
+if [ "${CACHE_AVAIL_GB:-0}" -lt "${MIN_CACHE_GB:-20}" ]; then
+  echo "[serve] ❌ VLLM_CACHE_ROOT=$VLLM_CACHE_ROOT 여유 ${CACHE_AVAIL_GB}GB < ${MIN_CACHE_GB:-20}GB — 컴파일 캐시 저장이 ENOSPC 로 죽는다. 공간 확보 또는 VLLM_CACHE_ROOT 변경" >&2
+  exit 1
+fi
+
 TOOL_FLAGS=""
 if [ "${TOOLS:-0}" = "1" ]; then
   # mini-swe-agent/litellm 이 tool_choice=auto 를 보냄 → vLLM 이 수용하도록.
@@ -30,12 +42,12 @@ if [ "${TOOLS:-0}" = "1" ]; then
 fi
 REASON_FLAGS=""
 if [ -n "${REASONING_PARSER:-}" ]; then
-  # chat API 하니스(τ-bench)용: think 를 reasoning 필드로 분리. vLLM 0.25.1 parser engine 은 tool 파서가 켜지면
-  # </think> 토큰을 터미널로 소비해, reasoning 파서 없이는 content 가 think+답변이 마커 없이 붙는다 (2026-09-14 실측,
-  # SFT_BENCHMARKS §3.13). G2 게이트(</think> 관측)와는 양립하지 않으므로 T1/T3/SWE/Terminal fleet 에는 켜지 않는다.
+  # think 를 reasoning 필드로 분리. vLLM 0.25.1 parser engine 은 tool 파서(TOOLS=1)가 켜지면 도구 선언 여부와 무관하게
+  # </think> 토큰을 소비해, reasoning 파서 없이는 content 가 think+답변이 마커 없이 붙는다 (2026-09-14 실측, §3.13·§3.14).
+  # 에이전틱·τ³ fleet 는 nemotron_v3 로 켠다. T1/T3/T2 fleet 는 끈다 — G2 게이트와 T1 채점이 content 의 </think> 를 본다.
   REASON_FLAGS="--reasoning-parser $REASONING_PARSER"
 fi
-echo "[serve] ckpt=$CKPT max_len=$MAX_LEN DP=$DP port=$PORT tools=${TOOLS:-0} reasoning=${REASONING_PARSER:-off}"
+echo "[serve] ckpt=$CKPT max_len=$MAX_LEN DP=$DP port=$PORT tools=${TOOLS:-0} reasoning=${REASONING_PARSER:-off} cache=$VLLM_CACHE_ROOT(${CACHE_AVAIL_GB}GB free)"
 exec $VENV/bin/vllm serve "$CKPT" \
   $TOOL_FLAGS $REASON_FLAGS \
   --served-model-name alpha \
