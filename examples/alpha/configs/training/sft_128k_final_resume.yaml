@@ -5,8 +5,8 @@
 # sft_128k_final.yaml 전체 복제 + 차이 2가지: ① load: = A 런(alpha_baseline_48L_sft_128k_final_20260913_022854, 본 런 프리셋으로 150 iters
 #   완주, optimizer state 포함 153 GB) ② finetune:/no-load-optim: 제거 — 같은 dataset 연장이라 optimizer·스케줄러·RNG·consumed_samples(24,000)를
 #   그대로 이어받는다 (KNOWN_ISSUES 09-01 ⑥: 재개 프리셋에 finetune/no-load-optim 이 남으면 warmup 재시작·Muon 리셋).
-# 예산·LR·저장 간격은 본 런과 동일: train-samples 457,920 (2,862 iters, 잔여 2,712), cosine 2.5e-5 → 1.5e-6, save/eval 100.
-# 평가 체인은 sub1 에서 병행: scripts/sft_final_eval_watch.sh (100 iters 마다 probe, 300 iters 마다 T1; 변환은 sub1 8 GPU).
+# 예산·LR 은 본 런과 동일: train-samples 457,920 (2,862 iters, 잔여 2,712), cosine 2.5e-5 → 1.5e-6. save 300 / eval(valid) 100 (사용자 09-14).
+# 평가 체인은 sub1 에서 병행: scripts/sft_final_eval_watch.sh (300 iters 마다 probe + T1; 변환은 sub1 8 GPU).
 train-mode: finetune
 
 # ── 예산 / LR ─────────────────────────────────────────────────────────────
@@ -76,7 +76,7 @@ no-weight-decay-cond-type: apply_wd_to_qk_layernorm
 bf16: true
 
 # ── 체크포인트 / 평가 (2,862 iters 규모) ──────────────────────────────────
-save-interval: 100                # 2.1B tok (~9h) 간격 — 프로브·게이트 체인 단위 (사용자, 09-13)
+save-interval: 300                # 6.3B tok (~27h) 간격, 9회 × 153 GB (사용자 09-14 01:40: 100 은 과함 — 저장+valid 11분/회, 4.3 TB). valid 는 100 유지
 # optimizer state 저장 기본 (63c466f) — 무봉합 재개
 ckpt-format: torch_dist
 eval-iters: 4
