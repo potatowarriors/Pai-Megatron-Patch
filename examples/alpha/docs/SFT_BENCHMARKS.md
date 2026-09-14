@@ -31,6 +31,7 @@ instruct 능력을 측정한다. 참조 좌표는 DSV4 post-training 표 + Nemot
 | MRCR | ✅ T2 (≤256K) | openai/mrcr. 1M은 모델 창(262K, 실사용 ~256K) 초과 |
 | SWE Verified | ⚠️ 프록시→풀 | 풀 에이전틱은 docker 경로 확정 후. 그 전엔 oracle-patch + sb-cli 채점 |
 | Terminal Bench 2.0 | **전환 결정 (2026-09-07 사용자)** — TB 2.x + Harbor + **Terminus-2** 를 Terminal 정본 게이트로, TB-1(core 0.1.1 + terminus v1)은 참고치 | 근거: 학습 데이터의 Terminus 행이 Terminus-2 스키마(`analysis/plan/commands{keystrokes,duration}/task_complete`)이고 Ultra 수치가 TB 2.0/2.1 기준. 유효 TB-1 수치가 아직 없어 연속성 손실 없음. 실행 규약(반복 8·temp 1.0/top_p 0.95·max_tokens 65,536·A1~A4 게이트)은 승계. docker 경로는 gpu06 DinD 로 확정됨. 데이터 실측은 `SFT_RL_DATASETS.md` §2.9 |
+| **τ³-bench** (tau2-bench v1.0.1) | ✅ 에이전틱 — **편입 2026-09-14 (사용자)** | tool+agent+user 3자 상호작용. docker 불요 → sub1 직접 + `tau_proxy`(think 분리·복원). 상대역 `gemma-4-12B-it`(외부 vLLM, 비용 0, 사용자 지정) → 리더보드(gpt-5.2 user-sim) 비교 불가, ckpt 추이용. retail 114 + airline 50 base split × 4 trials; telecom 은 상대역이 tools 를 거절해 조건부. §3.13 |
 | IMOAnswerBench / HLE | 후순위 | 15B-A1.8B에 변별력 낮음. HLE는 gated(HF 토큰 필요) |
 | Chinese-SimpleQA | 🔁 대체 | 중국어는 학습 언어 아님 → KMMLU 유지 + KoChat 판정(T3) |
 | Codeforces / Apex / CorpusQA-1M / BrowseComp / HLE-tools / MCPAtlas / Toolathlon / GDPval-AA / SWE Pro·Multilingual | ❌ | 실시간 저지·비공개 scaffolding·1M 창·웹서치 스택·MCP 팜·유료 서비스·docker |
@@ -54,6 +55,7 @@ ckpt 주기 = 300 iters ≈ 27h. 스위트는 그 안에 완주해야 추이가 
 | **T3** 판정 | SimpleQA-Verified · LogicKor | 1,000 + 42×2턴 | **16분** | 격 ckpt |
 | **에이전틱** | SWE-bench Verified | 500 × 1 (**~59,500 LLM 호출**) | **9.4h** (W=6) | 격 ckpt |
 | | Terminal-Bench (core 0.1.1) | 80 × 1 | 미측정 | |
+| | **τ³-bench** retail 114 + airline 50 | 164 × **4** = 656 sims (agent ≈1만 · 상대역 ≈8천 호출) | 추정 W=8 6~8h (스모크 후 실측) | 격 ckpt |
 
 ### 에이전틱은 T1 보다 3배 무겁다 — 소요 추정 시 주의
 
@@ -97,6 +99,7 @@ MRCR 도 미착수. 착수 시 §6 작업 큐에 올린다.
 |---|---:|---|---|---|
 | T1 코어 · T3 판정 | 40,960 | off | — | G1·G2·G3 |
 | **에이전틱** (SWE·Terminal) | **106,496** | **on** | **`qwen3_xml`** | A1·A2·A3·A4 |
+| **τ³-bench** (같은 에이전틱 fleet, `tau_proxy` :8110 경유) | 262,144 | **on** | `qwen3_xml` + 프록시 think 분리 | A1·A4 + **T1·T2** |
 | T2 롱컨텍스트 (RULER) | 139,264 | off | — | G1·G2·G3 |
 
 잘못된 fleet 로 돌리면 **전량 0점**이 나오고, 그 0점은 모델 실패와 구분되지 않는다.
@@ -125,6 +128,7 @@ bash /home/work/vidsearch/tools/start_swe_tunnel.sh
 python3 eval_sft/check_agentic_gates.py --base-url http://localhost:8100/v1        # A1~A4
 bash eval_sft/run_swe.sh <RUN_TAG> 0 6        # 0 = 전량 500
 bash eval_sft/run_terminal.sh <RUN_TAG> 0 4   # 0 = 전량 80
+bash eval_sft/run_tau.sh <RUN_TAG> 0 4 8      # τ³ retail+airline 전량 × 4 trials (docker·역터널 불요, 프록시 자동 기동)
 
 # 3) T2 — 롱 fleet
 bash eval_sft/stop_fleet.sh 0,1,2,3,4,5,6,7
@@ -200,6 +204,7 @@ summary 에 넣으므로, 사본을 만들면 패널 목록이 두 배가 된다
 | `runners/gen_common.py` | T3 공용 생성 헬퍼 — T1 과 같은 파라미터 정본 |
 | `runners/run_simpleqa.py` / `run_logickor.py` / `gemini_judge.py` | T3 판정 + 심판 |
 | `run_swe.sh` / `run_terminal.sh` | 에이전틱. 전량이 기본, 부분 표본은 무효 표시 |
+| `run_tau.sh` / `tau_proxy.py` / `tau_combine.py` | **τ³-bench** 러너(sub1 직접) / think 분리·히스토리 복원 프록시(:8110) / pass^k 합산·무효 규칙. 설치 `install_tau2.sh`, 검증 `tau_smoke.sh`·`tau_render_check.py`·`tau_tasks_count.py`, litellm 레지스트리 `configs/alpha_model_registry.json` (§3.13) |
 | `run_suite.sh` | 전 티어 오케스트레이터 (fleet 교체·게이트·판정·집계) |
 | **집계** | |
 | `bench_registry.py` | **태스크↔지표 매핑 정본**. 이름을 바꾸면 여기만 고친다 |
@@ -278,6 +283,7 @@ the test set size**)"* — **k 는 데이터셋 크기에 반비례한다.** 작
 | **SWE-bench Verified** | 500 | **1** | **리더보드 규약(pass@1 단일 시도)**. Nemotron 의 3 은 런 평균이지 제출 형식이 아니다 |
 | GPQA-Diamond | 198 | 8 | Nemotron 8 (AA 는 5) |
 | **Terminal-Bench** | 80 | **8** | Nemotron 8 (AA 3). `tb --n-attempts` |
+| **τ³-bench** | 164 (retail 114 + airline 50) | **4** | 리더보드 "≥4 선호"(pass^1 주지표, pass^2~4 병기), AA 5. 사용자 확정 2026-09-14 |
 | **LogicKor** | **42** | **8** | 우리 스위트에서 **가장 작다**. Nemotron Multi-Challenge 8 |
 | **AIME25 · HMMT** | 30 | **32** | R1 은 최대 64. 30문항이라 분산이 가장 크다. 32 는 비용 절충 |
 | RULER (구간당) | 20 | 1 | Qwen3 가 길이당 20 샘플을 쓰는 것이 곧 반복이다 |
@@ -596,6 +602,60 @@ before/after 로 그 가설이 갈린다.
 `run_terminal_tb2.sh` 가 실행 후 `trajectory.json` 들을 훑어 `extraction_rate` 를 넣는다
 (검증 2026-09-09: 스모크 잡 재집계 8스텝 중 4 = 50%, 수기 계수와 일치).
 
+## 3.13 τ³-bench 온보딩 — tau2-bench v1.0.1 + think 분리·복원 프록시 (2026-09-14)
+
+**왜**: 도구 사용 능력을 tool + agent + **user** 3자 상호작용에서 재는 표준 벤치. 기술보고서·리더보드가 τ 계열을 쓴다.
+사용자 결정(09-14): τ³ v1.0.1 `base` split(τ² 대비 과제 수정 75건+ → τ² 보고서 수치와 직접 비교 불가, ckpt 간 추이가 목적),
+4 trials, 상대역 = `gemma-4-12B-it` @ `https://gemma4.withai.cj.net:10206/v1`(외부 vLLM, 비용 0 — 매 ckpt API 비용을 피한다).
+
+**구성**
+```
+tau2 run (sub1, tools/tau2-bench/.venv)
+  ├─ agent : litellm openai/alpha ─▶ tau_proxy :8110 ─▶ lb_proxy :8100 ─▶ 에이전틱 fleet (TOOLS=1, reasoning 파서 없음, 262144)
+  └─ user  : litellm openai/gemma-4-12B-it ─▶ 외부 엔드포인트 (tools 없음)
+```
+- docker 불요(도구 = JSON DB 위의 순수 파이썬) → gpu06 컨테이너·역터널 없이 sub1 직접. 설치 `install_tau2.sh`(NFS, 멱등).
+- 과제 수(v1.0.1 실측, `tau_tasks_count.py`): airline 50 · retail 114 · telecom 114 (`base`), mock 10.
+- **telecom 은 조건부**: dual-control 이라 상대역이 도구를 써야 하는데 기본 상대역 엔드포인트는 `tools` 요청을 400 으로 거절
+  (`--enable-auto-tool-choice` 미기동, 09-14 실측). preflight T2 가 판정해 건너뛰고 `tau_detail.skipped_domains` 에 기록.
+- 상대역 12B → 리더보드(gpt-5.2)·보고서 수치와 **비교 불가**. 상대역이 고정이라 ckpt 추이는 유효. 외부 비교치는
+  `TAU_USER_LLM/TAU_USER_ARGS` 로 별도 런(비용 발생, 승인 후).
+
+**왜 프록시인가 (규칙 5 vs 하니스)**: tau2 는 응답의 `content`·`tool_calls` 만 저장하고 `reasoning_content` 를 읽지도
+재전송하지도 않는다. 에이전틱 fleet 는 G2 때문에 reasoning 파서 없이 떠서 content 가 `{think}</think>{answer}` 다.
+그대로 두면 상대역과 COMMUNICATE 채점기가 think 를 발화로 읽고, 파서를 켜면 히스토리에서 think 가 사라진다
+(`INTERLEAVED_THINKING.md` §7 규칙 5). `tau_proxy.py` 가 둘 다 해결한다:
+(1) 응답에서 think 를 떼어 `content` 는 발화만(도구 턴은 `null`), `reasoning_content` 에 think;
+(2) 다음 요청의 히스토리 assistant 턴에 원문(`<think>\n…</think>…`)을 바이트 동일 복원 — 템플릿 119행이 인라인 think 를
+그대로 렌더한다. 키 = 체인 해시 `h_i = sha256(h_{i-1} ‖ canon(m_i))`, canon 은 think 유무·tool-call id·인자 직렬화에
+불변이고 자기 턴까지 포함해 동시 trial 이 충돌하지 않는다. 첫 assistant(tau2 합성 인사 "Hi! How can I help you today?")는
+생성된 적이 없어 `miss_first_assistant` 로 따로 센다. seed 제거(k 반복 붕괴 방지)·`skip_special_tokens=false` 강제.
+한계: 스트리밍 미처리(tau2 는 안 씀), `choices[0]` 만, 문장+도구호출 혼합 턴은 프로토콜 미강제라 오류는 아니지만
+그 문장은 사용자에게 전달되지 않는다(`mixed_content_and_tools` 로 정량화 — 높으면 학습 포맷 신호).
+
+**litellm 함정**: `LITELLM_MODEL_REGISTRY_PATH` 는 mini-swe-agent 의 기능이지 litellm 의 것이 아니다. tau2 는 비용 계산
+실패를 잡아 0 으로 두지만 호출마다 ERROR 로그 → venv 의 `.pth` import 훅(`_tau2_litellm_registry`)이
+`configs/alpha_model_registry.json` 을 `litellm.register_model()`. (`sitecustomize.py` 는 데비안 시스템 파이썬 것이 먼저 잡혀
+무효 — 실측.) 키는 요청 모델명(`openai/alpha`)과 **응답 모델명**(`alpha`, `google/gemma-4-12B-it` — vLLM 이 정식 이름을
+돌려준다) 둘 다 필요.
+
+**결과 규약** (`tau_combine.py`): `results_tau.json` → `tau_retail/airline/telecom` 과 도메인 평균 `tau_bench`, 각
+`pass1..pass4,none`(과제별 comb(c,k)/comb(n,k) 평균, INFRASTRUCTURE_ERROR 제외 = `tau2.metrics` 와 동일, venv 에서 tau2 자체
+계산과 대조) + 진단 `no_answer`(하니스 실패율: infra/unexpected/user_error/timeout/agent_error) · `think_closed`(프록시).
+무효 → `no_answer=1.0`: 부분 표본 · 결과 부재 · sims < tasks×trials · 복원 켠 채 miss_rate>5% · think 미관측 · pass^1 불일치.
+
+**검증 기록**
+| 항목 | 결과 |
+|---|---|
+| 유닛 테스트 | `tests/test_tau_proxy.py` 14 + `tests/test_tau_combine.py` 5 = **19 passed** (분리/복원 왕복·trial 격리·혼합 턴·unclosed·동시성 16스레드·무효 규칙) |
+| 상대역 preflight (실측 09-14) | 등록 4키 · chat OK · 비용 0.0 · **tools 거절**(USER_TOOLS=0) · `extra_body`/`top_p` 수용 |
+| 라이브 fleet 왕복 (도구 없음, 3턴) | think 분리 3/3, 히스토리 복원 reinlined 2 / miss 0. 렌더(`tau_render_check.py`): 도구 시나리오 히스토리 2/2 preserved, 복원 ON 464 vs OFF 323 토큰(차 141 = think). 비도구 시나리오는 템플릿이 자르므로 복원 무효 — 규칙대로 |
+| 템플릿 동일성 | tokenizer_v5 = p2 iter602 hfmodel = phase-1 2448 hfmodel (sha1 동일) → 로컬 렌더 = vLLM 렌더 |
+| **도구 경로 스모크·differential** (`tau_smoke.sh`) | **대기** — TOOLS=1 fleet 필요. sub1 유휴 시 자동 실행(09-14 체인). 결과는 여기 갱신 |
+
+**실행**: `bash eval_sft/run_tau.sh <RUN_TAG> [N=0] [TRIALS=4] [W=8]` (스위트는 `run_suite.sh` 에이전틱 단계, `TAU_N/TAU_TRIALS/TAU_W`).
+스모크: `bash eval_sft/tau_smoke.sh <HF_CKPT>` (sub1, fleet 자동 기동·종료).
+
 ## 3.10 반복 실행 워크플로 (학습 중 체크포인트마다)
 
 학습이 진행되며 체크포인트(300 iters마다)가 나오면 반복 평가한다. 스크립트는 모두
@@ -679,6 +739,8 @@ Google Generative Language API v1beta 엔드포인트
 - [ ] 에이전틱 컨텍스트 초과 대응 — 106,496 로도 일부 초과. 추론 히스토리 누적이 원인
 - [ ] iter600 이후 재측정으로 추이 확보 (수학 2종이 유효로 전환되는 지점 확인)
 - [ ] 오케스트레이터 상시화 — ckpt 감시 → 변환 → `run_suite.sh` → wandb
+- [ ] **τ³-bench 도구 경로 스모크·differential** (`tau_smoke.sh`, TOOLS=1 fleet 필요 — sub1 유휴 시 자동 실행 대기 09-14) → 수치를 §3.13 에 기록 후 `run_suite.sh` 에이전틱 단계로 본 측정
+- [ ] τ³ telecom — 상대역 엔드포인트가 tools 를 받으면(`--enable-auto-tool-choice`) preflight T2 가 자동 포함
 - [ ] 미착수 벤치: LiveCodeBench, MRCR. (T4 표준 11종은 범위 제외 — 사용자 결정 2026-08-30)
 
 ## 7. 투입 전 게이트 (2026-08-30 신설, 필수)
@@ -709,6 +771,14 @@ Terminal 0/10 이 그 상태였다. 실행: `python3 eval_sft/check_agentic_gate
 | A3 | 컨테이너 디스크 | SWE 300GB / Terminal 150GB 여유 | `docker image prune` |
 
 에이전틱 fleet 는 **`--max-model-len 106496`** 로 띄운다(T1 의 40960 은 좁아 `ContextWindowExceededError` 가 난다). litellm 은 `alpha_model_registry.json` 의 `max_input_tokens` 로 초과를 판정하므로 서빙 창과 함께 올려야 한다. 러너는 `LITELLM_MODEL_REGISTRY_PATH` 를 export 한다 — 미등록 모델은 비용 계산에서 죽는다.
+
+### τ³-bench 게이트 T1·T2 (`run_tau.sh` 내장, 2026-09-14)
+
+| # | 게이트 | 판정 | 실패 시 |
+|---|---|---|---|
+| T1 | `tau_proxy` 기동·fleet 통과 + 복원 hit-rate | `/stats` 200, `/v1/models` 200; 런 후 `miss_rate ≤ 5%`, `think_stripped > 0` | miss 는 하니스가 히스토리를 바꿔 보낸 것, think 0 은 경로 우회/파서 ON 의심 → 셀 무효(`no_answer=1.0`) |
+| T2 | 상대역 LLM 응답 + tools 수용 여부 | chat 비어있지 않음(필수) · tools 200 이면 `USER_TOOLS=1` | chat 실패 → 중단. tools 거절 → telecom 자동 스킵·사유 기록 |
+| 렌더 | 복원된 요청이 템플릿에서 `<think>\n…</think>` 로 남는가 | `tau_render_check.py last_request.json` 보존 ≥1, 'other' 0 | 프록시 복원 또는 템플릿 경로 의심 |
 
 ### 컨테이너 디스크 — 무엇이 쌓이고 무엇을 지우나 (2026-08-31 실측)
 

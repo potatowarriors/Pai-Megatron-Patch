@@ -46,7 +46,7 @@
 | [MUON_OFFLOAD_BACKPORT.md](MUON_OFFLOAD_BACKPORT.md) | 2026-08-22 | PR #6244 chunked offload 백포트 S0~S5, 128K@CP8 GO |
 | [SFT_RL_DATASETS.md](SFT_RL_DATASETS.md) | 2026-08 | SFT·RL 데이터 자산 49종, Ultra 파이프라인 설계, 예산·epoch 근거 |
 | [INTERLEAVED_THINKING.md](INTERLEAVED_THINKING.md) | 2026-08-24 | think-히스토리 규약 정비 (DSV4 분기·IF fan-out·keepthink) + 새 SFT 셋 규칙 9건 (8 = effort 렌더 플래그, 9 = tool_response 렌더 육안) |
-| [SFT_BENCHMARKS.md](SFT_BENCHMARKS.md) | 2026-08-29~ | **SFT 벤치 스위트 정본** — 운영 절차(§2.5)·구성요소(§2.6)·프론티어 규약(§3.4)·태스크 정의(§3.6·§3.9)·측정 결과(§3.8)·게이트 G1~G3·A1~A4(§7) |
+| [SFT_BENCHMARKS.md](SFT_BENCHMARKS.md) | 2026-08-29~ | **SFT 벤치 스위트 정본** — 운영 절차(§2.5)·구성요소(§2.6)·프론티어 규약(§3.4)·태스크 정의(§3.6·§3.9)·측정 결과(§3.8)·게이트 G1~G3·A1~A4·T1~T2(§7)·**τ³-bench 온보딩(§3.13)** |
 | [EVAL_DOCKER_NODE.md](EVAL_DOCKER_NODE.md) | 2026-08-29 | 에이전틱 벤치(SWE·Terminal) 실행용 외부 docker 호스트 gpu06 DinD — 접속·복구·재구축 runbook |
 | [../study/sft_final_blend.md](../study/sft_final_blend.md) | 2026-09-14 | **SFT 최종 블렌드 구성 정본** — 57 멤버 원천·언어·사고 여부·epoch·토큰·비중, 카테고리 vs Ultra, 제외 목록, 생성·검증 절차 |
 | [../study/diloco_sft_ab.md](../study/diloco_sft_ab.md) | 2026-09-14 | **DiLoCo 2노드 vs 단일 노드 SFT A/B 결과** — 같은 데이터 효율 0.60~0.63 정체, 벽시계 가속 1.2×(2×GPU), 오버헤드 3%; 단일 노드 권고 |

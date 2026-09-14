@@ -148,6 +148,8 @@ keepthink 렌더 + agentic 카테고리 5% 내부 재비례가 경로).
    (tool 결과를 role=user로 주입) 하네스는 보존 혜택이 없다.
 5. **에이전트 하네스 요건**: 보존 혜택을 받으려면 하네스가 assistant 턴의
    reasoning_content를 messages에 유지·재전달해야 한다 (없으면 남길 게 없음).
+   재전달하지 않는 하니스(tau2-bench 등)는 `eval_sft/tau_proxy.py` 를 사이에 둔다 — 응답에서 think 를 떼고 다음 요청
+   히스토리에 원문을 복원한다(`SFT_BENCHMARKS.md` §3.13).
 6. **구 bins 디렉토리 삭제 금지** — 본 런 개시·검증 후 공간 회수 시점에 정리.
 7. 블렌드 yaml 갱신 시 헤더의 재산출 규칙(카테고리 설계단위 고정 + 내부
    real-token 비례 + swe 1.0ep 앵커)을 따를 것 — 수동 가중치 수정 금지.
