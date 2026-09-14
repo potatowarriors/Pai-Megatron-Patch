@@ -910,7 +910,7 @@ TRACKING.md 를 매번 새로 쓰므로 그 파일에 손으로 쓴 기록은 �
 | swap iter1800 | ✅ | ✅ | ✗ | ✅ | ✗ | 사용자 결정(09-07): SWE 까지만 재고 중단 |
 | p2 iter500 | ⛔ 48% | LogicKor 만 | ✗ | ✗ | ✗ | 09-09 T1 중단 — 데이터 결함 재변환이 sub1 GPU 필요(사용자). 결과 없음 |
 | p2 iter602 | ⛔ 43% | ✗ | ✗ | ✗ | ✗ | 09-09 fleet 연결 끊김(`Connection closed`, 다른 세션 실행). 결과 없음 |
-| **swap iter2448 (phase-1 최종)** | ⛔ **94.3%** | ✗ | ✗ | ✗ | ✗ | 09-14 11:07 KST `eval_ckpt.sh … t1,t3` 기동, ~16:05 KST sub1 이 τ³ 스모크·프로브로 재배정되며 결과 없이 중단. 프로브만 남음(identity FAIL · 유령 호출 1/33 PASS). **전 티어 재측정**(사용자): 21:22 KST 1차는 sub1 HOME 볼륨 ENOSPC 로 fleet 기동 실패(`KNOWN_ISSUES` 09-14) → 캐시 이전 후 21:51 KST 재기동 |
+| **swap iter2448 (phase-1 최종)** | ⛔ **94.3%** | ✗ | ✗ | ✗ | ✗ | 09-14 11:07 KST `eval_ckpt.sh … t1,t3` 기동, ~16:05 KST sub1 이 τ³ 스모크·프로브로 재배정되며 결과 없이 중단. 프로브만 남음(identity FAIL · 유령 호출 1/33 PASS). **전 티어 재측정**(사용자): 21:22 KST 1차는 sub1 HOME 볼륨 ENOSPC 로 fleet 기동 실패(`KNOWN_ISSUES` 09-14) → 캐시 이전 후 21:51 KST 재기동. T1·T3 완료(09-15 03:39), 에이전틱 fleet 가 옮긴 컴파일 캐시의 절대경로로 사망 → 캐시 삭제 후 에이전틱·T2 만 07:36 KST 재기동 |
 
 - **p2 계열은 재측정하지 않는다** — phase-2·3 계보가 09-13 폐기됐다.
 - **09-14 이전 에이전틱 값(SWE·TB-1)은 reasoning 파서 없는 fleet 조건**이다 — 이력 `</think>` 가 전 턴에서 사라진 채
