@@ -177,7 +177,7 @@ def test_strip_and_reattach_roundtrip(stack):
     assert sent[5]["content"] == "<think>\nreason B</think>\nSure, here is your info."
     assert r3["choices"][0]["message"]["content"] == "Anything else?"
     s = proxy.snapshot()
-    assert s["reinlined"] == 3 and s["miss"] == 0 and s["miss_rate"] == 0.0
+    assert s["reinlined"] == 3 and s["restored"] == 3 and s["miss"] == 0 and s["miss_rate"] == 0.0
 
 
 def test_two_trials_same_prefix_do_not_cross(stack):
@@ -241,7 +241,7 @@ def test_no_reattach_counts_but_does_not_modify():
     post(port, {"messages": [SYS, GREET, USER1, {"role": "assistant", "content": None, "tool_calls": TC}, TOOL]})
     assert up.requests[-1]["messages"][3]["content"] is None
     s = proxy.snapshot()
-    assert s["reinlined"] == 1 and s["miss"] == 0 and s["reattach"] is False
+    assert s["reinlined"] == 1 and s["restored"] == 0 and s["miss"] == 0 and s["reattach"] is False
 
 
 def test_keep_seed():

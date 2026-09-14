@@ -45,7 +45,8 @@ H0 = hashlib.sha256(b"tau_proxy_v1").digest()
 
 COUNTERS = (
     # 요청 쪽
-    "requests", "reinlined", "miss", "miss_first_assistant", "seed_stripped", "sst_forced",
+    # reinlined = 캐시 적중(복원 가능), restored = 실제로 content 에 넣은 수. --no-reattach 는 reinlined 만 오르고 restored=0.
+    "requests", "reinlined", "restored", "miss", "miss_first_assistant", "seed_stripped", "sst_forced",
     "reasoning_field_inlined", "reasoning_field_dropped",
     # 응답 쪽
     "think_stripped", "think_from_field", "think_absent", "think_unclosed", "tool_calls", "mixed_content_and_tools",
@@ -230,6 +231,7 @@ class Proxy:
                         self.inc("reinlined")
                         if self.reattach:
                             m["content"] = blk
+                            self.inc("restored")
                 seen_assistant = True
         if not self.keep_seed and "seed" in body:
             body.pop("seed", None)

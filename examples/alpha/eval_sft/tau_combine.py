@@ -20,7 +20,7 @@ import math
 import os
 
 HARNESS_FAIL = {"infrastructure_error", "unexpected_error", "user_error", "timeout", "agent_error"}
-PROXY_KEYS = ("requests", "reinlined", "miss", "miss_first_assistant", "think_stripped", "think_from_field", "think_absent", "think_unclosed",
+PROXY_KEYS = ("requests", "reinlined", "restored", "miss", "miss_first_assistant", "think_stripped", "think_from_field", "think_absent", "think_unclosed",
               "tool_calls", "mixed_content_and_tools", "finish_length", "upstream_errors", "seed_stripped")
 
 
