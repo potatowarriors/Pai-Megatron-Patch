@@ -360,3 +360,15 @@ def test_no_greeting_counts_first_assistant_miss_as_miss():
     assert up.requests[-1]["messages"][3]["content"] == "<think>\nt</think>ok"
     s = proxy.snapshot()
     assert s["reinlined"] == 1 and s["miss"] == 2 and s["miss_first_assistant"] == 0
+
+
+def test_no_reattach_drops_reasoning_content_field():
+    """strip(--no-reattach): 이력의 reasoning_content 는 떼어 버리고 content 에 인라인하지 않는다 (SWE/litellm 경로)."""
+    up = FakeUpstream()
+    proxy, port = start_proxy(up.port, reattach=False)
+    hist = [SYS, USER1, {"role": "assistant", "content": "ok", "reasoning_content": "why"}, {"role": "user", "content": "?"}]
+    post(port, {"messages": hist})
+    sent = up.requests[-1]["messages"][2]
+    assert sent["content"] == "ok" and "reasoning_content" not in sent and "</think>" not in sent["content"]
+    s = proxy.snapshot()
+    assert s["reasoning_field_dropped"] == 1 and s["reasoning_field_inlined"] == 0

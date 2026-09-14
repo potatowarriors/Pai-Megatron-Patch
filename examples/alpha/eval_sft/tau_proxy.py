@@ -46,7 +46,7 @@ H0 = hashlib.sha256(b"tau_proxy_v1").digest()
 COUNTERS = (
     # 요청 쪽
     "requests", "reinlined", "miss", "miss_first_assistant", "seed_stripped", "sst_forced",
-    "reasoning_field_inlined",
+    "reasoning_field_inlined", "reasoning_field_dropped",
     # 응답 쪽
     "think_stripped", "think_from_field", "think_absent", "think_unclosed", "tool_calls", "mixed_content_and_tools",
     "finish_length", "upstream_errors", "resp_parse_error", "passthrough",
@@ -206,12 +206,18 @@ class Proxy:
             is_asst = m.get("role") == "assistant"
             if is_asst:
                 n_asst += 1
-                # 다른 하니스가 reasoning_content 로 보내면 인라인으로 정규화 (템플릿 119행 경로로 통일)
+                # 다른 하니스(mini-swe-agent/litellm)가 reasoning_content 를 이력에 실어 보내면:
+                #   reattach ON  → 인라인으로 정규화(템플릿 119행 경로로 통일)
+                #   reattach OFF → 필드를 떼어 버린다(reasoning_field_dropped). 남겨 두면 서버/템플릿이 그 필드로 추론을
+                #                  렌더해 strip 이 성립하지 않는다 (2026-09-14 SWE 실측: strip 이 restore 와 구분 안 됨).
                 rc = m.pop("reasoning_content", None)
                 c = m.get("content")
                 if isinstance(rc, str) and rc.strip() and (c is None or isinstance(c, str)) and THINK_CLOSE not in (c or ""):
-                    m["content"] = THINK_OPEN + "\n" + rc + THINK_CLOSE + (c or "")
-                    self.inc("reasoning_field_inlined")
+                    if self.reattach:
+                        m["content"] = THINK_OPEN + "\n" + rc + THINK_CLOSE + (c or "")
+                        self.inc("reasoning_field_inlined")
+                    else:
+                        self.inc("reasoning_field_dropped")
             h = step(h, m)
             if is_asst:
                 c = m.get("content")

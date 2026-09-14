@@ -654,7 +654,7 @@ tau2 run (sub1, tools/tau2-bench/.venv)
 | **도구 경로 스모크** (`tau_smoke.sh`, airline 2×1, 09-14 16:21) | **10/10 PASS** — 도구 호출 32턴 파싱, think 분리 34/34(reasoning 필드), 히스토리 복원 reinlined 273 / miss 0, `<think>` 누출 0, reward 채점 2/2, 하니스 실패 0. 렌더: 히스토리 12턴 중 11 preserved(첫 턴 = 합성 인사), 복원 ON 8,295 vs OFF 6,396 토큰 |
 | **복원 ON/OFF differential** (airline task 0~4 × 1 trial, 09-14) | 아래 표. **n=5 관측치 — 방향이 예상과 반대**, 첫 본 측정은 양쪽 모두 돌려 n=164 로 확정할 것 |
 
-**vLLM 0.25.1 parser engine 함정 (첫 스모크에서 발견, `KNOWN_ISSUES` 09-14 "에이전틱 fleet 가 도구 호출 턴마다 `</think>` 를 삼켰다")**: TOOLS=1 만 켠 fleet 는 도구 호출 턴의
+**vLLM 0.25.1 parser engine 함정 (첫 스모크에서 발견, `KNOWN_ISSUES` 09-14 "에이전틱 fleet 가 도구 호출 턴마다 `</think>` 를 삼켰다")**: TOOLS=1 만 켠 fleet 는 **모든 응답**(요청의 tools 선언·도구 호출 여부와 무관 — 서버 플래그로 켜짐, 동료 세션 실측 6/6)의
 content 가 `{think}{답변}` 으로 **`</think>` 마커 없이 붙어** 나온다(qwen3_xml = Qwen3ParserToolAdapter 가 THINK_END 토큰을
 터미널로 소비, reasoning 파서가 없으면 분리하지 않고 마커만 제거). 프록시 텍스트 분리 불가 → 복원 miss 57%, 상대역이
 think 를 읽음. **τ fleet 는 `REASONING_PARSER=nemotron_v3` 필수**(`serve_alpha.sh` env, `run_suite.sh` τ 단계가 재기동, 게이트
