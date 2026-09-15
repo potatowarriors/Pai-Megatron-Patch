@@ -3,7 +3,21 @@
 **규칙**: 세션 종료 시 자기 트랙의 행을 갱신하고 **커밋·push**한다. 상태는 여기에만 쓴다 — Claude auto-memory에 쓰지 않는다
 (메모리는 컨테이너·노드별이라 다른 세션이 못 본다). 날짜는 절대 표기. 끝난 트랙은 "완료" 절로 내리고 정본 링크만 남긴다.
 
-_마지막 갱신: 2026-09-15 (NeMo-Gym 채택 트랙 신설·1단계 스모크; 이전: 09-14 (SFT 벤치마크 — 에이전틱 평가 규약 변경·iter2448 중단 기록·열린 결정 3건; 이전: 09-10 터미널 트랙 문서 재구성)_
+_마지막 갱신: 2026-09-15 (세션 리셋 스냅샷 신설; NeMo-Gym 채택 트랙 신설·1단계 스모크; 이전: 09-14 (SFT 벤치마크 — 에이전틱 평가 규약 변경·iter2448 중단 기록·열린 결정 3건; 이전: 09-10 터미널 트랙 문서 재구성)_
+
+## 세션 리셋 스냅샷 (2026-09-15 05:15 UTC, main1 GPU7 Xid 장애 → 멀티노드 세션 재생성 예정)
+
+절차·소실 목록·검증은 `project_s/RESTORE_AFTER_REBOOT.md` **§7**(2026-09-15 점검, 현행 정본). 리셋 시점의 라이브 상태와 재개 지점:
+
+| 무엇 | 리셋 시점 상태 | 재개 지점 |
+|---|---|---|
+| SFT 최종 본 런 (main1) | iter 441 사망 03:46 UTC(EP all-to-all NCCL 타임아웃·SIGABRT, GPU 7 `0000:db:00.0` VBIOS 판독 불능). 프로세스 없음 | ckpt **iter 300**(`…final_resume_20260914_013856/checkpoints`). 재개 프리셋 `load:` 가 A 런 iter150 을 가리키므로 iter 300 경로로 수정 후 2-iter 스모크 → 본 런 |
+| iter2448 스위트 (sub1) | fleet 8대 + lb_proxy :8100 + `run_suite.sh` → `run_swe.sh` 가동 중. T1·T3 완료, **SWE 예측 435/500**(gpu06 `/opt/swebench/preds_…iter0002448`, 보존), TB-2·τ³·T2 미착수 | `eval_new_ckpt.sh … 2448 agentic,t2` 재실행. `run_swe.sh --redo-existing` 이라 435건 재사용 여부는 평가 세션 결정 |
+| 채팅 서빙 (main1 GPU3, :8001/:8080) | 다운 | RESTORE §7.3-10 (Node 20 은 NFS `tools/node-v20.19.5-linux-x64` 스테이징 완료) |
+| SDG U·T·D · ko_chat v3 · 터미널 코퍼스 | 완료(GLM 잡 `DONE runbook`) | 없음 |
+| NeMo-Gym | 1단계 완료(NFS 설치, 조치 없음) | 2단계 게이트는 fleet 여유 시 |
+| gpu06 `alpha-eval` | 세션 밖, 무영향. 역터널만 sub1 에서 재기동 | RESTORE §7.3-8 |
+| 리포 미커밋(다른 세션) | `CLAUDE.md`·`.gitignore`·`megatron_patch/CLAUDE.md`·`toolkits/…/CLAUDE.md` | NFS 라 소실 없음, 소유 세션이 커밋 |
 
 ## 진행 중
 
