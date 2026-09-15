@@ -58,6 +58,7 @@
 | 문서 | 한 줄 |
 |---|---|
 | [../study/terminal_sdg_study.md](../study/terminal_sdg_study.md) | 터미널 에이전트 증강 데이터 스터디 — 흐름·도구(Harbor/Terminus-2/vLLM, Data Designer 미사용 이유)·기능·데이터 형태·4층 검증 (2026-09-08) |
+| [../study/nemo_gym_assessment.md](../study/nemo_gym_assessment.md) | NeMo-Gym 분석 — 구조·사용법·우리 문제 4종(파서·이전 턴 보존·하니스·docker) 대응·SFT 단계 활용 3안·도입 제약·스모크 순서 (2026-09-15) |
 | [../study/gradient_reduce.md](../study/gradient_reduce.md) | gradient reduction 스터디 노트 |
 | [../study/2node_project_report.md](../study/2node_project_report.md) | 2노드 프로젝트 종합 보고 (2026-07-12~15) |
 | [../study/diloco_pilot.md](../study/diloco_pilot.md) | DiLoCo 파일럿 전체 실측·검증 (2026-07-14) |
