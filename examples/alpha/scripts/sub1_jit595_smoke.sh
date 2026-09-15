@@ -38,7 +38,8 @@ RC=$?
 if [ "$RC" -eq 124 ]; then log "timeout — 잔류 학습 프로세스 정리"; pkill -TERM -f "[p]retrain_alpha.py"; sleep 20; fi
 
 # ③ 판정 (sub1_compat_smoke.sh 와 동일 기준)
-it1=$(grep -E "iteration +1/ " "$LOG" | head -1); it2=$(grep -E "iteration +2/ " "$LOG" | head -1)
+# 재개 런은 iteration 이 (load 시점+1) 부터 찍히므로 번호가 아니라 "처음 두 iteration 줄" 로 판정 (2026-09-15: iter300 재개 스모크가 301/302 로 찍혀 오판정 FAIL).
+it1=$(grep -E "iteration +[0-9]+/ " "$LOG" | sed -n 1p); it2=$(grep -E "iteration +[0-9]+/ " "$LOG" | sed -n 2p)
 l1=$(echo "$it1" | grep -o "lm loss: [0-9.eE+-]*" | awk '{print $3}'); l2=$(echo "$it2" | grep -o "lm loss: [0-9.eE+-]*" | awk '{print $3}')
 bad=$(grep -c -E "munmap_chunk|Traceback|CUDA out of memory|Fatal Python error" "$LOG")
 mem=$(grep -o "max allocated: [0-9.]*" "$LOG" | tail -1)

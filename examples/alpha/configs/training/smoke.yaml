@@ -21,6 +21,7 @@ global-batch-size: 1
 # Standard (non-auxfree) routing for smoke test
 moe-router-load-balancing-type: aux_loss
 moe-router-score-function: softmax
+moe-router-pre-softmax: true      # topk 1 + softmax 는 Megatron validate_args 가 pre-softmax 를 요구 (2026-09-15 NGC 25.05 재셋업 스모크에서 검출)
 moe-token-dispatcher-type: alltoall
 
 optimizer: adam              # Skip Muon to keep smoke fast / no QK-Clip
