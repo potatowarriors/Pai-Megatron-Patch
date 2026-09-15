@@ -1,0 +1,20 @@
+# 추론 왕복 게이트 전용 모델 서버 (smoke/run_tau2_roundtrip.sh, smoke/roundtrip_gate.py).
+# 평가용 설정(alpha_vllm_model.yaml) 과의 차이:
+#   - return_token_id_information / request_prompt_and_generation_token_ids: true
+#     → 롤아웃 항목마다 prompt_token_ids 가 붙는다. 이를 tokenizer_v5 로 복호해 모델이 실제로 본 프롬프트에서
+#       이력 assistant 턴이 `<think>\n…</think>`(restore) 인지 `<think></think>`(strip) 인지 판정한다.
+#       (`/tokenize` 는 reasoning_content 를 버리므로 증거가 못 된다 — SFT_BENCHMARKS.md §3.14 교훈)
+#   - 페이로드가 커지므로 정식 평가에는 쓰지 않는다.
+policy_model:
+  responses_api_models:
+    vllm_model:
+      entrypoint: app.py
+      base_url: ${policy_base_url}
+      api_key: ${policy_api_key}
+      model: ${policy_model_name}
+      return_token_id_information: true
+      request_prompt_and_generation_token_ids: true
+      uses_reasoning_parser: true
+      uses_interleaved_reasoning: true
+      chat_template_kwargs: null
+      extra_body: null

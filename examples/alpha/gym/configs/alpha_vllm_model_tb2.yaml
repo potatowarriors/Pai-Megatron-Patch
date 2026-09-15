@@ -1,0 +1,19 @@
+# alpha fleet 용 모델 서버 — Terminal-Bench 2 (Harbor + Terminus-2) 전용.
+# terminus-2 는 도구를 선언하지 않고 터미널 출력을 user 턴으로 보내므로 alpha 템플릿이 무도구로 분류해 이력 추론을 절단한다.
+# 사용자 규칙(2026-09-14) "도구 사용 평가 = restore" 를 지키려면 truncate_history_thinking=false 를 명시해야 한다.
+# (= Gym harbor_agent README "NeMo RL Training" 권장 설정. 우리 tau_proxy + interleaved_thinking + extra_body 세 조건의 Gym 판.)
+# harbor_agent 쪽은 harbor_agent_kwargs.interleaved_thinking: true 가 같이 필요하다.
+policy_model:
+  responses_api_models:
+    vllm_model:
+      entrypoint: app.py
+      base_url: ${policy_base_url}
+      api_key: ${policy_api_key}
+      model: ${policy_model_name}
+      return_token_id_information: false
+      uses_reasoning_parser: true
+      uses_interleaved_reasoning: true
+      chat_template_kwargs:
+        enable_thinking: true
+        truncate_history_thinking: false
+      extra_body: null

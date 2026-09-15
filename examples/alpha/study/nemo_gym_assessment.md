@@ -273,3 +273,10 @@ SFT 단계에서 만든 리소스 서버(B·C)는 RL 환경으로 그대로 쓰�
 - 코드: `responses_api_models/vllm_model/app.py`(추론 왕복), `nemo_gym/responses_converter.py`(형식 변환), `responses_api_agents/harbor_agent/`(TB-2), `responses_api_agents/mini_swe_agent_2/`, `benchmarks/tau2/`, `benchmarks/nemotron_3_ultra/`
 - 우리 쪽: `tokenizer_v5/chat_template.jinja` 19-28·114-140, `eval_sft/serve_alpha.sh`, `docs/SFT_BENCHMARKS.md` §3.10·§3.13·§3.14, `docs/INTERLEAVED_THINKING.md`, `docs/EVAL_DOCKER_NODE.md`, `docs/SFT_RL_DATASETS.md` §3, `project_s/NEMO_RL_SETUP.md`, `NeMo-RL/examples/configs/alpha/README.md`
 - 업스트림: https://github.com/NVIDIA-NeMo/Gym (v0.6.0), 문서 https://docs.nvidia.com/nemo/gym/main/about/
+
+## 8. 결정·진행 (2026-09-15)
+
+사용자 결정: 채택. 버전은 v0.6.0 하나로 고정, 우리 환경은 Gym 포크 없이 `examples/alpha/gym/` 에, 범위는 §"적극의 범위" 표대로
+(에이전틱 평가 이관 · 데이터 게이트 리소스 서버 · SDG 는 다음 트랜치부터 · T1/T2/T3 와 SFT 변환기는 유지).
+§6 1단계 완료 — 설치·단위 테스트·sub1 CPU 롤아웃 PASS, main1 은 GPU 장애 중 Ray 즉사(노드 제약으로 기록). 이후 상태는 `STATUS.md` 와
+[`../gym/README.md`](../gym/README.md) 에만 쓴다.

@@ -88,6 +88,12 @@
 |---|---|
 | [../chat/README.md](../chat/README.md) | SFT ckpt 채팅 서빙 (vLLM :8001 + LibreChat :8080, main1 GPU3) — 벤치 fleet 과의 설정 차이·G2 의도적 FAIL 사유·LibreChat 설정이 지키는 것·UI 프롬프트 게이트·설치/재빌드·함정 (2026-08-31~, 2026-09-09 OpenWebUI→LibreChat) |
 
+## gym/ (NeMo-Gym 환경·게이트 — docs 밖, 코드와 동거)
+
+| 문서 | 한 줄 |
+|---|---|
+| [../gym/README.md](../gym/README.md) | NeMo-Gym v0.6.0 채택(사용자 결정 2026-09-15) — 배치(NFS 클론·uv·노드 제약)·우리 설정(alpha fleet 모델 서버·TB-2·게이트·τ²)·추론 왕복 게이트 절차·기록 |
+
 ## 리포 루트 docs/
 
 | 문서 | 한 줄 |
