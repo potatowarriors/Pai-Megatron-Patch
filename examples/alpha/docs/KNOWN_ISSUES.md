@@ -4,6 +4,42 @@
 CLAUDE.md의 "함정 표"는 이 문서의 한 줄 요약이며, 새 사고는 **여기에 서사를 쓰고 CLAUDE.md 표에는 한 줄만** 추가한다.
 날짜는 절대 표기. 두 스테이지 이상 지난 항목은 스테이지 경계에서 `archive/`로 이동.
 
+## main1 GPU 7 하드웨어 결함 재발 — 실부하에서 무증상 정지 → Xid 109 CTX SWITCH TIMEOUT → Xid 120 GSP panic (2026-09-15 🔶 교체 요청, sub1 임시 학습)
+
+**배경**: 09-15 03:47 SFT 본 런이 iter 441 에서 EP all-to-all NCCL 타임아웃 → SIGABRT, 이후 nvidia-smi `Failed to fill in device global IDs`·
+CUDA 텐서 생성 코어덤프, GPU 7(`0000:db:00.0`) VBIOS 판독 불능. 관리자 리셋 = 멀티노드 세션 재생성(15:07). 재셋업 후 GPU 8장 VBIOS·ECC·NVLink 전부 정상으로 보였다.
+
+**재발 (같은 날, 같은 GPU)**:
+1. 16:39 재개 스모크 1차(`sft_128k_final_resume`, iter300 ckpt, EP8·CP8): ckpt 로드 후 첫 iteration backward 의 MoE EP all-to-all(`SeqNum=1589`)에서 8 rank 600 s 타임아웃.
+   GPU 8장 SM 100%·전력 115~122 W·메모리 컨트롤러 0% = NCCL 스핀 대기.
+2. 17:03 2차 + NCCL 플라이트 레코더(`TORCH_NCCL_DUMP_ON_TIMEOUT=1`): 첫 MoE 층에서 **rank 0~6 은 combine all-to-all(EP 그룹 seq 18) 예약 후 대기, rank 7 만 seq 17(dispatch) 까지 완료하고 seq 18 미발행**
+   → GPU 7 이 expert 연산 구간에서 정지. 덤프 8개 `project_s/reboot_restore/logs/nccl_trace/main1_r2_rank*`, 파서 `reboot_restore/fr_parse.py`(NGC 의 `torchfrtrace` 는 `tools.flight_recorder` 누락으로 깨짐).
+3. GPU 7 단독 8K bf16 GEMM 지속 부하(`reboot_restore/gpu_gemm_stress.py`) 2회 모두 무응답(첫 10 s 보고도 없음, 전력 68 W). 가벼운 커널(컨텍스트·4K GEMM)은 1 s 통과. 옆 GPU 6 은 60 s 659 TFLOP/s.
+4. 직후 nvidia-smi `GPU requires reset`, `/proc/driver/nvidia/gpus/0000:db:00.0/information` VBIOS `??.??.??.??.??`, GPU 0/5/6 의 4K GEMM 코어덤프, nvidia-smi 자체 abort — 03:47 의 종착 상태 재현.
+5. 관리자 호스트 dmesg: 17:23:09/13/22 `Xid 109 CTX SWITCH TIMEOUT, Ch 8, Info 0x58005` ×3(단독 GEMM 프로세스 강제 종료 시점) → 17:23:24 `Xid 120 GSP task panic`(RISC-V 크래시 덤프, GSP→CPU `RC_TRIGGERED data1=0x6d`) → CPU→GSP `FREE` RPC 무응답.
+   **17:04~17:15 의 학습 멈춤 구간에는 Xid 가 없다** — 이 GPU 는 커널이 끝나지 않는 방식으로 조용히 멈추고, Xid 는 프로세스를 죽여 컨텍스트 회수를 시도할 때만 찍힌다. Xid 감시로는 못 잡는다.
+
+**배제한 것**: PCIe(32 GT/s ×16, AER 0) · NVLink(18/18 활성, 오류·재전송 0) · HBM(ECC 0, 행 리맵 0, 리타이어 0) · 열/전력(30~36 °C, 스로틀 플래그 없음) · 소프트웨어
+(sub1 이 같은 이미지·스크립트·ckpt 로 재개 스모크 PASS, iter 301 loss 이전 런과 비트 동일 0.8372513) · 합성 NCCL(`nccl_a2a_test.py` 300회 · `nccl_a2a_stress.py` GEMM+all-to-all 400회 양 노드 PASS, 16~19 s — 수십 초 합성으로는 간헐 결함이 안 잡힘).
+NVIDIA 포럼 283722(소비자 RTX, 545~570 드라이버 회귀, 15 s 후 자가 회복, Xid 120 없음)와는 GPU 특이성·GSP 패닉·리셋 후 재발에서 다르다. 공식 카탈로그: Xid 109 = RESET_GPU / CONTACT_SUPPORT, 120 = "지속되면 리셋·전원 재기동".
+
+**판정·조치**: GPU 7 보드(H100 80GB HBM3, S/N 1653124027118, UUID GPU-929fdd1a-9f0e-8288-1cad-099f83953540) 불량 → **교체(RMA) 요청**(요청문은 세션 기록). 사용자 결정 17:40:
+main1 수리 전까지 **sub1 에서 본 런 진행**, `save-interval` 300→100(중단 손실 ≈9 h 상한). 벤치 fleet·eval watch·iter2448 스위트는 GPU 가 없어 정지. 관리자 리셋은 두 컨테이너를 모두 재생성하므로 그때 런은 죽고 `RESTORE_AFTER_REBOOT.md` §7.3·§7.6 을 다시 밟는다.
+
+**교훈**: ① VBIOS·ECC·NVLink 카운터가 깨끗해도 실부하 스모크(EP8 재개 2-iter) 전에는 GPU 를 믿지 않는다 — 복원 체크리스트의 "GPU 판별식" 만으로는 부족. ② 하드웨어 원인 특정은 NCCL 플라이트 레코더(낙오 rank) + 단독 GPU 지속 부하 대조(옆 GPU)로 컨테이너 안에서도 가능. ③ 프로세스가 GPU 컨텍스트를 회수하려 할 때 Xid 가 찍히므로 "학습 멈춤 → 즉시 kill → dmesg" 순서가 관리자 근거를 만든다. ④ 결함 GPU 하나가 Backend.AI 훅(`libcudahook`) 열거 실패로 노드 8장을 전부 죽인다.
+
+## 세션 재생성 복원 — NGC 25.03→25.05 이미지 변경, 셋업 스크립트 드리프트 3건 (2026-09-15 ✅)
+
+**증상/발견**: 재생성된 세션의 이미지가 `ngc-pytorch:25.05-pytorch2.8-py312-cuda12.9`(이전 25.03: torch 2.7·cu12.8·cuDNN 9.8·compat 570 → torch 2.8·cu12.9·cuDNN 9.10·compat 575).
+복원 runbook 의 "같은 이미지" 전제가 깨졌고, 셋업 스크립트에서 3건이 드러났다: ① cuDNN 9.24 설치 단계가 문서에만 있고 `_multinode.sh` 에 없음(07-13 기록의 "자동 설치"는 A100_v2 스크립트),
+② FA3 `MAX_JOBS=10` 고정 — 220코어·2 TB 노드에서 430 인스턴스 빌드가 12분에 40개(≈2 h), ③ `training/smoke.yaml` 이 topk 1 + softmax 라 Megatron validate_args 가 `--moe-router-pre-softmax` 를 요구(05-20 마이그레이션 이후 잠복, `train.sh smoke smoke mock` 은 8 GPU 에서 `--global-batch-size 8` 도 필요).
+부수: `sub1_jit595_smoke.sh` 판정식이 `iteration 1/`·`2/` 만 찾아 재개 런(301/302)을 FAIL 로 오판.
+
+**조치**: torch 2.7 ABI 의 TE wheel 은 `te_wheels_sm90_nv2503_torch27/` 로 이동(소스 재빌드 3분), Step 13.5(cuDNN 9.24 `--no-deps`) 내장, FA3 MAX_JOBS 자동 산출(메모리/6 GB·코어/2·상한 96·하한 10 → 96, 11분), 스모크 프리셋 `moe-router-pre-softmax: true`, 판정식 수정.
+gh 는 NFS `tools/bin/gh`(apt 불필요, 인증만 세션마다). compat 은 `restore_bench_env.sh` 가 sudo 로 libcuda+JIT 링크를 595 로 영구 정정(양 노드; 원본 백업 `tools/cuda_compat13/backup_575_*`).
+검증: 핀 전부 일치(TE 2.9.0+70f53666·transformers 4.57.0.dev0·triton 3.3.0·mamba 2.2.6.post3·causal-conv1d 1.5.2·fla 0.4.1), mock 스모크 양 노드 PASS, sub1 재개 스모크 PASS(loss 비트 동일). 절차 정본 `project_s/RESTORE_AFTER_REBOOT.md` §7.6.
+문서 혼입 정정: RESTORE·STATUS 의 "main1 채팅 서빙(GPU3, LibreChat)" 은 다른 컴퓨팅 세션의 노드 작업(사용자 확인) — 이 클러스터 복원 범위 밖.
+
 ## sub1 HOME 볼륨(49GB)이 캐시로 가득 — vLLM fleet 8대가 ENOSPC 로 기동 실패 (2026-09-14 ✅)
 
 **증상**: iter2448 전 티어 스위트(21:22 KST)가 "fleet 기동"에서 15분 넘게 멈췄다. GPU 메모리 3 MiB, vLLM 프로세스 0개,

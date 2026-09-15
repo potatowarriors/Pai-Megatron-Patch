@@ -3,17 +3,30 @@
 **규칙**: 세션 종료 시 자기 트랙의 행을 갱신하고 **커밋·push**한다. 상태는 여기에만 쓴다 — Claude auto-memory에 쓰지 않는다
 (메모리는 컨테이너·노드별이라 다른 세션이 못 본다). 날짜는 절대 표기. 끝난 트랙은 "완료" 절로 내리고 정본 링크만 남긴다.
 
-_마지막 갱신: 2026-09-15 (세션 리셋 스냅샷 신설; NeMo-Gym 채택 트랙 신설·1단계 스모크; 이전: 09-14 (SFT 벤치마크 — 에이전틱 평가 규약 변경·iter2448 중단 기록·열린 결정 3건; 이전: 09-10 터미널 트랙 문서 재구성)_
+_마지막 갱신: 2026-09-15 17:45 (세션 재생성 복원 완료·main1 GPU7 재발 → sub1 임시 본 런; 이전: 09-15 05:15 세션 리셋 스냅샷 신설; NeMo-Gym 채택 트랙 신설·1단계 스모크; 이전: 09-14 (SFT 벤치마크 — 에이전틱 평가 규약 변경·iter2448 중단 기록·열린 결정 3건; 이전: 09-10 터미널 트랙 문서 재구성)_
 
-## 세션 리셋 스냅샷 (2026-09-15 05:15 UTC, main1 GPU7 Xid 장애 → 멀티노드 세션 재생성 예정)
+## 세션 재생성 복원 결과 (2026-09-15 15:07 재생성 → 17:45)
 
-절차·소실 목록·검증은 `project_s/RESTORE_AFTER_REBOOT.md` **§7**(2026-09-15 점검, 현행 정본). 리셋 시점의 라이브 상태와 재개 지점:
+절차·정정·검증 수치는 `project_s/RESTORE_AFTER_REBOOT.md` **§7.6**(현행 정본). 요약: 이미지 25.03→25.05 변경에도 스택 재구성·핀 일치·양 노드 mock 스모크 PASS·sub1 재개 스모크 PASS(loss 비트 동일).
+**main1 GPU 7 하드웨어 결함 재발**(Xid 109→120, `KNOWN_ISSUES` 09-15) → 교체 요청, main1 GPU 작업 불가.
+
+| 무엇 | 현재 상태 (09-15 17:45 KST) | 다음 |
+|---|---|---|
+| SFT 최종 본 런 | **sub1 에서 재개 17:43** `outputs/alpha_baseline_48L_sft_128k_final_resume_20260915_174309`(iter 300 승계, save 100·valid 100, 사용자 결정 — 중단 손실 ≈9 h 상한). 잔여 2,562 iters ≈9.8일 | **첫 iteration 게이트 PASS 17:58** — 301 loss 0.8372513(09-14 런과 비트 동일)·302 0.8318815·329.4 s/iter·263 TFLOP/s/GPU·max-alloc 60.0 GB·traceback 0, wandb `alpha-posttraining/pp9vb2ax`. 관리자 리셋(두 컨테이너 재생성) 시 마지막 100-iter ckpt 에서 §7.3 재수행 후 재개 |
+| main1 | GPU 7 `0000:db:00.0` 보드 불량 — nvidia-smi abort·전 GPU CUDA 불가 | 관리자 교체 대기. 복귀 시 EP8 재개 2-iter 스모크 통과 전엔 사용 금지 |
+| iter2448 스위트 · eval watch · fleet (sub1) | **정지** — sub1 이 학습 중, main1 없음. SWE 예측 435/500 gpu06 보존, 역터널은 살아 있음 | main1 복귀 후 재개(`eval_new_ckpt.sh … 2448 agentic,t2`, `--redo-existing` 결정은 평가 세션) |
+| 채팅 서빙 (GPU3 :8001/:8080) | **이 클러스터 아님** — 다른 컴퓨팅 세션의 노드 작업(사용자 확인 09-15) | — |
+| NeMo-Gym · SDG U/T/D · ko_chat v3 · 터미널 코퍼스 | 변동 없음 | — |
+
+## 세션 리셋 스냅샷 (2026-09-15 05:15 UTC, main1 GPU7 Xid 장애 → 멀티노드 세션 재생성 예정) — 이력
+
+절차·소실 목록·검증은 `project_s/RESTORE_AFTER_REBOOT.md` **§7**. 리셋 시점의 라이브 상태와 재개 지점(위 표가 현행):
 
 | 무엇 | 리셋 시점 상태 | 재개 지점 |
 |---|---|---|
 | SFT 최종 본 런 (main1) | iter 441 사망 03:46 UTC(EP all-to-all NCCL 타임아웃·SIGABRT, GPU 7 `0000:db:00.0` VBIOS 판독 불능). 프로세스 없음 | ckpt **iter 300**(`…final_resume_20260914_013856/checkpoints`). 재개 프리셋 `load:` 가 A 런 iter150 을 가리키므로 iter 300 경로로 수정 후 2-iter 스모크 → 본 런 |
 | iter2448 스위트 (sub1) | fleet 8대 + lb_proxy :8100 + `run_suite.sh` → `run_swe.sh` 가동 중. T1·T3 완료, **SWE 예측 435/500**(gpu06 `/opt/swebench/preds_…iter0002448`, 보존), TB-2·τ³·T2 미착수 | `eval_new_ckpt.sh … 2448 agentic,t2` 재실행. `run_swe.sh --redo-existing` 이라 435건 재사용 여부는 평가 세션 결정 |
-| 채팅 서빙 (main1 GPU3, :8001/:8080) | 다운 | RESTORE §7.3-10 (Node 20 은 NFS `tools/node-v20.19.5-linux-x64` 스테이징 완료) |
+| 채팅 서빙 (main1 GPU3, :8001/:8080) | 다운 | ~~RESTORE §7.3-10~~ → **다른 컴퓨팅 세션의 노드 작업**(사용자 확인 09-15), 이 클러스터 범위 밖 |
 | SDG U·T·D · ko_chat v3 · 터미널 코퍼스 | 완료(GLM 잡 `DONE runbook`) | 없음 |
 | NeMo-Gym | 1단계 완료(NFS 설치, 조치 없음) | 2단계 게이트는 fleet 여유 시 |
 | gpu06 `alpha-eval` | 세션 밖, 무영향. 역터널만 sub1 에서 재기동 | RESTORE §7.3-8 |
@@ -33,7 +46,7 @@ _마지막 갱신: 2026-09-15 (세션 리셋 스냅샷 신설; NeMo-Gym 채택 �
 | **SFT 벤치마크 (sub1)** | **phase-1 계열 iter300~1800 측정 완료, 최종 iter2448 기준선 미측정.** 수치 `results/TRACKING.md`, 체크포인트별 범위·중단 기록 `SFT_BENCHMARKS.md` §3.10. T1·T3 는 iter300~1800 전 구간, T2·에이전틱은 iter1500 까지(1800 은 사용자 결정으로 SWE 까지). **iter2448**: 09-14 11:07 KST 다른 세션이 T1·T3 기동 → T1 94.3% 에서 sub1 이 τ³ 스모크로 재배정되며 **결과 없이 중단**(프로브만: identity FAIL · 유령 호출 1/33 PASS). **평가 규약 변경 (09-14)**: 에이전틱 fleet 가 reasoning 파서 없이 떠 **모든 응답의 `</think>` 가 소실**돼 있었다(SWE 보존 0/148,836턴, `KNOWN_ISSUES` 09-14) → fleet `nemotron_v3` + 게이트 A5, SWE·TB-2 는 컨테이너 내 `tau_proxy` 로 이전 턴 추론 복원(SWE :8110 · TB-2 :8111). 사용자 규칙: **도구 사용 평가 = restore, 무도구 = strip**(학습 데이터와 동일). 스모크 검증 restore·strip 양쪽 PASS(d8d40bf). Terminal 정본은 TB-2(Harbor + Terminus-2, 09-07). SWE 인스턴스 이미지는 실행 후 정리(09-08 표준 정책). τ³ 트랙은 §3.13(integrate-tau3-bench-alpha 세션). **관찰(n=1)**: TB-2 restore 에서 `</think>` 미종결 턴이 이력에 되돌아가 루프로 굳음(restore 385/425 vs strip 38/262 스텝, NTC 미학습 ckpt) → 러너가 `steps_reasoning_only` 기록 | ① **iter2448 전 티어 실행 중 — sub1 점유 (09-14 12:51 UTC · 21:51 KST 기동, 약 1.5일, 사용자 결정. 21:22 1차는 sub1 HOME 볼륨 ENOSPC 로 fleet 실패 → 캐시 이전 후 재기동. **T1·T3 완료(09-15 03:39 KST, 전 항목 유효·AIME/HMMT 제외)**, 에이전틱 fleet 가 옮긴 캐시 절대경로로 사망 → 캐시 삭제 후 에이전틱·T2 만 07:36 KST 재기동(로그 `iter2448_suite_agentic_t2.log`))**: `eval_new_ckpt.sh … 2448 t1,t3,agentic,t2`, 로그 `bench_logs/iter2448_suite.log`. T1(~5.5h) → T3 → 에이전틱(SWE·TB-2·τ³) → T2. **도중 sub1 재배정·eval_sft 셸 스크립트 제자리 수정 금지**(bash 가 실행 중 파일을 이어 읽는다) ② 최종 SFT ckpt 에서 TB-2 미종결 지표 확인 ③ 아래 열린 결정 | `SFT_BENCHMARKS.md` §0·§3.10·§3.14·§7, `results/TRACKING.md` |
 | **NeMo-Gym 채택 (SFT 단계, 사용자 결정 2026-09-15: v0.6.0 고정·환경은 우리 리포·범위 = RL 재사용 층)** | **1단계 CPU 스모크 완료 09-15** — Gym v0.6.0 을 `/home/work/vidsearch/tools/Gym`(NFS, Python 3.13.14 uv venv) 에 설치. 단위 테스트 main1 3,934/3 실패(스폰 테스트, sub1 재실행 3/3 PASS·GPU 장애 영향)·E2B 1건 선택 의존성. sub1 CPU 롤아웃 `mcqa`×`simple_agent`×Gemini 3/3 reward 1.0. **main1 은 GPU 장애 중 Ray 기동 즉사**(libcudahook). τ² 데이터 278행 준비, 우리 설정 4종(`examples/alpha/gym/configs/`) `gym env validate` PASS, 추론 왕복 판정기 합성 자기검증 PASS. 분석 정본 `study/nemo_gym_assessment.md` | ① **2단계 추론 왕복 게이트** — fleet(TOOLS=1·nemotron_v3) 여유 시 `gym/smoke/run_tau2_roundtrip.sh`(restore) + `strip_2turn.jsonl`(strip), 09-14 스모크와 같은 기준 ② 통과 시 에이전틱 티어 이관 계획 보고(iter2448 구 하니스 수치로 등가성 대조) → 승인 후 진행 ③ 유령 호출 프로브 리소스 서버 | `examples/alpha/gym/README.md`, `study/nemo_gym_assessment.md` |
 
-| **채팅 서빙 (main1 GPU3)** | **가동 중 — 2026-09-09 UI 를 OpenWebUI → LibreChat 으로 교체.** phase-2 iter500 을 vLLM :8001(128K 창, KV 1.31M 토큰) + LibreChat :8080(Node 20 + MongoDB 8.0, NFS `tools/librechat{,_data}`, docker 없음) 으로 서빙. 교체 사유: Open WebUI License 브랜딩 조항 + OpenWebUI 0.11 내장 도구 25종 주입으로 프롬프트 17→5,440 토큰·응답 이상 (`KNOWN_ISSUES` 09-09). 검증: `chat/smoke_chat.sh` vLLM 9/9 · UI 게이트 7/7 (프롬프트 증분 17 토큰 = 학습 렌더). G2 는 reasoning 파서 때문에 설계상 FAIL(`chat/README.md` §3) | 새 ckpt 나오면 `chat/serve_chat.sh <ckpt>` 로 교체. LibreChat 버전 올릴 때는 다른 포트로 먼저 띄워 §6 통과 후 이관 | `examples/alpha/chat/README.md` |
+| **채팅 서빙 (main1 GPU3)** — ⚠ **다른 컴퓨팅 세션의 노드**(같은 워크스페이스 공유로 혼입, 사용자 확인 2026-09-15; 이 클러스터 main1 아님) | **가동 중 — 2026-09-09 UI 를 OpenWebUI → LibreChat 으로 교체.** phase-2 iter500 을 vLLM :8001(128K 창, KV 1.31M 토큰) + LibreChat :8080(Node 20 + MongoDB 8.0, NFS `tools/librechat{,_data}`, docker 없음) 으로 서빙. 교체 사유: Open WebUI License 브랜딩 조항 + OpenWebUI 0.11 내장 도구 25종 주입으로 프롬프트 17→5,440 토큰·응답 이상 (`KNOWN_ISSUES` 09-09). 검증: `chat/smoke_chat.sh` vLLM 9/9 · UI 게이트 7/7 (프롬프트 증분 17 토큰 = 학습 렌더). G2 는 reasoning 파서 때문에 설계상 FAIL(`chat/README.md` §3) | 새 ckpt 나오면 `chat/serve_chat.sh <ckpt>` 로 교체. LibreChat 버전 올릴 때는 다른 포트로 먼저 띄워 §6 통과 후 이관 | `examples/alpha/chat/README.md` |
 | **512K 추론 확장 (sub1)** | **착수 2026-09-01.** 추론-only YaRN 프로파일로 512K 창 판정 (학습 없음; 네이티브 256K+ 학습은 메모리 불가). 인프라 완료: `tools/set_long_context_config.py`(config 프로파일, CPU 프로브 PASS) · RULER `_512k` 태스크 4종(구간 131K/258K/393K/520K, `_aa` 불변) · `scripts/lc512k_grid.sh`(sub1 suite 종료 대기 후 자동 실행, 6셀 ≈ 2h). **그리드 6/6 완주(09-03 02:41 KST)** — 대조군이 셀1 해석을 기각: ext 도 single_1 무절벽(SFT 는 무보정 520K 95~100). 실제 YaRN 효과는 어려운 검색에서 보간 강도 순 단조(single_2 520K 0→0→25, multikey 0→10→40; ext→yarn2→yarn4), yarn4 단문 무회귀. base 셀은 chat 하니스 교란으로 판독 제한. 정본 `study/lc_512k_eval.md` §5. 능력 스위트 완료(09-03 11:07): 11태스크 평균 yarn2 48.1/34.2/26.1/18.1 · yarn4 45.7/37.1/31.8/24.8 — **전 구간 <85, 병목은 위치가 아니라 능력**(131K 에서 이미 45~48, multikey_2/3 전멸). **종합 판정: YaRN 채택(yarn4, >256K 전용 분리 서빙 — 131K 집계형 비용 때문), '지원 길이' 선언은 SFT 완주 ckpt 재측정으로 연기** (`study/lc_512k_eval.md` §5.1). **판정 재정의(사용자 승인 09-02)**: single_1 은 메커니즘 탐침일 뿐 — "L 지원" 선언은 **RULER 11태스크(`ruler_cap_*`, n=50) 구간 평균 ≥85**(RULER 논문 규약)로만. 능력 스위트 구축 완료(qa_squad·cwe 는 풀 고갈 실측으로 제외 — 사전 빌드 게이트가 cwe ~130K 포화 검출), `scripts/ruler_cap_run.sh` 가 그리드 DONE 후 자동 실행 예약 | **SFT 완주 ckpt 재측정 대기** — ① `ruler_cap_run.sh sft:yarn4` + `sft:ext` 대조(~5h) ② 판정 사다리(§5.1)로 지원 길이 선언 ③ mk2/3·MRCR·LC-C 는 §5.1 미결 목록. 512K 트랙 GPU 작업 전부 종료(09-03 11:07) — **iter1200 스위트 개시 가능** | `study/lc_512k_eval.md` |
 
 ## 보류·재평가 대기

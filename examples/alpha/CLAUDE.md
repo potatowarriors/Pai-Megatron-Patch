@@ -166,6 +166,8 @@ submodule `tests/unit_tests/test_step_batch_size_schedule.py`, `test_muon_optimi
 
 | 날짜 | 증상 | 원인 → 대응 |
 |---|---|---|
+| 09-15 | main1 GPU 7 재발 — 실부하에서 Xid 없이 조용히 정지(SM 100%·mem 0%·115 W), kill 시 Xid 109 ×3 → Xid 120 GSP panic → 노드 8장 CUDA 불가. VBIOS·ECC·NVLink 카운터는 정상 | 보드 불량(리셋 후 재발) → 교체 요청. 판별은 NCCL 플라이트 레코더(낙오 rank) + 단독 GPU 지속 GEMM 대조. **카운터가 깨끗해도 EP8 재개 2-iter 스모크 전엔 GPU 를 믿지 않는다.** sub1 임시 학습(save 100). `KNOWN_ISSUES` 09-15 |
+| 09-15 | 세션 재생성 이미지가 25.03→25.05(torch 2.7→2.8) 로 바뀜 + 셋업 드리프트 3건(cuDNN 9.24 단계 부재·FA3 MAX_JOBS 10·smoke 프리셋 pre-softmax) | TE wheel 은 같은 이미지에서만 재사용, Step 13.5 내장, FA3 jobs 자동(96), 프리셋 수정. 절차 `RESTORE_AFTER_REBOOT.md` §7.6. `KNOWN_ISSUES` 09-15 |
 | 09-14 | sub1 fleet 8대가 기동 직후 전부 사망 (`Engine core initialization failed`), 스위트는 준비 대기 20분 | HOME(`/home/work`)이 **49GB 루프 볼륨**이라 `~/.cache`(vllm 컴파일 캐시·uv·HF·pip 47G)로 100% → ENOSPC. `serve_alpha.sh` 가 `VLLM_CACHE_ROOT=/tmp/vllm_cache` 기본 + 여유 가드. 디스크는 쓰는 경로의 FS 에서 잰다. **컴파일 캐시는 절대경로를 품어 옮기면 깨진다 — 비운다**(옮긴 캐시로 에이전틱 fleet 2차 사망). `KNOWN_ISSUES` 09-14 |
 | 09-14 | 에이전틱 fleet 가 `</think>` 소실 — SWE·TB-2 전 계열, **도구 미선언 요청도** | TOOLS=1 서버 플래그만으로 vLLM 0.25.1 파서 엔진이 THINK_END 소비(SWE 보존 0/74,833턴, 무도구 6/6). 템플릿이 이력을 `<think></think>`+추론문으로 재렌더 → 구조 왜곡. 수정은 reasoning 파서 + 추론 복원 경로(τ³ `tau_proxy.py` 방식). harbor 는 vLLM `reasoning` 키를 못 읽어 TB-2 도 프록시 필수 |
 | 09-09 | ko_chat 일반 대화 reasoning 이 100자 안팎(영어 셋의 1/10~1/30)·얕음. phase-2 회귀 아님(전 ckpt 동일) | 교사 gemma-4-31B 는 **비-reasoning 모델** → 지시문으로 사고를 지어내 guided JSON 에 채웠다(가짜 reasoning). **reasoning 데이터는 reasoning 모델의 네이티브 사고만 유효** → ko_chat v1/v2 전량 폐기, GLM-5.3-Flash + NVIDIA Chat-v3 레시피 재합성. `KNOWN_ISSUES` 09-09 |
