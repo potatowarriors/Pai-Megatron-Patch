@@ -32,10 +32,14 @@ recs=[]
 for j,r in zip(jobs,res):
     recs.append(dict(chat=j["chat"],turn=j["turn"],q=j["q"][:80],cond=j["cond"],samp=j["samp"],i=j["i"],r_chars=len(r["reasoning"]),r_hangul=hr(r["reasoning"]),c_chars=len(r["content"]),c_hangul=hr(r["content"]),finish=r["finish"],tool_calls=r["tool_calls"],ghost_call=bool(r["tool_calls"]) or ("<tool_call>" in r["content"]),reasoning=r["reasoning"][:800],content=r["content"][:600]))
 json.dump(dict(tag=tag,rows=recs),open(out,"w"),ensure_ascii=False,indent=1)
+# 빈 버킷 가드 (2026-09-16 iter600 프로브 ZeroDivisionError): TOOLS=1 서버는 reasoning 파서 없이는 </think> 를 소비해
+# reasoning 이 비므로 r_hangul 이 전부 None 인 버킷이 생긴다. 표는 진단용이라 n/a 로 찍고 판정(ghost.json)은 영향 없다.
+def pct(xs, pred): return f"{100*sum(pred(h) for h in xs)/len(xs):5.0f}%" if xs else "  n/a "
+def mean8(xs): return f"{st.mean(xs):8.2f}" if xs else "     n/a"
 print(f"### {tag}")
 print(f"{'cond':8s} {'samp':8s} {'n':>3s} {'R med':>6s} {'R en%':>6s} {'R ko%':>6s} {'C hangul':>8s} {'ghost':>5s} {'empty':>5s} {'cut':>4s}")
 for cond in ("tools25","none"):
     for sname in ("greedy","default"):
         sub=[x for x in recs if x["cond"]==cond and x["samp"]==sname]
         rh=[x["r_hangul"] for x in sub if x["r_hangul"] is not None]
-        print(f"{cond:8s} {sname:8s} {len(sub):3d} {int(st.median([x['r_chars'] for x in sub])):6d} {100*sum(h<0.3 for h in rh)/len(rh):5.0f}% {100*sum(h>=0.7 for h in rh)/len(rh):5.0f}% {st.mean([x['c_hangul'] for x in sub if x['c_hangul'] is not None]):8.2f} {sum(x['ghost_call'] for x in sub):5d} {sum(x['c_chars']==0 for x in sub):5d} {sum(x['finish']=='length' for x in sub):4d}")
+        print(f"{cond:8s} {sname:8s} {len(sub):3d} {int(st.median([x['r_chars'] for x in sub])):6d} {pct(rh, lambda h: h<0.3)} {pct(rh, lambda h: h>=0.7)} {mean8([x['c_hangul'] for x in sub if x['c_hangul'] is not None])} {sum(x['ghost_call'] for x in sub):5d} {sum(x['c_chars']==0 for x in sub):5d} {sum(x['finish']=='length' for x in sub):4d}")
