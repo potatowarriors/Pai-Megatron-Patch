@@ -3,7 +3,7 @@
 **규칙**: 세션 종료 시 자기 트랙의 행을 갱신하고 **커밋·push**한다. 상태는 여기에만 쓴다 — Claude auto-memory에 쓰지 않는다
 (메모리는 컨테이너·노드별이라 다른 세션이 못 본다). 날짜는 절대 표기. 끝난 트랙은 "완료" 절로 내리고 정본 링크만 남긴다.
 
-_마지막 갱신: 2026-09-16 23:00 (세션 재생성 2차 복원·sub1 본 런 iter 600 재개·main1 GPU 0~6 추론용 결정; 이전: 09-15 17:45 세션 재생성 복원 완료·main1 GPU7 재발 → sub1 임시 본 런; 09-15 05:15 세션 리셋 스냅샷; NeMo-Gym 채택 트랙 1단계; 09-14 SFT 벤치마크 에이전틱 규약 변경)_
+_마지막 갱신: 2026-09-16 23:20 (main1 GPU 0~6 으로 SFT 최종 런 iter600 평가 체인 기동; 이전: 09-16 23:00 세션 재생성 2차 복원·sub1 본 런 iter 600 재개·main1 GPU 0~6 추론용 결정; 09-15 17:45 세션 재생성 복원 완료·main1 GPU7 재발 → sub1 임시 본 런; 09-15 05:15 세션 리셋 스냅샷; NeMo-Gym 채택 트랙 1단계; 09-14 SFT 벤치마크 에이전틱 규약 변경)_
 
 ## 세션 재생성 2차 복원 결과 (2026-09-16 20:28 재생성 → 23:00)
 
@@ -13,9 +13,10 @@ _마지막 갱신: 2026-09-16 23:00 (세션 재생성 2차 복원·sub1 본 런 
 | 무엇 | 현재 상태 (09-16 23:00 KST) | 다음 |
 |---|---|---|
 | SFT 최종 본 런 | **sub1 에서 재개 3차 22:49** `outputs/alpha_baseline_48L_sft_128k_final_resume_20260916_224931`(iter 600 승계·optimizer 포함, save 100·valid 100). 잔여 2,262 iters ≈8.7일. wandb `alpha-posttraining/serz0r11` | **첫 iteration 게이트 PASS 23:00:55** — 601 loss 7.945837E-01(09-15 런과 비트 동일)·aux 5.551457E-01·grad norm 0.135·max-alloc 59.7 GB·traceback 0. 다음 재생성 시 224931 의 latest ckpt 로 `load:` 갱신(RESTORE §7.7-17) |
-| main1 | GPU 7 미수리(S/N 1653124027118). 정지 판별식 정상이나 결함 판정 불가. `~/.pai_megatron_alpha_env` 에 `CUDA_VISIBLE_DEVICES=0..6` 가드 | **GPU 0~6 추론용만**(fleet `N_GPUS` 7). 엔지니어 답변 후 교체·EP8 게이트 |
+| main1 | GPU 7 미수리(S/N 1653124027118). 정지 판별식 정상이나 결함 판정 불가. `~/.pai_megatron_alpha_env` 에 `CUDA_VISIBLE_DEVICES=0..6` 가드. GPU 0~6 bf16 matmul 756~800 TFLOP/s 정상(09-16 23:10) | **GPU 0~6 추론용만**(fleet `N_GPUS` 7). 엔지니어 답변 후 교체·EP8 게이트 |
+| **SFT 최종 런 iter600 벤치 (main1 GPU 0~6)** | **09-16 23:18 기동** `outputs/bench_iter600_main1_20260916.sh`(사용자 지시: 기존 iter2448 보다 우선). ckpt `…final_resume_20260915_174309/checkpoints/iter_0000600`. 체인: ① `probe_ckpt.sh` GPUS=0..5 → `evaluate.sh` **EP=6 변환**(192 % 7 ≠ 0 이라 6장) + weight diff + forward_sanity + G1 → identity·유령 프로브(GPU0 :8011) ② `eval_new_ckpt.sh` GPUS=0..6 **fleet 7대** T1·T3 → 에이전틱(역터널은 main1 발) → T2. 로그 `outputs/probe_<TAG>.log` · `tools/bench_logs/<TAG>_suite.log`, 진행 `BENCH_HOST=main1 bash eval_sft/progress.sh <TAG>` | 완료 시 `results/TRACKING.md`·wandb `alpha-post-eval`(계보 alias → `…final_20260913_022854` 곡선)·`SFT_BENCHMARKS.md` §3.10 측정 이력 기입. T1 이 phase-1 iter600(48.6/32.2/55.6) 대비 열세면 SFT_FINAL_PLAN §6 09-14 결정(phase-1 이어가기) 재검토 |
 | mock 스모크 종료 시 SIGSEGV | 양 노드 rank 4, 저장 성공 뒤 teardown, 재현 1회 clean → 플레이크 | 스모크 판정을 rc 대신 iteration+saved 로(RESTORE §7.7-13). KNOWN_ISSUES 09-16 |
-| iter2448 스위트 · eval watch · fleet | **정지** 유지(sub1 학습 전용). gpu06 역터널 미기동 | main1 GPU 0~6 fleet(7대)로 재개할지는 평가 세션 결정 |
+| iter2448 스위트 · eval watch · fleet | **정지** 유지(sub1 학습 전용). gpu06 역터널은 iter600 에이전틱 단계에서 main1 이 띄운다 | main1 fleet 는 iter600 평가가 먼저(사용자 09-16). 그 뒤 iter2448 에이전틱·T2 재개 여부 결정 |
 | gh 인증 · push | 미완(세션 재생성으로 소실) | 사용자 터미널에서 `gh auth login` 후 `git push` (RESTORE §7.7-2) |
 | NeMo-Gym · SDG U/T/D · ko_chat v3 · 터미널 코퍼스 | 변동 없음 | — |
 

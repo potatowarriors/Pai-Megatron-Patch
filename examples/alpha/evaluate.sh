@@ -72,9 +72,13 @@ if [ -z "$INPUT" ]; then
     exit 1
 fi
 
-# ---- GPU count (EP) ----
+# ---- GPU count (EP) ---- explicit --gpus > CUDA_VISIBLE_DEVICES > k8s hint > nvidia-smi (ignores CVD)
 if [ -z "$GPUS" ]; then
-    GPUS=${KUBERNETES_CONTAINER_RESOURCE_GPU:-$(nvidia-smi -L 2>/dev/null | wc -l)}
+    if [ -n "${CUDA_VISIBLE_DEVICES:-}" ]; then
+        GPUS=$(echo "${CUDA_VISIBLE_DEVICES}" | tr ',' '\n' | grep -c .)
+    else
+        GPUS=${KUBERNETES_CONTAINER_RESOURCE_GPU:-$(nvidia-smi -L 2>/dev/null | wc -l)}
+    fi
 fi
 if [ -z "$GPUS" ] || [ "$GPUS" -lt 1 ] 2>/dev/null; then GPUS=1; fi
 

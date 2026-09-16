@@ -10,7 +10,7 @@
 #   RUN_DIR : outputs/<sft_run>            (checkpoints/ 를 품은 디렉토리)
 #   ITER    : 600                          (checkpoints/iter_0000600)
 #   STAGES  : t1,t3,agentic,t2 (기본 전부)
-# 환경변수: GPUS (기본 0~7), SWE_W, TERM_W
+# 환경변수: GPUS (기본 0~7; 변환은 그중 num_experts 약수 개수만 사용), SWE_W, TERM_W
 set -uo pipefail
 RUN_DIR="${1:?run dir (outputs/<sft_run>)}"; ITER="${2:?iteration (예: 600)}"
 STAGES="${3:-t1,t3,agentic,t2}"
@@ -30,7 +30,18 @@ else
   # fleet 가 GPU 를 물고 있으면 변환이 OOM 난다 — 먼저 내린다.
   bash "$HERE/stop_fleet.sh" "${GPUS:-0,1,2,3,4,5,6,7}" >/dev/null 2>&1 || true
   sleep 5
-  if ! bash "$REPO/toolkits/distributed_checkpoints_convertor/scripts/alpha/run_convert.sh" \
+  # 변환 GPU 수(=EP)는 num_experts 의 약수여야 한다(192: 1·2·3·4·6·8). GPUS 가 8장이 아닌 목록이면
+  # (2026-09-16 main1 GPU 7 제외 → 0~6 7장) 앞에서부터 가장 큰 약수 개수만 쓴다. run_convert.sh 의 GPUS 는
+  # **개수**이고 그 nvidia-smi 자동검출은 CUDA_VISIBLE_DEVICES 를 무시하므로 여기서 둘 다 명시한다.
+  IFS=',' read -ra GL <<< "${GPUS:-0,1,2,3,4,5,6,7}"
+  NEXP=$(python3 "$ALPHA/tools/alpha_config.py" emit-megatron-flags --from-checkpoint "$RUN_DIR/checkpoints/iter_$ITERPAD" 2>/dev/null \
+         | grep -A1 -x -e '--num-experts' | tail -1)
+  NCONV=${#GL[@]}
+  while [ "$NCONV" -gt 1 ] && [ $(( ${NEXP:-192} % NCONV )) -ne 0 ]; do NCONV=$((NCONV-1)); done
+  CONV_CVD=$(IFS=','; echo "${GL[*]:0:$NCONV}")
+  echo "[new-ckpt] 변환 GPU $NCONV 장 (CUDA_VISIBLE_DEVICES=$CONV_CVD, num_experts=${NEXP:-?})"
+  if ! CUDA_VISIBLE_DEVICES="$CONV_CVD" GPUS="$NCONV" \
+       bash "$REPO/toolkits/distributed_checkpoints_convertor/scripts/alpha/run_convert.sh" \
         baseline_48L "$RUN_DIR" "auto:$ITER" true true bf16; then
     # sub1 은 compat libcuda 570→595 스왑 이후 변환 **teardown** 에서 SIGSEGV 를 낸다
     # (`examples/alpha/CLAUDE.md` 함정 표 09-04). 두 선례(iter1200 .partial, iter1500·1800

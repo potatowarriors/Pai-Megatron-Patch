@@ -42,8 +42,19 @@ DIAGNOSTIC_PREFIX = (
 RUN_ALIASES = {
     "alpha_baseline_48L_sft_128k_full_swap_20260901_101523":
         "alpha_baseline_48L_sft_128k_full_20260828_081911",
+    # SFT 최종 런(SFT_FINAL_PLAN.md) — A 런 iter150 → 재개 3회(iter300·600 승계, optimizer 포함, 같은 데이터·스케줄).
+    # 출력 디렉토리만 갈렸으므로 A 런 이름으로 합친다. 계보: RESTORE_AFTER_REBOOT.md §7.7-17.
+    "alpha_baseline_48L_sft_128k_final_resume_20260914_013856":
+        "alpha_baseline_48L_sft_128k_final_20260913_022854",
+    "alpha_baseline_48L_sft_128k_final_resume_20260915_174309":
+        "alpha_baseline_48L_sft_128k_final_20260913_022854",
+    "alpha_baseline_48L_sft_128k_final_resume_20260916_224931":
+        "alpha_baseline_48L_sft_128k_final_20260913_022854",
 }
-BLEND_SWAP_AT_ITER = 900
+# 합친 런에 남길 추가 config. 블렌드 교체 지점은 swap 계보에만 있다 — 재개 계보는 순수 연속이라 없음.
+RUN_ALIAS_CONFIG = {
+    "alpha_baseline_48L_sft_128k_full_swap_20260901_101523": {"blend_swap_at_iter": 900},
+}
 
 
 def parse_tag(tag: str) -> tuple[str, int]:
@@ -139,7 +150,7 @@ def main() -> int:
         if src_run != run_name:
             # 어느 학습 런이 이 점을 만들었는지 config 에 남긴다.
             cfg["source_run"] = src_run
-            cfg["blend_swap_at_iter"] = BLEND_SWAP_AT_ITER
+            cfg.update(RUN_ALIAS_CONFIG.get(src_run, {}))
         run = wandb.init(project=a.project, name=run_name, id=rid, resume="allow",
                          config=cfg, reinit=True)
         run.log({**metrics, "iteration": it}, step=it)

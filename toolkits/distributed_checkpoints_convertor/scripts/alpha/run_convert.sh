@@ -52,9 +52,15 @@ NODE_RANK=${RANK:-0}
 MASTER_ADDR=${MASTER_ADDR:-localhost}
 MASTER_PORT=${MASTER_PORT:-6000}
 
-# GPU count: explicit GPUS= > k8s resource hint > nvidia-smi autodetect > 1
+# GPU count: explicit GPUS= > CUDA_VISIBLE_DEVICES > k8s resource hint > nvidia-smi autodetect > 1
+# (nvidia-smi ignores CUDA_VISIBLE_DEVICES; on a node with a masked GPU — main1 GPU 7, 2026-09-16 —
+#  it would spawn one rank more than there are visible devices.)
 if [ -z "${GPUS}" ]; then
-    GPUS=${KUBERNETES_CONTAINER_RESOURCE_GPU:-$(nvidia-smi -L 2>/dev/null | wc -l)}
+    if [ -n "${CUDA_VISIBLE_DEVICES:-}" ]; then
+        GPUS=$(echo "${CUDA_VISIBLE_DEVICES}" | tr ',' '\n' | grep -c .)
+    else
+        GPUS=${KUBERNETES_CONTAINER_RESOURCE_GPU:-$(nvidia-smi -L 2>/dev/null | wc -l)}
+    fi
 fi
 if [ -z "${GPUS}" ] || [ "${GPUS}" -lt 1 ] 2>/dev/null; then
     GPUS=1
