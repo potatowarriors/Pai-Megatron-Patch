@@ -4,6 +4,15 @@
 CLAUDE.md의 "함정 표"는 이 문서의 한 줄 요약이며, 새 사고는 **여기에 서사를 쓰고 CLAUDE.md 표에는 한 줄만** 추가한다.
 날짜는 절대 표기. 두 스테이지 이상 지난 항목은 스테이지 경계에서 `archive/`로 이동.
 
+## 세션 재생성 2차 — GPU 7 미교체 · mock 스모크 종료 시 SIGSEGV 플레이크 · 스모크 판정 rc 의존 오판 (2026-09-16 ✅)
+
+**증상/발견**: 09-16 20:28 컴퓨팅 세션 재생성(두 컨테이너). 이미지 동일(25.05). main1 GPU 7 은 **동일 S/N** — 미교체. sub1 본 런은 iter 600 저장 직후 601 에서 사망(save 100 효과).
+셋업(30분, 13.5 단계 자동, 핀 전부 09-15 와 일치) 후 `train.sh smoke smoke mock --global-batch-size 8` 이 양 노드에서 2 iter·loss 비트 동일·ckpt 저장 성공했는데 **종료 시 rank 4 SIGSEGV**(exitcode -11) 로 rc=1.
+검증 체인이 rc 로 판정해 ABORT. main1 에서 faulthandler 로 재현 → rc=0 깨끗 → 비결정 teardown 플레이크(`destroy_process_group() was not called` 경고 뒤). NCCL 2.26.5 동일, 설치 차이는 modelscope 패치 버전만.
+
+**조치**: 스모크 판정 기준을 iteration 줄 수 + `successfully saved checkpoint` 로(rc·Traceback 카운트 단독 금지 — elastic 런처 트레이스가 섞임). 사용자 결정: main1 GPU 0~6 추론용만(GPU 7 제외, `CUDA_VISIBLE_DEVICES` 가드), 실모델 EP8 게이트 미실행(sub1 학습 중 main1 정지 → 관리자 리셋 → sub1 런 사망 위험).
+sub1 본 런 재개 3차: `load:` → 174309/iter600, 런 224931, 첫 iteration 게이트로 등가 확인. 절차 정본 `project_s/RESTORE_AFTER_REBOOT.md` §7.7.
+
 ## main1 GPU 7 하드웨어 결함 재발 — 실부하에서 무증상 정지 → Xid 109 CTX SWITCH TIMEOUT → Xid 120 GSP panic (2026-09-15 🔶 교체 요청, sub1 임시 학습)
 
 **배경**: 09-15 03:47 SFT 본 런이 iter 441 에서 EP all-to-all NCCL 타임아웃 → SIGABRT, 이후 nvidia-smi `Failed to fill in device global IDs`·

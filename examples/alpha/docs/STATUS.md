@@ -3,9 +3,24 @@
 **규칙**: 세션 종료 시 자기 트랙의 행을 갱신하고 **커밋·push**한다. 상태는 여기에만 쓴다 — Claude auto-memory에 쓰지 않는다
 (메모리는 컨테이너·노드별이라 다른 세션이 못 본다). 날짜는 절대 표기. 끝난 트랙은 "완료" 절로 내리고 정본 링크만 남긴다.
 
-_마지막 갱신: 2026-09-15 17:45 (세션 재생성 복원 완료·main1 GPU7 재발 → sub1 임시 본 런; 이전: 09-15 05:15 세션 리셋 스냅샷 신설; NeMo-Gym 채택 트랙 신설·1단계 스모크; 이전: 09-14 (SFT 벤치마크 — 에이전틱 평가 규약 변경·iter2448 중단 기록·열린 결정 3건; 이전: 09-10 터미널 트랙 문서 재구성)_
+_마지막 갱신: 2026-09-16 23:00 (세션 재생성 2차 복원·sub1 본 런 iter 600 재개·main1 GPU 0~6 추론용 결정; 이전: 09-15 17:45 세션 재생성 복원 완료·main1 GPU7 재발 → sub1 임시 본 런; 09-15 05:15 세션 리셋 스냅샷; NeMo-Gym 채택 트랙 1단계; 09-14 SFT 벤치마크 에이전틱 규약 변경)_
 
-## 세션 재생성 복원 결과 (2026-09-15 15:07 재생성 → 17:45)
+## 세션 재생성 2차 복원 결과 (2026-09-16 20:28 재생성 → 23:00)
+
+절차·수치·정정은 `project_s/RESTORE_AFTER_REBOOT.md` **§7.7**(현행 정본). 요약: 이미지 동일(25.05), 셋업 30분·핀 전부 일치·compat 595·mock 스모크 양 노드 loss 비트 동일.
+**main1 GPU 7 은 교체되지 않았다**(동일 S/N) — 서버관리자가 하드웨어 엔지니어에게 전달, 답변 대기. **사용자 결정 09-16: main1 은 GPU 0~6 만 추론용**, GPU 7 제외, 학습·EP8 게이트 금지.
+
+| 무엇 | 현재 상태 (09-16 23:00 KST) | 다음 |
+|---|---|---|
+| SFT 최종 본 런 | **sub1 에서 재개 3차 22:49** `outputs/alpha_baseline_48L_sft_128k_final_resume_20260916_224931`(iter 600 승계·optimizer 포함, save 100·valid 100). 잔여 2,262 iters ≈8.7일. wandb `alpha-posttraining/serz0r11` | **첫 iteration 게이트 PASS 23:00:55** — 601 loss 7.945837E-01(09-15 런과 비트 동일)·aux 5.551457E-01·grad norm 0.135·max-alloc 59.7 GB·traceback 0. 다음 재생성 시 224931 의 latest ckpt 로 `load:` 갱신(RESTORE §7.7-17) |
+| main1 | GPU 7 미수리(S/N 1653124027118). 정지 판별식 정상이나 결함 판정 불가. `~/.pai_megatron_alpha_env` 에 `CUDA_VISIBLE_DEVICES=0..6` 가드 | **GPU 0~6 추론용만**(fleet `N_GPUS` 7). 엔지니어 답변 후 교체·EP8 게이트 |
+| mock 스모크 종료 시 SIGSEGV | 양 노드 rank 4, 저장 성공 뒤 teardown, 재현 1회 clean → 플레이크 | 스모크 판정을 rc 대신 iteration+saved 로(RESTORE §7.7-13). KNOWN_ISSUES 09-16 |
+| iter2448 스위트 · eval watch · fleet | **정지** 유지(sub1 학습 전용). gpu06 역터널 미기동 | main1 GPU 0~6 fleet(7대)로 재개할지는 평가 세션 결정 |
+| gh 인증 · push | 미완(세션 재생성으로 소실) | 사용자 터미널에서 `gh auth login` 후 `git push` (RESTORE §7.7-2) |
+| NeMo-Gym · SDG U/T/D · ko_chat v3 · 터미널 코퍼스 | 변동 없음 | — |
+
+## 세션 재생성 복원 결과 (2026-09-15 15:07 재생성 → 17:45) — 이력
+
 
 절차·정정·검증 수치는 `project_s/RESTORE_AFTER_REBOOT.md` **§7.6**(현행 정본). 요약: 이미지 25.03→25.05 변경에도 스택 재구성·핀 일치·양 노드 mock 스모크 PASS·sub1 재개 스모크 PASS(loss 비트 동일).
 **main1 GPU 7 하드웨어 결함 재발**(Xid 109→120, `KNOWN_ISSUES` 09-15) → 교체 요청, main1 GPU 작업 불가.
