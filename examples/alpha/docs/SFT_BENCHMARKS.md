@@ -196,7 +196,7 @@ RL 단계의 rollout 속도가 곧 학습 속도이므로 벤치 fleet 에서 �
 컨테이너 호스트 load 6.4(64 CPU), docker 96. 첫 실행에서 :8003 EngineCore 가 정지해(`KNOWN_ISSUES` 09-17) `eval_sft/fleet_watchdog.py` 를
 붙였다 — 세션 고정은 죽은 백엔드에 세션을 못 박으므로 **정지 감시·재기동이 세트**다.
 
-턴당 6×, KV 부담 증가 없음. 남은 레버(미적용): ngram 투기 디코딩(decode 5.9 ms/token 은 대역폭 한계 ~1.1 ms 의 5×; GDN 상태 롤백 지원 검증 필요), `MAX_BATCHED_TOKENS` 8192→32768, `--moe-backend` FlashInfer CUTLASS A/B, FP8, 단일 프로세스 DP 재검증(09-07 munmap 원인 해소됨). **RL 트랙 확인 항목**: NeMo-RL `vllm_cfg` 가 `enable_prefix_caching`·`mamba_cache_mode=align` 을 통과시키는지, 벤더 vLLM 버전의 GDN prefix caching 포함 여부, NeMo-Gym 모델 서버의 세션별 워커 고정 여부(NeMo-Gym 평가 경로는 `:8100` 프록시를 쓰므로 세션 고정이 그대로 적용된다).
+**다음 기동부터** `--gpu-memory-utilization` 0.90 → **0.95**(사용자 결정 2026-09-17, KV 풀 37.7 → 약 41.7 GiB; iter600 4차 fleet 는 0.90 으로 완주). 턴당 6×, KV 부담 증가 없음. 남은 레버(미적용): ngram 투기 디코딩(decode 5.9 ms/token 은 대역폭 한계 ~1.1 ms 의 5×; GDN 상태 롤백 지원 검증 필요), `MAX_BATCHED_TOKENS` 8192→32768, `--moe-backend` FlashInfer CUTLASS A/B, FP8, 단일 프로세스 DP 재검증(09-07 munmap 원인 해소됨). **RL 트랙 확인 항목**: NeMo-RL `vllm_cfg` 가 `enable_prefix_caching`·`mamba_cache_mode=align` 을 통과시키는지, 벤더 vLLM 버전의 GDN prefix caching 포함 여부, NeMo-Gym 모델 서버의 세션별 워커 고정 여부(NeMo-Gym 평가 경로는 `:8100` 프록시를 쓰므로 세션 고정이 그대로 적용된다).
 
 ### 진행 확인 — 로그를 믿지 말 것
 
@@ -252,7 +252,7 @@ summary 에 넣으므로, 사본을 만들면 패널 목록이 두 배가 된다
 | 파일 | 역할 |
 |---|---|
 | **서빙** | |
-| `serve_alpha.sh` | 단일 vLLM 서버. `TOOLS=1` 이면 `--enable-auto-tool-choice --tool-call-parser ${TOOL_PARSER:-qwen3_xml}`. `PREFIX_CACHE=1`(기본, run_suite) → `--enable-prefix-caching --mamba-cache-mode align`, `MAMBA_BLOCK`·`MAX_BATCHED_TOKENS` 선택 |
+| `serve_alpha.sh` | 단일 vLLM 서버. `TOOLS=1` 이면 `--enable-auto-tool-choice --tool-call-parser ${TOOL_PARSER:-qwen3_xml}`. `PREFIX_CACHE=1`(기본, run_suite) → `--enable-prefix-caching --mamba-cache-mode align`, `MAMBA_BLOCK`·`MAX_BATCHED_TOKENS` 선택. `GPU_MEM_UTIL` 기본 **0.95**(2026-09-17 사용자 결정, 다음 기동부터; 이전 0.90) |
 | `serve_fleet.sh` / `lb_proxy.py` / `stop_fleet.sh` | N개 단일서버 + **세션 고정** 프록시(:8100, 신규 세션 최소 부하 배정, `GET /lb/stats`; 2026-09-17) / 정상 종료·GPU 회수 확인 |
 | `fleet_watchdog.py` | 백엔드 정지·사망 감시 → 같은 argv·env 재기동 + `fleet_logs/watchdog_events.jsonl` 기록. run_suite 와 별도로 띄운다: `python3 eval_sft/fleet_watchdog.py --ports 8000,…,8006` (lb_proxy 종료 시 자동 종료) |
 | `prefix_cache_check.py` | 하이브리드 prefix caching 게이트 — teacher-forced 다음 토큰 분포 대조(캐시 경로) + `/metrics` 적중 확인. fleet 에 켜기 전 필수 (§2.5 "추론 처리량") |

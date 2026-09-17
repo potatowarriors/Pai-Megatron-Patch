@@ -56,13 +56,16 @@ fi
 #                           스냅샷하므로 작을수록 재사용은 촘촘하고 KV 풀 소모는 크다 — 선택 근거는 SFT_BENCHMARKS.md §2.5.
 #   MAX_BATCHED_TOKENS=N  → --max-num-batched-tokens N (기본 8192; 5.7만 프롬프트 prefill 스텝 수를 줄인다)
 # 정확도 게이트: eval_sft/prefix_cache_check.py (ON/OFF 로짓 대조 + 적중 확인) 를 통과한 뒤에만 fleet 에 켠다.
+# GPU 메모리 비율 (2026-09-17 사용자 결정: 0.90 → 0.95, 다음 기동부터). main1 GPU 는 fleet 전용이라 다른 점유가 없고, KV 풀이
+# 37.7 → 약 41.7 GiB 로 늘어 동시 세션 여유가 커진다. 0.90 이 필요하면(같은 GPU 에 프로브·채팅 서버 동거 등) GPU_MEM_UTIL=0.90.
+GPU_MEM_UTIL="${GPU_MEM_UTIL:-0.95}"
 PC_FLAGS=""
 if [ "${PREFIX_CACHE:-0}" = "1" ]; then
   PC_FLAGS="--enable-prefix-caching --mamba-cache-mode align"
   [ -n "${MAMBA_BLOCK:-}" ] && PC_FLAGS="$PC_FLAGS --mamba-block-size $MAMBA_BLOCK"
 fi
 [ -n "${MAX_BATCHED_TOKENS:-}" ] && PC_FLAGS="$PC_FLAGS --max-num-batched-tokens $MAX_BATCHED_TOKENS"
-echo "[serve] ckpt=$CKPT max_len=$MAX_LEN DP=$DP port=$PORT tools=${TOOLS:-0} reasoning=${REASONING_PARSER:-off} prefix_cache=${PREFIX_CACHE:-0}${MAMBA_BLOCK:+/block$MAMBA_BLOCK}${MAX_BATCHED_TOKENS:+ batched=$MAX_BATCHED_TOKENS} cache=$VLLM_CACHE_ROOT(${CACHE_AVAIL_GB}GB free)"
+echo "[serve] ckpt=$CKPT max_len=$MAX_LEN DP=$DP port=$PORT tools=${TOOLS:-0} reasoning=${REASONING_PARSER:-off} prefix_cache=${PREFIX_CACHE:-0}${MAMBA_BLOCK:+/block$MAMBA_BLOCK}${MAX_BATCHED_TOKENS:+ batched=$MAX_BATCHED_TOKENS} mem_util=$GPU_MEM_UTIL cache=$VLLM_CACHE_ROOT(${CACHE_AVAIL_GB}GB free)"
 exec $VENV/bin/vllm serve "$CKPT" \
   $TOOL_FLAGS $REASON_FLAGS $PC_FLAGS \
   --served-model-name alpha \
@@ -70,5 +73,5 @@ exec $VENV/bin/vllm serve "$CKPT" \
   --tensor-parallel-size 1 \
   --data-parallel-size "$DP" \
   --max-model-len "$MAX_LEN" \
-  --gpu-memory-utilization 0.90 \
+  --gpu-memory-utilization "${GPU_MEM_UTIL:-0.95}" \
   --host 0.0.0.0 --port "$PORT"
