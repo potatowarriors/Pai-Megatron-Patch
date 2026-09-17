@@ -4,6 +4,17 @@
 CLAUDE.md의 "함정 표"는 이 문서의 한 줄 요약이며, 새 사고는 **여기에 서사를 쓰고 CLAUDE.md 표에는 한 줄만** 추가한다.
 날짜는 절대 표기. 두 스테이지 이상 지난 항목은 스테이지 경계에서 `archive/`로 이동.
 
+## τ³ 상대역(gemma4 외부 엔드포인트) 404 — preflight 통과 10분 뒤 전 경로 404, retail 전 과제 실패 (2026-09-17 🔶 상대역 결정 대기)
+
+**증상**: 16:06 `run_tau.sh` preflight T2(상대역 chat 1회) 통과 → retail 시작 → 16:15 부터 모든 시뮬레이션이 `litellm.NotFoundError: 404 page not found`
+로 4회 재시도 후 영구 실패, 10분 만에 81/114 (trial 2) 까지 소진. 우리 경로(:8110 → :8100 fleet)는 chat 200 정상. `https://gemma4.withai.cj.net:10206`
+은 `/v1/models`·`/v1/chat/completions`·`/`·`/health` 전부 `404 page not found`(인그레스는 살아 있고 뒤 서비스 라우트가 사라진 형태).
+τ³ 러너를 16:17 종료(결과 무효·미기록), fleet 는 TB-2 재실행으로.
+
+**조치·결정 대기**: 상대역은 "고정이라 추이 유효" 전제였으나 아직 완주한 τ³ 본 측정이 없어 기준선도 없다. 선택지 — (a) gemma4 복구 대기(외부 서비스, ETA 없음)
+(b) NeMo-Gym `tau2_alpha.yaml` 과 같은 **Gemini** 상대역(`TAU_USER_LLM`/`TAU_USER_ARGS`, `GEMINI_API_KEY` 보유, 비용 발생). 사용자 결정 후 `run_suite.sh … tau` 로 단독 실행.
+**교훈**: preflight 1회 통과는 외부 엔드포인트의 생존을 보장하지 않는다 — 러너가 연속 404/5xx N건이면 조기 중단하도록 해야 시간을 안 태운다(미구현, 작업 큐).
+
 ## TB-2 복원 miss_rate 32.5% 무효 오판 — 분모에서 필드 복원 턴 누락 (2026-09-17 ✅ 수정, TB-2 재실행 예정)
 
 **증상**: iter600 TB-2(W=32, restore) 101 트라이얼 시점 프록시 통계 miss 1,541 / miss_rate 0.325 → `run_terminal_tb2.sh` 규칙(restore 인데
