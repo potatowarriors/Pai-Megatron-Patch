@@ -166,6 +166,7 @@ submodule `tests/unit_tests/test_step_batch_size_schedule.py`, `test_muon_optimi
 
 | 날짜 | 증상 | 원인 → 대응 |
 |---|---|---|
+| 09-17 | TB-2 복원 miss_rate 32.5% 로 무효 오판 — harbor 는 이력에 reasoning 필드를 되돌려 보내 필드 복원(216k)이 분모에서 빠짐. 전체 턴 기준 0.7% | `tau_proxy` miss_rate 분모를 캐시+필드+miss 로, distinct 턴 집계·miss 표본 추가. TB-2 는 τ³ 뒤 `run_suite.sh … tb2` 로 재실행. `KNOWN_ISSUES` 09-17 |
 | 09-17 | fleet :8003(GPU 3) EngineCore 무증상 정지 — W=96+prefix caching 첫 실행 2.5분 뒤 SM 100%·126 W·생성 0, SIGTERM 무반응. 세션 고정이라 15 세션이 못 박힘 | SIGKILL 재기동 + `eval_sft/fleet_watchdog.py`(생성 120 s 정지/`/metrics` 60 s 불통 → 같은 argv 재기동·기록). 원인은 GPU 3 하드웨어 vs align 모드 경합 미판정 — **재발 GPU 로 판별**. `KNOWN_ISSUES` 09-17 |
 | 09-17 | iter600 에이전틱이 A4 FAIL 로 두 번 건너뜀 — 1회 표본이 되물음/거부(thinking OFF)라 `tool_calls` 빈 것을 파서 실패로 오판. A5(ON)는 4/4 PASS | `judge_a4` 관측/미관측 분리 + 모드별 8회 재표본, OFF 전부 미호출이면 평가 조건 ON 으로 파서 확인(OFF 미호출은 ⚠️). iter600 의 OFF 거부는 **When2Call(no-think·전부 미호출) 학습 신호** 로 설명되는 정상 행동(사용자 지적). RULER Reasoning-Off 숫자 나열 퇴행은 별도 미해결. `KNOWN_ISSUES` 09-17 |
 | 09-15 | main1 GPU 7 재발 — 실부하에서 Xid 없이 조용히 정지(SM 100%·mem 0%·115 W), kill 시 Xid 109 ×3 → Xid 120 GSP panic → 노드 8장 CUDA 불가. VBIOS·ECC·NVLink 카운터는 정상 | 보드 불량(리셋 후 재발) → 교체 요청. 판별은 NCCL 플라이트 레코더(낙오 rank) + 단독 GPU 지속 GEMM 대조. **카운터가 깨끗해도 EP8 재개 2-iter 스모크 전엔 GPU 를 믿지 않는다.** sub1 임시 학습(save 100). `KNOWN_ISSUES` 09-15 |

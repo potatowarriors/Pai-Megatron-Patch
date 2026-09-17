@@ -383,3 +383,45 @@ def test_unclosed_think_at_stop_is_counted_but_still_cached(stack):
     assert r["choices"][0]["message"]["content"] == ""
     s = proxy.snapshot()
     assert s["think_unclosed_stop"] == 1 and s["think_from_field"] == 1 and s["think_unclosed"] == 0 and s["cache_entries"] == 1
+
+
+# ---------------------------------------------------------------- miss_rate 분모·턴 단위 집계 (2026-09-17)
+def test_miss_rate_counts_field_inlined_turns_in_denominator(stack):
+    """harbor 처럼 reasoning_content 필드를 되돌려 보내는 하니스: 필드로 복원된 턴도 분모에 들어가야 한다.
+    TB-2 09-17: 캐시 경로만 본 옛 비율은 1541/(3205+1541)=32.5% 로 무효 오판, 전체 턴 기준 0.7%."""
+    up, proxy, port = stack
+    hist = [SYS, {"role": "assistant", "content": "a1", "reasoning_content": "r1"},   # 필드 복원
+            USER1, {"role": "assistant", "content": "a2"},                            # 캐시 없음 → miss
+            {"role": "user", "content": "next"}]
+    post(port, {"messages": hist})
+    s = proxy.snapshot()
+    assert s["reasoning_field_inlined"] == 1 and s["miss"] == 1 and s["reinlined"] == 0
+    assert s["miss_rate_cache_path"] == 1.0
+    assert abs(s["miss_rate"] - 0.5) < 1e-9
+    assert s["restored_turns"] == 1 and s["miss_turns"] == 1 and abs(s["miss_turn_rate"] - 0.5) < 1e-9
+    assert len(s["miss_samples"]) == 1 and s["miss_samples"][0]["content_head"] == "a2"
+
+
+def test_repeated_history_counts_one_miss_turn(stack):
+    """같은 깨진 턴이 요청마다 다시 와도 miss_turns 는 1. per-request miss 는 요청 수만큼 는다."""
+    up, proxy, port = stack
+    # 첫 assistant 는 greeting 규약상 miss_first_assistant 로 따로 세므로, 깨진 턴은 두 번째 assistant 로 둔다.
+    hist = [SYS, {"role": "assistant", "content": "a0", "reasoning_content": "r0"}, USER1,
+            {"role": "assistant", "content": "broken"}, {"role": "user", "content": "u2"}]
+    post(port, {"messages": hist})
+    post(port, {"messages": hist + [{"role": "assistant", "content": "x", "reasoning_content": "y"}, {"role": "user", "content": "z"}]})
+    s = proxy.snapshot()
+    assert s["miss"] == 2 and s["miss_turns"] == 1 and s["restored_turns"] == 2
+    assert len(s["miss_samples"]) == 1 and s["miss_samples"][0]["content_head"] == "broken"
+
+
+def test_cache_only_harness_miss_rate_unchanged(stack):
+    """필드를 안 보내는 하니스(tau2)에서는 옛 비율과 새 비율이 같다."""
+    up, proxy, port = stack
+    up.queue.append({"content": "<think>\nt</think>ans"})
+    post(port, {"messages": [SYS, GREET, USER1]})
+    post(port, {"messages": [SYS, GREET, USER1, {"role": "assistant", "content": "ans"}, {"role": "user", "content": "u2"}]})
+    post(port, {"messages": [SYS, GREET, USER1, {"role": "assistant", "content": "other"}, {"role": "user", "content": "u2"}]})
+    s = proxy.snapshot()
+    assert s["reinlined"] == 1 and s["miss"] == 1 and s["reasoning_field_inlined"] == 0
+    assert s["miss_rate"] == s["miss_rate_cache_path"] == 0.5

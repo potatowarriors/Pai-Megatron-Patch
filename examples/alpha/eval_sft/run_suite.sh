@@ -13,7 +13,7 @@
 # | T2 롱 | **롱 fleet 262144** (`T2_MAX_LEN`) | G1·G2·G3 |
 #
 # 사용: bash eval_sft/run_suite.sh <HF_CKPT> <RUN_TAG> [STAGES]
-#   STAGES: 쉼표 목록 (t1,t3,agentic,t2). 기본 전부.
+#   STAGES: 쉼표 목록 (t1,t3,agentic,t2 · 세부 swe,tb2,tau). 기본 전부.
 # 환경변수:
 #   PREFIX_CACHE(기본 1) / MAMBA_BLOCK / MAX_BATCHED_TOKENS   serve_alpha.sh 로 전달(하이브리드 prefix caching, 2026-09-17 게이트 PASS 후 기본 ON)
 #   SWE_RESUME=1   SWE 완료분 건너뛰고 재개 (run_swe.sh)
@@ -79,7 +79,8 @@ if has t1 || has t3; then
 fi
 
 # ── 에이전틱 : TOOLS=1 fleet + 역터널 ─────────────────────────────────
-if has agentic; then
+# 2026-09-17: agentic = swe+tb2+tau 전부. swe / tb2 / tau 를 따로 주면 그 벤치만 (같은 fleet·게이트). TB-2 재실행 등.
+if has agentic || has swe || has tb2 || has tau; then
   # 에이전틱은 **넓은 창**이 필요하다. 창이 결과를 지배한다 —
   # 2026-08-31 실측: 40960 → ContextWindowExceededError 94%(411/437), 턴 46;
   # 106496 → 21%, 턴 118, Submitted 69%.
@@ -102,20 +103,26 @@ if has agentic; then
   agentic_ok=1
   python3 "$HERE/check_agentic_gates.py" --base-url "$BURL" || { echo "[suite] ❌ A1~A5 실패 — 에이전틱 건너뜀"; rc=1; agentic_ok=0; }
   if [ "$agentic_ok" -eq 1 ] || [ "${FORCE_AGENTIC:-0}" = "1" ]; then
+    if has agentic || has swe; then
     echo "[suite] === SWE-bench ==="
     SKIP_GATES=1 BASE_URL="$BURL" bash "$HERE/run_swe.sh" "$RUN_TAG" "${SWE_N:-0}" "${SWE_W:-96}" || rc=1
+    fi
     # Terminal 정본은 **TB-2**(Harbor + Terminus-2) — 사용자 결정 2026-09-07.
     # 학습 데이터가 Terminus-2 스키마인데 TB-1 하니스는 terminus v1 이었다
     # (`SFT_BENCHMARKS.md` §3.11). TB-1 로 되돌리려면 TERMINAL_HARNESS=tb1.
+    if has agentic || has tb2; then
     echo "[suite] === Terminal-Bench (${TERMINAL_HARNESS:-tb2}) ==="
     TERM_RUNNER="run_terminal_tb2.sh"
     [ "${TERMINAL_HARNESS:-tb2}" = "tb1" ] && TERM_RUNNER="run_terminal.sh"
     SKIP_GATES=1 BASE_URL="$BURL" bash "$HERE/$TERM_RUNNER" "$RUN_TAG" "${TERM_N:-0}" "${TERM_W:-32}" || rc=1
+    fi
     # τ³-bench (tau2-bench, docker 불요) — sub1 직접, tau_proxy(:8110) 경유. 에이전틱 fleet 가 이미 TOOLS=1 +
     # nemotron_v3(30df05b) 라 같은 fleet 를 그대로 쓴다(재기동 없음). run_tau.sh 의 T1·T1b·T2 게이트는 자체 실행.
     # 상대역은 외부 gemma 엔드포인트 (run_tau.sh 헤더). τ 단독: bash eval_sft/run_tau.sh <TAG>  (SFT_BENCHMARKS §3.13)
+    if has agentic || has tau; then
     echo "[suite] === τ³-bench ==="
     SKIP_GATES=1 BASE_URL="$BURL" bash "$HERE/run_tau.sh" "$RUN_TAG" "${TAU_N:-0}" "${TAU_TRIALS:-4}" "${TAU_W:-32}" || rc=1
+    fi
     # 에이전틱은 컨테이너 호스트에 build cache 를 수십 GB 남긴다. 매번 회수한다.
     # sweb.eval 인스턴스 이미지도 기본 정리(09-08 표준 정책 — 레이어 공유, KNOWN_ISSUES 09-08). 남기려면 --keep-images.
     bash "$HERE/docker_gc.sh" || echo "[suite] ⚠️ docker gc 실패 (비치명)"

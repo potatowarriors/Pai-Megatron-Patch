@@ -147,6 +147,13 @@ class Proxy:
         self.cache: OrderedDict[bytes, str] = OrderedDict()
         self.cache_bytes = 0
         self.stats = {k: 0 for k in COUNTERS}
+        # 복원 통계의 분모·분자를 **턴 단위**로도 센다 (2026-09-17). 요청마다 이력 전체가 다시 오므로 per-request 카운터는
+        # 같은 턴을 요청 수만큼 반복 집계한다. 깨진 턴이 궤적 앞쪽에 있으면 miss 가 그만큼 부풀고, 반대로 필드로 복원되는
+        # 턴은 `reinlined` 가 아니라 `reasoning_field_inlined` 에 쌓여 miss_rate 분모에서 빠졌다(TB-2 09-17: 32.5% 로 무효 오판,
+        # 전체 턴 기준 0.7%). 체인 해시 앞 12바이트를 집합에 넣어 distinct 턴 수를 구한다(상한 max_entries × 8).
+        self._turns_restored: set = set()
+        self._turns_missed: set = set()
+        self.miss_samples: list = []
         self.started = time.time()
         self._last_dump = 0.0
         if dump_dir:
@@ -166,7 +173,17 @@ class Proxy:
         d["greeting"] = self.greeting
         d["uptime_s"] = round(time.time() - self.started, 1)
         hit = d["reinlined"]; miss = d["miss"]
-        d["miss_rate"] = (miss / (hit + miss)) if (hit + miss) else 0.0
+        # 캐시 경로만 본 옛 비율은 참고용으로 남긴다. 정본 miss_rate 는 복원이 필요했던 **모든** 이력 턴(캐시 적중 + 필드
+        # 인라인 + miss) 대비 miss 다 — 하니스가 reasoning 필드를 되돌려 보내면(harbor) 그 턴들도 분모에 들어가야 한다.
+        d["miss_rate_cache_path"] = (miss / (hit + miss)) if (hit + miss) else 0.0
+        lookups = hit + d["reasoning_field_inlined"] + miss
+        d["miss_rate"] = (miss / lookups) if lookups else 0.0
+        with self.lock:
+            d["restored_turns"] = len(self._turns_restored)
+            d["miss_turns"] = len(self._turns_missed)
+            d["miss_samples"] = list(self.miss_samples)
+        tt = d["restored_turns"] + d["miss_turns"]
+        d["miss_turn_rate"] = (d["miss_turns"] / tt) if tt else 0.0
         return d
 
     def flush(self):
@@ -197,6 +214,20 @@ class Proxy:
                 self.cache.move_to_end(key)
             return v
 
+    def _note_turn(self, h, restored, msg=None, idx=None):
+        """distinct 턴 집계. 같은 턴(체인 해시)은 몇 번 다시 와도 한 번만 센다. miss 는 앞 8건을 표본으로 남긴다."""
+        k = h[:12]
+        with self.lock:
+            target = self._turns_restored if restored else self._turns_missed
+            if k in target or len(target) >= self.max_entries * 8:
+                return
+            target.add(k)
+            if not restored and len(self.miss_samples) < 8 and msg is not None:
+                c = msg.get("content")
+                cs = c if isinstance(c, str) else json.dumps(c, ensure_ascii=False)
+                self.miss_samples.append({"assistant_idx": idx, "content_len": len(cs or ""), "content_head": (cs or "")[:120],
+                                          "has_tool_calls": bool(msg.get("tool_calls")), "keys": sorted(msg.keys())})
+
     # 요청 처리: 히스토리 복원 + 파라미터 정합. 반환 = 마지막 메시지까지의 체인 해시
     def on_request(self, body):
         self.inc("requests")
@@ -216,23 +247,31 @@ class Proxy:
                 #                  렌더해 strip 이 성립하지 않는다 (2026-09-14 SWE 실측: strip 이 restore 와 구분 안 됨).
                 rc = m.pop("reasoning_content", None)
                 c = m.get("content")
+                field_inlined = False
                 if isinstance(rc, str) and rc.strip() and (c is None or isinstance(c, str)) and THINK_CLOSE not in (c or ""):
                     if self.reattach:
                         m["content"] = THINK_OPEN + "\n" + rc + THINK_CLOSE + (c or "")
                         self.inc("reasoning_field_inlined")
                         self.inc("restored")
+                        field_inlined = True
                     else:
                         self.inc("reasoning_field_dropped")
             h = step(h, m)
             if is_asst:
                 c = m.get("content")
                 has_think = isinstance(c, str) and THINK_CLOSE in c
+                if field_inlined:
+                    self._note_turn(h, restored=True)
                 if not has_think:
                     blk = self.cache_get(h)
                     if blk is None:
-                        self.inc("miss_first_assistant" if (self.greeting and not seen_assistant) else "miss")
+                        first = self.greeting and not seen_assistant
+                        self.inc("miss_first_assistant" if first else "miss")
+                        if not first:
+                            self._note_turn(h, restored=False, msg=m, idx=n_asst)
                     else:
                         self.inc("reinlined")
+                        self._note_turn(h, restored=True)
                         if self.reattach:
                             m["content"] = blk
                             self.inc("restored")

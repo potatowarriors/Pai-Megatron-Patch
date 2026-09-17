@@ -150,7 +150,7 @@ try:
 except Exception:
     pass
 PX_KEYS = ("requests", "reinlined", "miss", "miss_first_assistant", "think_stripped",
-           "think_from_field", "think_absent", "think_unclosed", "tool_calls", "reattach", "miss_rate",
+           "think_from_field", "think_absent", "think_unclosed", "tool_calls", "reattach", "miss_rate", "miss_rate_cache_path", "miss_turns", "restored_turns", "miss_turn_rate", "miss_samples",
            "reasoning_field_inlined", "reasoning_field_dropped", "restored")
 proxy = {k: px[k] for k in PX_KEYS if k in px}
 invalid = []

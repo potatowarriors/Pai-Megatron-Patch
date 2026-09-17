@@ -191,7 +191,7 @@ except Exception:  # noqa: BLE001
 # 프록시에서 센다(finish=length 는 think_unclosed 로 따로). 둘이 크게 어긋나면 한쪽 집계가 틀린 것이다.
 PX_KEYS = ("requests", "reinlined", "restored", "miss", "think_stripped", "think_from_field", "think_absent",
            "think_unclosed", "think_unclosed_stop", "reasoning_field_inlined", "reasoning_field_dropped", "reattach",
-           "miss_rate", "finish_length", "upstream_errors")
+           "miss_rate", "miss_rate_cache_path", "miss_turns", "restored_turns", "miss_turn_rate", "miss_samples", "finish_length", "upstream_errors")
 proxy = {k: px[k] for k in PX_KEYS if k in px}
 invalid = []
 if not px:

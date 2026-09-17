@@ -271,7 +271,7 @@ summary 에 넣으므로, 사본을 만들면 패널 목록이 두 배가 된다
 | `run_swe.sh` / `run_terminal_tb2.sh` | 에이전틱 정본. 전량이 기본, 부분 표본은 무효 표시. 컨테이너 안에 `tau_proxy` 를 띄워 추론을 복원(SWE :8110 · TB-2 :8111, `SWE_THINK`·`TB2_THINK`) — 프록시 통계로 무효 판정 (§3.14) |
 | `run_terminal.sh` | TB-1 (참고치, `TERMINAL_HARNESS=tb1`) |
 | `run_tau.sh` / `tau_proxy.py` / `tau_combine.py` | **τ³-bench** 러너(sub1 직접) / think 분리·히스토리 복원 프록시(:8110) / pass^k 합산·무효 규칙. 설치 `install_tau2.sh`, 검증 `tau_smoke.sh`·`tau_render_check.py`·`tau_tasks_count.py`, litellm 레지스트리 `configs/alpha_model_registry.json` (§3.13) |
-| `run_suite.sh` | 전 티어 오케스트레이터 (fleet 교체·게이트·판정·집계) |
+| `run_suite.sh` | 전 티어 오케스트레이터 (fleet 교체·게이트·판정·집계). 단계 `t1,t3,agentic,t2` + 세부 `swe,tb2,tau`(같은 fleet·게이트, 벤치 하나만 재실행) |
 | `eval_new_ckpt.sh <RUN_DIR> <ITER> [stages]` | **체크포인트 하나의 정본 진입점** — MG→HF 변환(있으면 `tools/verify_hf_export.py` 로 검증 후 재사용) → `run_suite.sh` |
 | `suite_running.sh` | 스위트 실행 여부 판정 — argv 구조로 본다. 감시·체인 스크립트는 `pgrep -f` 대신 이것을 쓴다(`KNOWN_ISSUES` 09-05) |
 | `docker_gc.sh` | 에이전틱 후 컨테이너 호스트 회수 — build cache·SWE 인스턴스 이미지(기본 정리, `--keep-images`)·산출물 회전(`GC_KEEP_RUNS`) |
@@ -1014,7 +1014,7 @@ TRACKING.md 를 매번 새로 쓰므로 그 파일에 손으로 쓴 기록은 �
 | p2 iter602 | ⛔ 43% | ✗ | ✗ | ✗ | ✗ | 09-09 fleet 연결 끊김(`Connection closed`, 다른 세션 실행). 결과 없음 |
 | **swap iter2448 (phase-1 최종)** | ⛔ **94.3%** | ✗ | ✗ | ✗ | ✗ | 09-14 11:07 KST `eval_ckpt.sh … t1,t3` 기동, ~16:05 KST sub1 이 τ³ 스모크·프로브로 재배정되며 결과 없이 중단. 프로브만 남음(identity FAIL · 유령 호출 1/33 PASS). **전 티어 재측정**(사용자): 21:22 KST 1차는 sub1 HOME 볼륨 ENOSPC 로 fleet 기동 실패(`KNOWN_ISSUES` 09-14) → 캐시 이전 후 21:51 KST 재기동. T1·T3 완료(09-15 03:39), 에이전틱 fleet 가 옮긴 컴파일 캐시의 절대경로로 사망 → 캐시 삭제 후 에이전틱·T2 만 07:36 KST 재기동 |
 
-| **final_resume_0915 iter600 (SFT 최종 런)** | ✅ | ✅ | ✅ | ⏳ | ⏳ | **main1 GPU 0~6**(GPU 7 결함 제외, 변환 EP=6·fleet 7대) 09-16 23:18 → 09-17 06:00. AIME·HMMT 무효(사고마감 16%·12%, 전 ckpt 동일). 에이전틱은 **A4 1회 표본 오판**(모델이 도구 대신 되물음 → 파서 실패로 오독, A5 는 2/2 PASS)으로 건너뜀 → A4 를 다중 표본으로 고친 2차(09:47)도 thinking OFF 8/8 미호출("bash 도구를 쓸 수 없다")로 FAIL, A5 는 4/4 PASS → A4 에 평가 조건(ON) 폴백 추가 후 **3차 09:52 `run_suite.sh … agentic` 재기동**(`KNOWN_ISSUES` 09-17). 관찰: RULER single_2 131K **0.25**(phase-1 iter600 0.90) — 실패 43건 중 37건이 `0, 1`·`0.5, 1.0, …` 퇴행 출력(Reasoning-Off 조건, single_1 은 100%). LogicKor 31.2(phase-1 iter600 40.2). MMLU-Pro 49.5·GPQA 35.4·IFEval 61.1 은 phase-1 iter600(48.6/32.2/55.6) 우위 |
+| **final_resume_0915 iter600 (SFT 최종 런)** | ✅ | ✅ | ✅ | ✅ 1.8% | ⏳ 재실행 | **main1 GPU 0~6**(GPU 7 결함 제외, 변환 EP=6·fleet 7대) 09-16 23:18 → 09-17 06:00. AIME·HMMT 무효(사고마감 16%·12%, 전 ckpt 동일). 에이전틱은 **A4 1회 표본 오판**(모델이 도구 대신 되물음 → 파서 실패로 오독, A5 는 2/2 PASS)으로 건너뜀 → A4 를 다중 표본으로 고친 2차(09:47)도 thinking OFF 8/8 미호출("bash 도구를 쓸 수 없다")로 FAIL, A5 는 4/4 PASS → A4 에 평가 조건(ON) 폴백 추가 후 **3차 09:52 `run_suite.sh … agentic` 재기동**(`KNOWN_ISSUES` 09-17). SWE 는 11:00 정지 후 prefix caching·세션 고정·W=96 으로 4차 재개(64건 승계) → **9/500 = 1.8%**(Submitted 27%·스텝 한도 초과 52%). TB-2 는 101 트라이얼에서 miss_rate 32.5% 무효 오판(분모 버그, `KNOWN_ISSUES` 09-17)으로 중단 → 수정 후 τ³ 뒤 재실행. τ³ W=32 진행. 관찰: RULER single_2 131K **0.25**(phase-1 iter600 0.90) — 실패 43건 중 37건이 `0, 1`·`0.5, 1.0, …` 퇴행 출력(Reasoning-Off 조건, single_1 은 100%). LogicKor 31.2(phase-1 iter600 40.2). MMLU-Pro 49.5·GPQA 35.4·IFEval 61.1 은 phase-1 iter600(48.6/32.2/55.6) 우위 |
 
 - **p2 계열은 재측정하지 않는다** — phase-2·3 계보가 09-13 폐기됐다.
 - **09-14 이전 에이전틱 값(SWE·TB-1)은 reasoning 파서 없는 fleet 조건**이다 — 이력 `</think>` 가 전 턴에서 사라진 채

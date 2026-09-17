@@ -4,6 +4,23 @@
 CLAUDE.md의 "함정 표"는 이 문서의 한 줄 요약이며, 새 사고는 **여기에 서사를 쓰고 CLAUDE.md 표에는 한 줄만** 추가한다.
 날짜는 절대 표기. 두 스테이지 이상 지난 항목은 스테이지 경계에서 `archive/`로 이동.
 
+## TB-2 복원 miss_rate 32.5% 무효 오판 — 분모에서 필드 복원 턴 누락 (2026-09-17 ✅ 수정, TB-2 재실행 예정)
+
+**증상**: iter600 TB-2(W=32, restore) 101 트라이얼 시점 프록시 통계 miss 1,541 / miss_rate 0.325 → `run_terminal_tb2.sh` 규칙(restore 인데
+miss_rate > 0.05)으로 **무효**. 점수는 0/87(과제 시간 한도 초과 85%).
+
+**원인**: `tau_proxy.snapshot()` 의 `miss_rate = miss / (reinlined + miss)` 는 **캐시 경로**만 분모에 넣는다. harbor(terminus-2)는 mini-swe-agent 처럼
+이력에 `reasoning_content` 필드를 되돌려 보내므로 대부분의 턴이 **필드 인라인**(`reasoning_field_inlined` 216,400)으로 복원되고, 캐시 경로는 3,205 뿐이었다.
+전체 이력 턴 기준으로는 1,541 / (216,400 + 3,205 + 1,541) = **0.7%** — 규칙 안이다. 09-14 `COUNTERS` 주석이 "복원됐는가는 restored 로 판정" 이라 적어
+두고도 miss_rate 식은 손대지 않았다(SWE 는 reinlined·miss 가 0/0 이라 드러나지 않았다). 1차 설명(미종결 사고 턴의 요청당 반복 집계)은 부차 요인 —
+per-request 집계는 깨진 턴을 이후 요청 수만큼 되세지만, 분모의 필드 복원 턴도 같은 배수로 늘어나므로 비율 자체를 크게 왜곡하진 않는다.
+
+**조치**: `miss_rate = miss / (reinlined + reasoning_field_inlined + miss)`(정본), 옛 비율은 `miss_rate_cache_path` 로 보존. 체인 해시 기준 distinct
+턴 집계(`restored_turns`·`miss_turns`·`miss_turn_rate`)와 miss 표본 8건(`miss_samples`: 길이·앞 120자·tool_calls 유무·키)을 stats 에 추가해 다음엔
+원인을 바로 볼 수 있게 했다. 러너 결과 JSON 에 새 키 포함. `tests/test_tau_proxy.py` 3건 추가(33 passed). `run_suite.sh` 에 `swe`/`tb2`/`tau`
+세부 단계를 넣어 TB-2 만 다시 돌린다(τ³ 완료 후, W=32). 시간 한도 배수(`timeout_multiplier` 1.0)는 리더보드 조건이라 유지 — 변경은 사용자 결정.
+**교훈**: 무효 규칙의 분모는 "복원이 필요했던 모든 턴" 이어야 한다. 하니스마다 복원 경로(캐시 vs 필드)가 다르므로 규칙은 경로에 독립적이어야 한다.
+
 ## fleet 백엔드 :8003(GPU 3) EngineCore 무증상 정지 — W=96 + prefix caching(align) 첫 실행 2.5분 뒤 (2026-09-17 🔶 원인 미상, 워치독으로 대응)
 
 **증상**: 11:32 4차 에이전틱 기동(prefix caching align · 세션 고정 프록시 · SWE W=96) 후 11:35:58 부터 :8003 의 `Engine 000` 통계가
