@@ -9,7 +9,7 @@ CLAUDE.md의 "함정 표"는 이 문서의 한 줄 요약이며, 새 사고는 *
 **증상/발견**: SFT 최종 런 iter600 스위트(main1 GPU 0~6 fleet 7대)에서 T1·T3·T2 는 정상 완료했으나 에이전틱이 A4 FAIL 로 건너뛰어졌다.
 1차(09-17 05:40): A4 1회 표본이 도구 대신 "어떤 명령을 실행할지 알려달라" 고 되물음 → `tool_calls` 빈 것만 보고 FAIL. 같은 fleet 의 A5(thinking ON + tools)는 2/2 호출·파싱·추론 분리 PASS — 파서는 멀쩡했다.
 2차(09:47, A4 를 8회 재표본으로 고친 뒤): thinking OFF 8/8 미호출 — "I can't use the bash tool as it's not available in this environment". 템플릿을 두 모드로 렌더해 대조하니 tools 블록은 동일하고 assistant 접두사(`<think>\n` vs `<think></think>`)만 다르다 → **iter600 모델은 thinking OFF 에서 도구를 거부한다**(모델 발견). 하니스(SWE·TB-2·τ³)는 전부 thinking ON 이라 A4 의 OFF 조건은 평가 조건이 아니었다.
-같은 ckpt 의 RULER(Reasoning-Off)도 실패 대부분이 `0, 1`·`0.5, 1.0, …` 퇴행 출력이라, **no-think 모드 전반의 퇴행**이 최종 블렌드 iter600 의 특징으로 보인다(원인 분리 미완: no-think 데이터 비중 vs LC 데이터).
+**해석 정정(사용자 지적 09-17)**: 이건 퇴행이 아니라 학습된 행동이다. 최종 블렌드에서 도구 호출 멤버는 think 가 66~100%(agentic_v2·ntc·swe_v3, 예외 `opencode_tools` 1.94% nothink)이고, no-think + tools 선언 조건의 짧은 단발 요청에 가장 가까운 학습 신호는 **When2Call**(`when2call_v1_x2`, 3.19 ep, no-think, **전부 미호출** — 되묻기 7,007·불가 7,518)이다. A4 OFF 의 두 응답(되묻기 → 불가 안내)이 그 두 범주와 일치한다. 따라서 A4 의 OFF 조건은 파서가 아니라 When2Call 정책을 재고 있었다. 같은 ckpt 의 RULER(Reasoning-Off, 도구 없음) 숫자 나열 퇴행(`0, 1`·`0.5, 1.0, …`)은 이 설명에 안 들어가며 **별도 미해결**(phase-1 iter600 은 같은 조건 0.90).
 
 **원인**: A4(08-30 설계)는 1회 표본·thinking OFF 로 "파서가 실제로 파싱하는지" 를 봤는데, 판정이 `tool_calls` 유무만 봐서 "모델이 안 불렀다"(관측 실패)와 "XML 을 냈는데 못 읽었다"(파서 실패)를 구분하지 않았다. A5(09-14)는 이미 관측/결론을 분리하고 재표본하는 구조였으나 A4 는 그대로였다.
 
