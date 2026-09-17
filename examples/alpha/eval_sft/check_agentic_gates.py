@@ -72,6 +72,32 @@ def gate_a1(base_url: str) -> tuple[bool, str]:
                    f"TOOL_PARSER=qwen3_xml TOOLS=1 GPUS=... bash eval_sft/serve_fleet.sh <ckpt> 106496 <N> 8100")
 
 
+# ---------------------------------------------------------------- A4
+# 2026-09-17: 1회 표본으로 판정하다 오판했다. iter600(최종 런) fleet 에서 모델이 도구를 부르지 않고
+# "어떤 명령을 실행할지 알려달라" 고 되물은 표본 하나로 A4 FAIL → 에이전틱 전체가 건너뛰어졌다. 같은 fleet 의
+# A5 는 도구호출 2/2 파싱 PASS 였으니 파서는 멀쩡했다. 이 게이트가 막아야 할 것은 **파서 불일치**(모델이 XML 을
+# 냈는데 tool_calls 가 빈 것)이지 모델이 한 번 도구를 안 쓴 것이 아니다. A5 와 같은 구조로 바꾼다:
+# 관측(파싱 성공 / XML 미파싱)이 나올 때까지 최대 A4_MAX_ATTEMPTS 회 뽑고, 미호출은 "경로 미관측" 으로 센다.
+# 전부 미호출이면 통과로 쓰지 않는다(검증 규칙) — 단 메시지로 파서 문제가 아님을 밝힌다.
+A4_MAX_ATTEMPTS = 8
+
+
+def judge_a4(message: dict) -> tuple[str, str]:
+    """도구호출 응답 하나를 판정한다 (순수 함수 — 단위 테스트 대상).
+
+    반환 = (판정, 사유). parsed = 통과, xml_unparsed = 파서 불일치(실패), no_call = 경로 미관측(모델이 도구를 안 불렀다).
+    """
+    tc = message.get("tool_calls")
+    if tc:
+        fn = tc[0].get("function", {})
+        return "parsed", f"tool_calls 파싱 OK — {fn.get('name')}({str(fn.get('arguments'))[:60]})"
+    raw = message.get("content") or ""
+    if "<function=" in raw or "<parameter=" in raw:
+        return "xml_unparsed", (f"모델은 XML 형식을 냈는데 tool_calls 가 비었다: {raw[:120]!r} — 파서를 `qwen3_xml` 로 바꿀 것: "
+                                "TOOL_PARSER=qwen3_xml TOOLS=1 bash eval_sft/serve_fleet.sh …")
+    return "no_call", f"도구 미호출(평문 답변): {raw[:120]!r}"
+
+
 def gate_a4(base_url: str) -> tuple[bool, str]:
     """파서가 모델 출력을 **실제로 파싱**하는가.
 
@@ -80,7 +106,9 @@ def gate_a4(base_url: str) -> tuple[bool, str]:
     XML(`<function=…><parameter=…>`)이 파싱되지 않아 `tool_calls: null` 이 됐다.
     에이전트는 "No tool calls found" 를 반복하다 RepeatedFormatError 로 죽는다.
 
-    여기서는 실제로 도구를 쓰게 만들고 `tool_calls` 가 채워지는지 확인한다.
+    여기서는 실제로 도구를 쓰게 만들고 `tool_calls` 가 채워지는지 확인한다. 생성 파라미터는
+    태스크 조건(temp 1.0)이라 모델이 도구를 안 부르는 표본이 섞인다 — 그건 관측 실패이지 파서
+    실패가 아니므로 관측이 나올 때까지 다시 뽑는다(A4_MAX_ATTEMPTS).
     """
     tools = [{
         "type": "function",
@@ -92,7 +120,7 @@ def gate_a4(base_url: str) -> tuple[bool, str]:
                            "required": ["command"]},
         },
     }]
-    ok, res = _post(base_url, {
+    body = {
         "model": "alpha",
         "messages": [{"role": "user",
                       "content": "List the files in the current directory. Use the bash tool."}],
@@ -100,22 +128,20 @@ def gate_a4(base_url: str) -> tuple[bool, str]:
         "seed": None, "skip_special_tokens": False,
         "tools": tools, "tool_choice": "auto",
         "chat_template_kwargs": {"enable_thinking": False},
-    }, timeout=600)
-    if not ok:
-        return False, f"요청 실패: {res}"
-
-    ch = res["choices"][0]
-    tc = ch["message"].get("tool_calls")
-    if tc:
-        fn = tc[0].get("function", {})
-        return True, f"tool_calls 파싱 OK — {fn.get('name')}({str(fn.get('arguments'))[:60]})"
-
-    raw = (ch["message"].get("content") or "")[:200]
-    hint = ""
-    if "<function=" in raw or "<parameter=" in raw:
-        hint = ("  ← 모델은 XML 형식을 내고 있다. 파서를 `qwen3_xml` 로 바꿀 것: "
-                "TOOL_PARSER=qwen3_xml TOOLS=1 bash eval_sft/serve_fleet.sh …")
-    return False, f"tool_calls 가 비어 있다. content={raw!r}{hint}"
+    }
+    no_call: list[str] = []
+    for _ in range(A4_MAX_ATTEMPTS):
+        ok, res = _post(base_url, body, timeout=600)
+        if not ok:
+            return False, f"요청 실패: {res}"
+        v, why = judge_a4(res["choices"][0]["message"])
+        if v == "parsed":
+            return True, why + (f" (미호출 {len(no_call)}회 뒤 관측)" if no_call else "")
+        if v == "xml_unparsed":
+            return False, why
+        no_call.append(why)
+    return False, (f"{A4_MAX_ATTEMPTS}회 모두 도구 미호출 — content 에 XML 이 없으니 파서 문제가 아니라 모델이 이 지시에 "
+                   f"도구를 안 쓴다. 경로 미관측이라 통과로 쓰지 않는다. 마지막: {no_call[-1]}")
 
 
 # ---------------------------------------------------------------- A5

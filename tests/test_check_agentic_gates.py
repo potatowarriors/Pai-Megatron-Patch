@@ -157,3 +157,68 @@ def test_required_passes_when_a5_passes(monkeypatch):
     _stub_gates(monkeypatch, a5_ok=True)
     monkeypatch.setattr(sys, "argv", ["x", "--base-url", "http://x/v1", "--skip-container"])
     assert G.main() == 0
+
+
+# ---------------------------------------------------------------- A4 (2026-09-17 다중 표본화)
+# iter600(최종 런) 실제 응답: 도구를 안 부르고 되물었다 — 파서 실패가 아니라 경로 미관측이어야 한다.
+A4_NO_CALL_REAL = {"content": "To proceed, could you please specify the command you'd like me to run in the "
+                              "current directory?", "reasoning_content": None, "tool_calls": None}
+A4_PARSED = {"content": "", "reasoning_content": None, "tool_calls": _tc("ls -la")}
+A4_XML_UNPARSED = {"content": '<function=bash>\n<parameter=command>ls</parameter>\n</function>',
+                   "reasoning_content": None, "tool_calls": None}
+
+
+def test_judge_a4_parsed():
+    v, why = G.judge_a4(A4_PARSED)
+    assert v == "parsed" and "bash" in why
+
+
+def test_judge_a4_xml_unparsed_is_parser_mismatch():
+    v, why = G.judge_a4(A4_XML_UNPARSED)
+    assert v == "xml_unparsed" and "qwen3_xml" in why
+
+
+def test_judge_a4_real_no_call_is_not_observed():
+    v, _ = G.judge_a4(A4_NO_CALL_REAL)
+    assert v == "no_call"
+
+
+def _feed_a4(monkeypatch, seq):
+    calls = {"n": 0}
+
+    def fake_post(base_url, body, timeout=300):
+        i = calls["n"]
+        calls["n"] += 1
+        m = seq[i] if i < len(seq) else seq[-1]
+        if m is None:
+            return False, "HTTP 500"
+        assert body.get("chat_template_kwargs", {}).get("enable_thinking") is False, "A4 는 thinking OFF"
+        assert body.get("tools") and body.get("tool_choice") == "auto"
+        return True, {"choices": [{"message": m}]}
+
+    monkeypatch.setattr(G, "_post", fake_post)
+    return calls
+
+
+def test_a4_passes_after_no_call_resample(monkeypatch):
+    calls = _feed_a4(monkeypatch, [A4_NO_CALL_REAL, A4_PARSED])
+    ok, msg = G.gate_a4("http://x/v1")
+    assert ok and calls["n"] == 2 and "미호출 1회" in msg
+
+
+def test_a4_xml_unparsed_fails_immediately(monkeypatch):
+    calls = _feed_a4(monkeypatch, [A4_XML_UNPARSED, A4_PARSED])
+    ok, msg = G.gate_a4("http://x/v1")
+    assert not ok and calls["n"] == 1 and "qwen3_xml" in msg
+
+
+def test_a4_all_no_call_fails_but_names_model_not_parser(monkeypatch):
+    calls = _feed_a4(monkeypatch, [A4_NO_CALL_REAL])
+    ok, msg = G.gate_a4("http://x/v1")
+    assert not ok and calls["n"] == G.A4_MAX_ATTEMPTS and "파서 문제가 아니라" in msg
+
+
+def test_a4_request_failure_fails(monkeypatch):
+    _feed_a4(monkeypatch, [None])
+    ok, msg = G.gate_a4("http://x/v1")
+    assert not ok and "요청 실패" in msg
