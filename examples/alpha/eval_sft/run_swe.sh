@@ -17,7 +17,7 @@
 # 전제: **TOOLS=1 로 서빙된 fleet** (mini-swe-agent litellm 이 tool_choice=auto 전송) +
 #       sub1→컨테이너 역터널(컨테이너:8199 → sub1:8100).
 #
-# 사용: bash eval_sft/run_swe.sh <RUN_NAME> [N_INSTANCES] [WORKERS]
+# 사용: bash eval_sft/run_swe.sh <RUN_NAME> [N_INSTANCES] [WORKERS]   (SWE_RESUME=1 이면 완료분 건너뜀)
 #   N_INSTANCES: 0 또는 미지정 = 전량(500). 양수면 부분 표본(무효 표시).
 set -uo pipefail
 RUN_NAME="${1:?run name}"; N="${2:-0}"; W="${3:-12}"
@@ -67,6 +67,10 @@ RAW_C="/opt/swebench/preds_${RUN_NAME}/proxy_raw"
 # 스모크 전용 스텝 한도. 정식 실행에서는 비워 둔다(기본 250) — 한도를 줄인 결과는 비교 대상이 아니며,
 # 스모크는 N>0 이라 이미 subsampled=true → 무효로 집계된다.
 STEP_ARG=""; [ -n "${SWE_STEP_LIMIT:-}" ] && STEP_ARG="-c agent.step_limit=$SWE_STEP_LIMIT"
+# SWE_RESUME=1: 같은 RUN_NAME 의 preds.json 에 있는 인스턴스를 건너뛰고 나머지만 돈다(mini-swe-agent 기본 동작; 우리는 평소
+# --redo-existing 으로 매번 전량). fleet 설정 변경(2026-09-17 prefix caching·W=96)으로 중간 재기동할 때 쓴다 — 인스턴스는
+# 서로 독립이고 생성 파라미터가 같으므로 완료분을 버릴 이유가 없다. 진행 중이던 인스턴스는 preds.json 에 없어 다시 돈다.
+REDO="--redo-existing"; [ "${SWE_RESUME:-0}" = "1" ] && REDO=""
 # 컨테이너의 프록시는 항상 리포 버전으로 덮는다 (표준 라이브러리만 쓴다).
 ssh -F "$SSHC" -o BatchMode=yes alpha-eval "cat > /opt/swebench/tau_proxy.py" < "$HERE/tau_proxy.py" || {
   echo "[swe] ❌ tau_proxy.py 복사 실패"; exit 1; }
@@ -90,7 +94,7 @@ ssh -F "$SSHC" -o BatchMode=yes alpha-eval 'bash -s' <<EOF
   for i in \$(seq 1 30); do curl -s -m 2 -o /dev/null http://localhost:8110/stats && break; sleep 1; done
   curl -s -m 2 -o /dev/null http://localhost:8110/stats || { echo "[swe] ❌ tau_proxy 기동 실패"; tail -5 $RAW_C/proxy.log; exit 1; }
   ./venv/bin/mini-extra swebench --subset SWE-bench/SWE-bench_Verified --split test \
-    $SLICE --workers $W --redo-existing \
+    $SLICE --workers $W $REDO \
     -m openai/alpha -c swebench.yaml \
     -c model.model_kwargs.api_base=http://localhost:8110/v1 \
     -c model.model_kwargs.temperature=1.0 \

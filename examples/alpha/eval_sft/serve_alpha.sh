@@ -47,9 +47,24 @@ if [ -n "${REASONING_PARSER:-}" ]; then
   # 에이전틱·τ³ fleet 는 nemotron_v3 로 켠다. T1/T3/T2 fleet 는 끈다 — G2 게이트와 T1 채점이 content 의 </think> 를 본다.
   REASON_FLAGS="--reasoning-parser $REASONING_PARSER"
 fi
-echo "[serve] ckpt=$CKPT max_len=$MAX_LEN DP=$DP port=$PORT tools=${TOOLS:-0} reasoning=${REASONING_PARSER:-off} cache=$VLLM_CACHE_ROOT(${CACHE_AVAIL_GB}GB free)"
+# 하이브리드(GDN) prefix caching (2026-09-17, 사용자 결정). vLLM 0.25.1 은 하이브리드에 기본 OFF("experimental") 이지만
+# Qwen3-Next 경로가 `--mamba-cache-mode align` 을 구현하고 alpha 플러그인이 그대로 상속한다(`all` 은 플러그인이 거부).
+# align 은 chunked prefill(기본 ON) 필수. 에이전틱은 턴마다 5.7만 토큰 접두사를 다시 보내므로 prefix caching 없이는
+# 처리 토큰의 99% 가 재-prefill 이었다. 세션 고정 라우팅(lb_proxy)과 함께 써야 적중한다.
+#   PREFIX_CACHE=1        → --enable-prefix-caching --mamba-cache-mode align
+#   MAMBA_BLOCK=<N>       → --mamba-block-size N (8 의 배수). 기본은 attention 블록(544). 블록마다 GDN 상태(18 레이어 ≈ 18 MiB)를
+#                           스냅샷하므로 작을수록 재사용은 촘촘하고 KV 풀 소모는 크다 — 선택 근거는 SFT_BENCHMARKS.md §2.5.
+#   MAX_BATCHED_TOKENS=N  → --max-num-batched-tokens N (기본 8192; 5.7만 프롬프트 prefill 스텝 수를 줄인다)
+# 정확도 게이트: eval_sft/prefix_cache_check.py (ON/OFF 로짓 대조 + 적중 확인) 를 통과한 뒤에만 fleet 에 켠다.
+PC_FLAGS=""
+if [ "${PREFIX_CACHE:-0}" = "1" ]; then
+  PC_FLAGS="--enable-prefix-caching --mamba-cache-mode align"
+  [ -n "${MAMBA_BLOCK:-}" ] && PC_FLAGS="$PC_FLAGS --mamba-block-size $MAMBA_BLOCK"
+fi
+[ -n "${MAX_BATCHED_TOKENS:-}" ] && PC_FLAGS="$PC_FLAGS --max-num-batched-tokens $MAX_BATCHED_TOKENS"
+echo "[serve] ckpt=$CKPT max_len=$MAX_LEN DP=$DP port=$PORT tools=${TOOLS:-0} reasoning=${REASONING_PARSER:-off} prefix_cache=${PREFIX_CACHE:-0}${MAMBA_BLOCK:+/block$MAMBA_BLOCK}${MAX_BATCHED_TOKENS:+ batched=$MAX_BATCHED_TOKENS} cache=$VLLM_CACHE_ROOT(${CACHE_AVAIL_GB}GB free)"
 exec $VENV/bin/vllm serve "$CKPT" \
-  $TOOL_FLAGS $REASON_FLAGS \
+  $TOOL_FLAGS $REASON_FLAGS $PC_FLAGS \
   --served-model-name alpha \
   --trust-remote-code \
   --tensor-parallel-size 1 \

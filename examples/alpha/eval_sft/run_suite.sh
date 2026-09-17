@@ -15,12 +15,17 @@
 # 사용: bash eval_sft/run_suite.sh <HF_CKPT> <RUN_TAG> [STAGES]
 #   STAGES: 쉼표 목록 (t1,t3,agentic,t2). 기본 전부.
 # 환경변수:
+#   PREFIX_CACHE(기본 1) / MAMBA_BLOCK / MAX_BATCHED_TOKENS   serve_alpha.sh 로 전달(하이브리드 prefix caching, 2026-09-17 게이트 PASS 후 기본 ON)
+#   SWE_RESUME=1   SWE 완료분 건너뛰고 재개 (run_swe.sh)
 #   GPUS       서빙에 쓸 GPU (기본 0~7 전부). GPU0 은 2026-08-29 좀비 누수로 한시 제외했다가
 #              2026-08-30 회수 확인 후 복귀 (78.6GiB 여유, bf16 matmul 222 TFLOP/s).
 #   SWE_N      SWE 부분 표본 수 (0=전량, 기본 0)
 #   TERM_N     Terminal 부분 표본 수 (0=전량, 기본 0)
-#   SWE_W      SWE 동시 워커 (기본 12). TERM_W  Terminal 동시 워커 (기본 8).
-#   TAU_N / TAU_TRIALS / TAU_W   τ³-bench 부분 표본(0=전량)·trial 수·동시 시뮬레이션 (기본 0/4/8)
+#   SWE_W      SWE 동시 워커 (기본 96). TERM_W  Terminal 동시 워커 (기본 32).
+#              2026-09-17 상향(12/8→96/32, 사용자 결정): W=12 실측에서 GPU 당 실행 요청 1.6개·KV 점유 0~7%·전력 700 W 중
+#              121~556 W. 컨테이너 호스트 64 CPU·RAM 442 GB 여유. 하이브리드 prefix caching + 세션 고정 라우팅과 함께 적용
+#              (없으면 prefill 이 병목 — SFT_BENCHMARKS.md §2.5).
+#   TAU_N / TAU_TRIALS / TAU_W   τ³-bench 부분 표본(0=전량)·trial 수·동시 시뮬레이션 (기본 0/4/32; 2026-09-17 8→32)
 #              2026-08-31 상향(6/4→12/8): iter300 실측에서 GPU 절반 유휴 + vLLM 대기열 0,
 #              컨테이너 호스트 64 CPU 에 load 1.2. 병목은 연산이 아니라 동시성이었다.
 set -uo pipefail
@@ -39,7 +44,7 @@ fleet_up() {  # $1=max_len  $2=tools(0/1)  $3=reasoning parser (에이전틱·τ
   echo "[suite] fleet 기동 (max_len=$1 TOOLS=$2 reasoning=${3:-off} GPUS=$GPUS)"
   bash "$HERE/stop_fleet.sh" "$GPUS" >/dev/null 2>&1 || true
   sleep 5
-  ( export PIP_CONSTRAINT= TOOLS="$2" GPUS="$GPUS" REASONING_PARSER="${3:-}"
+  ( export PIP_CONSTRAINT= TOOLS="$2" GPUS="$GPUS" REASONING_PARSER="${3:-}" PREFIX_CACHE="${PREFIX_CACHE:-1}"
     setsid bash "$HERE/serve_fleet.sh" "$CKPT" "$1" "$NGPU" "$PROXY" \
       > "$LOGD/fleet_${RUN_TAG}.log" 2>&1 < /dev/null & )
   for i in $(seq 1 60); do
@@ -98,19 +103,19 @@ if has agentic; then
   python3 "$HERE/check_agentic_gates.py" --base-url "$BURL" || { echo "[suite] ❌ A1~A5 실패 — 에이전틱 건너뜀"; rc=1; agentic_ok=0; }
   if [ "$agentic_ok" -eq 1 ] || [ "${FORCE_AGENTIC:-0}" = "1" ]; then
     echo "[suite] === SWE-bench ==="
-    SKIP_GATES=1 BASE_URL="$BURL" bash "$HERE/run_swe.sh" "$RUN_TAG" "${SWE_N:-0}" "${SWE_W:-12}" || rc=1
+    SKIP_GATES=1 BASE_URL="$BURL" bash "$HERE/run_swe.sh" "$RUN_TAG" "${SWE_N:-0}" "${SWE_W:-96}" || rc=1
     # Terminal 정본은 **TB-2**(Harbor + Terminus-2) — 사용자 결정 2026-09-07.
     # 학습 데이터가 Terminus-2 스키마인데 TB-1 하니스는 terminus v1 이었다
     # (`SFT_BENCHMARKS.md` §3.11). TB-1 로 되돌리려면 TERMINAL_HARNESS=tb1.
     echo "[suite] === Terminal-Bench (${TERMINAL_HARNESS:-tb2}) ==="
     TERM_RUNNER="run_terminal_tb2.sh"
     [ "${TERMINAL_HARNESS:-tb2}" = "tb1" ] && TERM_RUNNER="run_terminal.sh"
-    SKIP_GATES=1 BASE_URL="$BURL" bash "$HERE/$TERM_RUNNER" "$RUN_TAG" "${TERM_N:-0}" "${TERM_W:-8}" || rc=1
+    SKIP_GATES=1 BASE_URL="$BURL" bash "$HERE/$TERM_RUNNER" "$RUN_TAG" "${TERM_N:-0}" "${TERM_W:-32}" || rc=1
     # τ³-bench (tau2-bench, docker 불요) — sub1 직접, tau_proxy(:8110) 경유. 에이전틱 fleet 가 이미 TOOLS=1 +
     # nemotron_v3(30df05b) 라 같은 fleet 를 그대로 쓴다(재기동 없음). run_tau.sh 의 T1·T1b·T2 게이트는 자체 실행.
     # 상대역은 외부 gemma 엔드포인트 (run_tau.sh 헤더). τ 단독: bash eval_sft/run_tau.sh <TAG>  (SFT_BENCHMARKS §3.13)
     echo "[suite] === τ³-bench ==="
-    SKIP_GATES=1 BASE_URL="$BURL" bash "$HERE/run_tau.sh" "$RUN_TAG" "${TAU_N:-0}" "${TAU_TRIALS:-4}" "${TAU_W:-8}" || rc=1
+    SKIP_GATES=1 BASE_URL="$BURL" bash "$HERE/run_tau.sh" "$RUN_TAG" "${TAU_N:-0}" "${TAU_TRIALS:-4}" "${TAU_W:-32}" || rc=1
     # 에이전틱은 컨테이너 호스트에 build cache 를 수십 GB 남긴다. 매번 회수한다.
     # sweb.eval 인스턴스 이미지도 기본 정리(09-08 표준 정책 — 레이어 공유, KNOWN_ISSUES 09-08). 남기려면 --keep-images.
     bash "$HERE/docker_gc.sh" || echo "[suite] ⚠️ docker gc 실패 (비치명)"

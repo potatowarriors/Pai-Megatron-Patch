@@ -82,6 +82,7 @@ SWE-bench 인스턴스 하나가 **평균 119.4 턴**(중앙 113, 최대 250)을
 컨테이너 호스트는 64 CPU 에 load 1.2 였다. 8 레플리카에 동시 요청이 6개뿐이었기 때문이다.
 → 기본 워커를 **SWE 12 / Terminal 8** 로 올렸다 (사용자 승인 2026-08-31). Nemotron 3
 Ultra 도 SWE `max_concurrent 10` 을 쓴다.
+**2026-09-17 재상향 SWE 96 / TB-2 32 / τ³ 32**(사용자 결정) — W=12 실측에서도 GPU 당 실행 요청 1.6개·KV 0~7% 였다. 하이브리드 prefix caching + 세션 고정 프록시와 함께(§2.5 "추론 처리량").
 
 반복 횟수는 Nemotron 3 Ultra `num_repeats` 준거 (§3.4). 문항 수가 적을수록 k 를 키운다 —
 GPQA 198 문항에 1회 측정은 분산이 크다.
@@ -106,7 +107,7 @@ MRCR 도 미착수. 착수 시 §6 작업 큐에 올린다.
 | **τ³-bench** (에이전틱 fleet 그대로, 재기동 없음 — 3799c62) | 262,144 | **on** | 같은 fleet + sub1 `tau_proxy` :8110 | + **T1·T1b·T2** |
 | T2 롱컨텍스트 (RULER) | 262,144 | off | — | G1·G2·G3 |
 
-길이는 `run_suite.sh` 가 정본이다(`AGENTIC_MAX_LEN`·`T2_MAX_LEN` 로 덮어쓴다). 에이전틱 fleet 에 reasoning 파서가 빠지면
+모든 fleet 는 **prefix caching ON**(`PREFIX_CACHE=1` 기본, `--enable-prefix-caching --mamba-cache-mode align`) + **세션 고정 프록시**(`lb_proxy.py`, 2026-09-17). 길이는 `run_suite.sh` 가 정본이다(`AGENTIC_MAX_LEN`·`T2_MAX_LEN` 로 덮어쓴다). 에이전틱 fleet 에 reasoning 파서가 빠지면
 **도구 선언 여부와 무관하게 모든 응답의 `</think>` 가 사라진다** — 2026-09-14 이전 SWE·TB 수치가 그 조건이었다(§3.14).
 
 잘못된 fleet 로 돌리면 **전량 0점**이 나오고, 그 0점은 모델 실패와 구분되지 않는다.
@@ -146,6 +147,41 @@ bash eval_sft/run_tier2.sh http://localhost:8100/v1 <RUN_TAG>
 python3 eval_sft/summarize.py eval_sft/results/<RUN_TAG>            # 유효/무효 판정
 python3 eval_sft/aggregate_results.py --results-dir eval_sft/results --out eval_sft/results/TRACKING.md
 ```
+
+### 추론 처리량 — prefix caching · 세션 고정 · 동시성 (2026-09-17, 사용자 결정 1·2·3)
+
+RL 단계의 rollout 속도가 곧 학습 속도이므로 벤치 fleet 에서 먼저 잰다. **W=12 실측(iter600 SWE, 7 백엔드 `/metrics` 60 s, 요청 152건)**:
+
+| 항목 | 값 |
+|---|---|
+| 실행 중 요청 / GPU · 대기 | 0~3 (합 11) · 0 |
+| KV 점유 · 전력 | 0~7.3% · 121~556 W (700 W 중) |
+| 요청당 프롬프트 / 생성 | 56,569 / 626 토큰 |
+| 요청당 prefill / decode | 0.87 / 3.69 s (decode 5.9 ms/token) |
+| fleet 처리량 | 생성 1,408 tok/s · prefill 145,000 tok/s — 처리 토큰의 99% 가 **턴마다 되풀이되는 prefill** |
+| prefix cache | 비활성(하이브리드 기본), 라우팅 라운드로빈이라 켜도 1/N 만 적중 가능 |
+
+**적용 3건**: ① `lb_proxy.py` 세션 고정(system + 첫 user 메시지 해시 → 백엔드 고정, 신규 세션은 in-flight 최소 배정, 연결 실패 시 재배정, `GET /lb/stats`)
+② `serve_alpha.sh` `PREFIX_CACHE=1` → `--enable-prefix-caching --mamba-cache-mode align`(vLLM 0.25.1 Qwen3-Next 경로, alpha 플러그인 상속; `all` 은 플러그인이 거부, chunked prefill 필수)
+③ `run_suite.sh` 워커 SWE 96 / TB-2 32 / τ³ 32, `SWE_RESUME=1` 로 완료분 건너뛰고 재개.
+
+**게이트 `eval_sft/prefix_cache_check.py`(teacher-forced, GPU 0~3 서버 4대, 60K 프롬프트, 16 위치)** — 결과 JSON `eval_sft/results/pc_*.json`:
+
+| 쌍 | short (캐시 무관) | turn1_long (캐시 무관) | **turn2_long_cached** (게이트) | 적중 |
+|---|---|---|---|---|
+| OFF ↔ ON(block 544) | 16/16 · 1.090 | 16/16 · 1.026 | **15/16 · 1.040 · max 0.170 PASS** | 2턴 59,840/60,127 토큰 |
+| ON(8704) ↔ ON(4352) 대조군 | 16/16 · 1.082 | 15/16 · 1.026 | 16/16 · 1.045 · max 0.129 | 동일 |
+
+(top-1 일치 · mean exp\|Δlogprob\|.) 캐시 경로의 편차가 캐시 없는 경로·ON 끼리 대조군과 같은 수준이라 캐시가 오차를 더하지 않는다. `short` 가 양쪽 쌍에서 1.05 를 넘는 것은 서버 간 비결정(짧은 개방형 답변의 고엔트로피 위치)이라 참조값으로만 둔다. **free-running greedy 비교는 쓰지 않는다** — 동률 한 번 뒤집히면 이후가 전부 달라져 캐시 오류와 비결정을 구분 못 한다(1차 시도 실패). KV 용량은 mamba 블록 크기와 무관(544/4352/8704: 3.25M/3.19M/3.18M 토큰, OFF 3.27M) → 재사용 단위가 촘촘한 기본 544 채택.
+
+**16 세션 × 2턴 처리량(50K 프롬프트, 생성 ≤300, `eval_sft/results/sweep_{off,on}16.json`)**:
+
+| | 1턴(콜드) | 2턴(적중) | KV 피크 |
+|---|---|---|---|
+| OFF | 17.1 s · 56 turns/min | 13.2 s · 73 turns/min (cached 0) | 24.7% |
+| ON | 16.0 s · 60 turns/min | **2.2 s · 436 turns/min** (cached 800,768/802,633) | 23.1% |
+
+턴당 6×, KV 부담 증가 없음. 남은 레버(미적용): ngram 투기 디코딩(decode 5.9 ms/token 은 대역폭 한계 ~1.1 ms 의 5×; GDN 상태 롤백 지원 검증 필요), `MAX_BATCHED_TOKENS` 8192→32768, `--moe-backend` FlashInfer CUTLASS A/B, FP8, 단일 프로세스 DP 재검증(09-07 munmap 원인 해소됨). **RL 트랙 확인 항목**: NeMo-RL `vllm_cfg` 가 `enable_prefix_caching`·`mamba_cache_mode=align` 을 통과시키는지, 벤더 vLLM 버전의 GDN prefix caching 포함 여부, NeMo-Gym 모델 서버의 세션별 워커 고정 여부(NeMo-Gym 평가 경로는 `:8100` 프록시를 쓰므로 세션 고정이 그대로 적용된다).
 
 ### 진행 확인 — 로그를 믿지 말 것
 
@@ -201,8 +237,9 @@ summary 에 넣으므로, 사본을 만들면 패널 목록이 두 배가 된다
 | 파일 | 역할 |
 |---|---|
 | **서빙** | |
-| `serve_alpha.sh` | 단일 vLLM 서버. `TOOLS=1` 이면 `--enable-auto-tool-choice --tool-call-parser ${TOOL_PARSER:-qwen3_xml}` |
-| `serve_fleet.sh` / `lb_proxy.py` / `stop_fleet.sh` | N개 단일서버 + 라운드로빈 프록시(:8100) / 정상 종료·GPU 회수 확인 |
+| `serve_alpha.sh` | 단일 vLLM 서버. `TOOLS=1` 이면 `--enable-auto-tool-choice --tool-call-parser ${TOOL_PARSER:-qwen3_xml}`. `PREFIX_CACHE=1`(기본, run_suite) → `--enable-prefix-caching --mamba-cache-mode align`, `MAMBA_BLOCK`·`MAX_BATCHED_TOKENS` 선택 |
+| `serve_fleet.sh` / `lb_proxy.py` / `stop_fleet.sh` | N개 단일서버 + **세션 고정** 프록시(:8100, 신규 세션 최소 부하 배정, `GET /lb/stats`; 2026-09-17) / 정상 종료·GPU 회수 확인 |
+| `prefix_cache_check.py` | 하이브리드 prefix caching 게이트 — teacher-forced 다음 토큰 분포 대조(캐시 경로) + `/metrics` 적중 확인. fleet 에 켜기 전 필수 (§2.5 "추론 처리량") |
 | **게이트** | |
 | `../tools/emit_generation_config.py` | **G1** — `generation_config.json` 생성·eos 정합 검사. `run_convert.sh` 에 내장 |
 | `check_gates.py` | **G1·G2·G3** — eos 정합 / `</think>` 관측 / 서빙 스모크 |
