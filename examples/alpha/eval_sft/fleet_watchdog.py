@@ -190,7 +190,8 @@ def main() -> int:
     a = ap.parse_args()
     ports = [int(p) for p in a.ports.split(",")]
     LOGD.mkdir(parents=True, exist_ok=True)
-    state = {p: {"gen": None, "since": time.time(), "dead_since": None, "restarted": 0.0} for p in ports}
+    # 기동 직후에도 grace 를 준다 — fleet 가 아직 뜨는 중(모델 적재 2~3분)에 "둘 다 불통 180 s" 로 죽이지 않게 (2026-09-17 체인 사고).
+    state = {p: {"gen": None, "since": time.time(), "dead_since": None, "restarted": time.time()} for p in ports}
     lb_missing_since = None
     log(f"감시 시작 ports={ports} stall={a.stall_s}s dead={a.dead_s}s poll={a.poll_s}s")
     while True:

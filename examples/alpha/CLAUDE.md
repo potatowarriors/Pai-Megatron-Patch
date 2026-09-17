@@ -166,6 +166,7 @@ submodule `tests/unit_tests/test_step_batch_size_schedule.py`, `test_muon_optimi
 
 | 날짜 | 증상 | 원인 → 대응 |
 |---|---|---|
+| 09-17 | 실행 중인 `run_suite.sh` 를 편집 → 구 프로세스가 docker gc 직후 `syntax error near unexpected token` 으로 사망, fleet 종료·집계·wandb 건너뜀(수동 복구) | **bash 는 스크립트를 오프셋으로 읽는다 — 돌고 있는 셸 스크립트는 편집하지 않는다**(복사본을 고쳐 다음 실행에). 파이썬은 import 시점에 읽어 안전. 체인 스크립트의 fleet 준비 판정은 구 fleet 의 200 을 새 fleet 로 오인 → 워치독 조기 기동(grace 로 보완) |
 | 09-17 | TB-2 복원 miss_rate 32.5% 로 무효 오판 — harbor 는 이력에 reasoning 필드를 되돌려 보내 필드 복원(216k)이 분모에서 빠짐. 전체 턴 기준 0.7% | `tau_proxy` miss_rate 분모를 캐시+필드+miss 로, distinct 턴 집계·miss 표본 추가. TB-2 는 τ³ 뒤 `run_suite.sh … tb2` 로 재실행. `KNOWN_ISSUES` 09-17 |
 | 09-17 | fleet :8003(GPU 3) EngineCore 무증상 정지 — W=96+prefix caching 첫 실행 2.5분 뒤 SM 100%·126 W·생성 0, SIGTERM 무반응. 세션 고정이라 15 세션이 못 박힘 | SIGKILL 재기동 + `eval_sft/fleet_watchdog.py`(생성 120 s 정지/`/metrics` 60 s 불통 → 같은 argv 재기동·기록). 원인은 GPU 3 하드웨어 vs align 모드 경합 미판정 — **재발 GPU 로 판별**. `KNOWN_ISSUES` 09-17 |
 | 09-17 | iter600 에이전틱이 A4 FAIL 로 두 번 건너뜀 — 1회 표본이 되물음/거부(thinking OFF)라 `tool_calls` 빈 것을 파서 실패로 오판. A5(ON)는 4/4 PASS | `judge_a4` 관측/미관측 분리 + 모드별 8회 재표본, OFF 전부 미호출이면 평가 조건 ON 으로 파서 확인(OFF 미호출은 ⚠️). iter600 의 OFF 거부는 **When2Call(no-think·전부 미호출) 학습 신호** 로 설명되는 정상 행동(사용자 지적). RULER Reasoning-Off 숫자 나열 퇴행은 별도 미해결. `KNOWN_ISSUES` 09-17 |
