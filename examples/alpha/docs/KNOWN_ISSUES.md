@@ -4,6 +4,25 @@
 CLAUDE.md의 "함정 표"는 이 문서의 한 줄 요약이며, 새 사고는 **여기에 서사를 쓰고 CLAUDE.md 표에는 한 줄만** 추가한다.
 날짜는 절대 표기. 두 스테이지 이상 지난 항목은 스테이지 경계에서 `archive/`로 이동.
 
+## fleet 백엔드 :8003(GPU 3) EngineCore 무증상 정지 — W=96 + prefix caching(align) 첫 실행 2.5분 뒤 (2026-09-17 🔶 원인 미상, 워치독으로 대응)
+
+**증상**: 11:32 4차 에이전틱 기동(prefix caching align · 세션 고정 프록시 · SWE W=96) 후 11:35:58 부터 :8003 의 `Engine 000` 통계가
+멈춤 — Running 12 인데 생성 0, EngineCore CPU 106% 스핀, GPU 3 util 100% 인데 **전력 126 W**(다른 GPU 450~590 W), 8토큰 완성 요청도
+80 s 무응답(`/v1/models` 는 API 서버 프로세스라 200). SIGTERM 무반응 → SIGKILL. ECC·retired page 카운터 정상. 나머지 6 백엔드는 같은
+설정·더 높은 부하로 정상. 세션 고정 라우팅 때문에 세션 15건이 죽은 백엔드에 못 박혀 프록시 타임아웃(1800 s)까지 걸릴 상황이었다.
+py-spy 는 컨테이너 ptrace 권한 부재로 스택을 못 잡았다(sudo 도 불가).
+
+**가설 둘, 미판정**: (a) GPU 3 하드웨어 — 09-15 GPU 7 정지와 서명이 같다(SM 100%·저전력·무증상). 단 GPU 3 은 같은 날 T1·T3·T2 6시간
++ SWE 1시간을 구 설정으로 무사히 돌았다. (b) vLLM 0.25.1 GDN prefix caching align 모드("experimental") 의 동시성 경합. 판별은
+**재발 위치**: 같은 GPU 3 이면 (a), 다른 GPU 면 (b). 재기동 후 GPU 3 은 정상 서빙 중(11:50, 446 W·94%).
+
+**조치**: ① 즉시 SIGKILL → 고아 spawn 워커 정리 → 같은 플래그로 재기동(11:46:10), 프록시가 연결 거부를 보고 세션 16건 재배정(`reassigned`)
+② `eval_sft/fleet_watchdog.py` — `/metrics` 로 백엔드마다 running>0 인데 생성 토큰 120 s 정지 또는 `/metrics` 60 s 불통이면 `/proc` 의
+argv·env 그대로 재기동하고 GPU·사유·nvidia-smi 를 `fleet_logs/watchdog_events.jsonl` 에 기록. lb_proxy 가 사라지면(단계 종료) 스스로
+끝난다. 정지 로그는 `fleet_logs/serve_8003.hang_20260917_1135.log`.
+**교훈**: 세션 고정 라우팅은 죽은 백엔드에 세션을 못 박는다 — 고정을 켤 때는 정지 감시·재배정이 세트여야 한다. 프록시 타임아웃(1800 s)
+은 정지 감지 수단이 아니다.
+
 ## 에이전틱 게이트 A4 가 모델의 도구 미호출을 파서 실패로 오판 — iter600 에이전틱 두 번 건너뜀 · thinking OFF 도구 거부 발견 (2026-09-17 ✅ 게이트 수정)
 
 **증상/발견**: SFT 최종 런 iter600 스위트(main1 GPU 0~6 fleet 7대)에서 T1·T3·T2 는 정상 완료했으나 에이전틱이 A4 FAIL 로 건너뛰어졌다.
