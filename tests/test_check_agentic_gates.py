@@ -183,17 +183,22 @@ def test_judge_a4_real_no_call_is_not_observed():
     assert v == "no_call"
 
 
-def _feed_a4(monkeypatch, seq):
-    calls = {"n": 0}
+def _feed_a4(monkeypatch, off_seq, on_seq=()):
+    """A4 는 thinking OFF 로 먼저 뽑고, OFF 가 전부 미호출이면 ON 으로 넘어간다. 모드별 응답열을 따로 준다."""
+    calls = {"n": 0, "off": 0, "on": 0}
 
     def fake_post(base_url, body, timeout=300):
-        i = calls["n"]
+        assert body.get("tools") and body.get("tool_choice") == "auto"
+        off = body.get("chat_template_kwargs", {}).get("enable_thinking") is False
+        mode = "off" if off else "on"
+        seq = off_seq if off else on_seq
+        assert seq, f"{mode} 모드 요청이 예상 밖이다"
+        i = calls[mode]
+        calls[mode] += 1
         calls["n"] += 1
         m = seq[i] if i < len(seq) else seq[-1]
         if m is None:
             return False, "HTTP 500"
-        assert body.get("chat_template_kwargs", {}).get("enable_thinking") is False, "A4 는 thinking OFF"
-        assert body.get("tools") and body.get("tool_choice") == "auto"
         return True, {"choices": [{"message": m}]}
 
     monkeypatch.setattr(G, "_post", fake_post)
@@ -203,7 +208,7 @@ def _feed_a4(monkeypatch, seq):
 def test_a4_passes_after_no_call_resample(monkeypatch):
     calls = _feed_a4(monkeypatch, [A4_NO_CALL_REAL, A4_PARSED])
     ok, msg = G.gate_a4("http://x/v1")
-    assert ok and calls["n"] == 2 and "미호출 1회" in msg
+    assert ok and calls["n"] == 2 and calls["on"] == 0 and "미호출 1회" in msg
 
 
 def test_a4_xml_unparsed_fails_immediately(monkeypatch):
@@ -212,10 +217,22 @@ def test_a4_xml_unparsed_fails_immediately(monkeypatch):
     assert not ok and calls["n"] == 1 and "qwen3_xml" in msg
 
 
-def test_a4_all_no_call_fails_but_names_model_not_parser(monkeypatch):
-    calls = _feed_a4(monkeypatch, [A4_NO_CALL_REAL])
+def test_a4_off_refusal_falls_back_to_on_and_passes_with_warning(monkeypatch):
+    # 2026-09-17 iter600 실제: OFF 8/8 "bash 도구를 이 환경에서 쓸 수 없다", ON 은 호출·파싱.
+    off_refusal = {"content": "I'm sorry, I can't use the bash tool as it's not available in this environment.",
+                   "reasoning_content": None, "tool_calls": None}
+    on_parsed = {"content": "", "reasoning_content": "ls -la lists files.", "tool_calls": _tc("ls -la")}
+    calls = _feed_a4(monkeypatch, [off_refusal], [on_parsed])
     ok, msg = G.gate_a4("http://x/v1")
-    assert not ok and calls["n"] == G.A4_MAX_ATTEMPTS and "파서 문제가 아니라" in msg
+    assert ok and calls["off"] == G.A4_MAX_ATTEMPTS and calls["on"] == 1
+    assert "[thinking on]" in msg and "⚠️" in msg and "OFF" in msg
+
+
+def test_a4_all_no_call_both_modes_fails_but_names_model_not_parser(monkeypatch):
+    calls = _feed_a4(monkeypatch, [A4_NO_CALL_REAL], [A4_NO_CALL_REAL])
+    ok, msg = G.gate_a4("http://x/v1")
+    assert not ok and calls["off"] == G.A4_MAX_ATTEMPTS and calls["on"] == G.A4_MAX_ATTEMPTS
+    assert "파서 문제가 아니라" in msg
 
 
 def test_a4_request_failure_fails(monkeypatch):

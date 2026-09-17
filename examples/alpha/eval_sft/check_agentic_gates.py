@@ -109,6 +109,12 @@ def gate_a4(base_url: str) -> tuple[bool, str]:
     여기서는 실제로 도구를 쓰게 만들고 `tool_calls` 가 채워지는지 확인한다. 생성 파라미터는
     태스크 조건(temp 1.0)이라 모델이 도구를 안 부르는 표본이 섞인다 — 그건 관측 실패이지 파서
     실패가 아니므로 관측이 나올 때까지 다시 뽑는다(A4_MAX_ATTEMPTS).
+
+    thinking 모드: 먼저 OFF(사고 처리와 분리해 파서만 본다)로 뽑고, OFF 에서 한 번도 도구를 안 부르면
+    **평가 조건인 ON** 으로 다시 뽑는다. 2026-09-17 iter600(최종 런): OFF 8/8 미호출("bash 도구를 이 환경에서
+    쓸 수 없다") 인데 ON 은 4/4 호출·파싱 — 템플릿은 두 모드에 tools 를 똑같이 렌더하므로 OFF 모드의 모델
+    행동 차이다. 하니스(SWE·TB-2·τ³)는 전부 ON 으로 돌므로 파서는 ON 에서 확인하면 되고, OFF 미호출은
+    경고로 남긴다(모델 발견 — STATUS·SFT_BENCHMARKS §3.10).
     """
     tools = [{
         "type": "function",
@@ -127,21 +133,32 @@ def gate_a4(base_url: str) -> tuple[bool, str]:
         "temperature": 1.0, "top_p": 0.95, "max_tokens": 2048,
         "seed": None, "skip_special_tokens": False,
         "tools": tools, "tool_choice": "auto",
-        "chat_template_kwargs": {"enable_thinking": False},
     }
-    no_call: list[str] = []
-    for _ in range(A4_MAX_ATTEMPTS):
-        ok, res = _post(base_url, body, timeout=600)
-        if not ok:
-            return False, f"요청 실패: {res}"
-        v, why = judge_a4(res["choices"][0]["message"])
-        if v == "parsed":
-            return True, why + (f" (미호출 {len(no_call)}회 뒤 관측)" if no_call else "")
-        if v == "xml_unparsed":
-            return False, why
-        no_call.append(why)
-    return False, (f"{A4_MAX_ATTEMPTS}회 모두 도구 미호출 — content 에 XML 이 없으니 파서 문제가 아니라 모델이 이 지시에 "
-                   f"도구를 안 쓴다. 경로 미관측이라 통과로 쓰지 않는다. 마지막: {no_call[-1]}")
+    no_call: dict[str, list[str]] = {"off": [], "on": []}
+    for mode in ("off", "on"):
+        b = dict(body)
+        if mode == "off":
+            b["chat_template_kwargs"] = {"enable_thinking": False}
+        else:
+            b["max_tokens"] = 4096   # ON 은 사고가 앞에 붙는다
+        for _ in range(A4_MAX_ATTEMPTS):
+            ok, res = _post(base_url, b, timeout=600)
+            if not ok:
+                return False, f"요청 실패: {res}"
+            v, why = judge_a4(res["choices"][0]["message"])
+            if v == "parsed":
+                note = ""
+                if mode == "on":
+                    note = (f" ⚠️ thinking OFF 에서는 {A4_MAX_ATTEMPTS}회 모두 미호출(마지막: {no_call['off'][-1]}) — "
+                            "파서는 ON 에서 확인됨. OFF 모드 도구 거부는 모델 발견으로 기록할 것")
+                elif no_call["off"]:
+                    note = f" (미호출 {len(no_call['off'])}회 뒤 관측)"
+                return True, f"[thinking {mode}] {why}{note}"
+            if v == "xml_unparsed":
+                return False, f"[thinking {mode}] {why}"
+            no_call[mode].append(why)
+    return False, (f"OFF·ON 각 {A4_MAX_ATTEMPTS}회 모두 도구 미호출 — content 에 XML 이 없으니 파서 문제가 아니라 모델이 이 지시에 "
+                   f"도구를 안 쓴다. 경로 미관측이라 통과로 쓰지 않는다. 마지막(ON): {no_call['on'][-1]}")
 
 
 # ---------------------------------------------------------------- A5

@@ -166,6 +166,7 @@ submodule `tests/unit_tests/test_step_batch_size_schedule.py`, `test_muon_optimi
 
 | 날짜 | 증상 | 원인 → 대응 |
 |---|---|---|
+| 09-17 | iter600 에이전틱이 A4 FAIL 로 두 번 건너뜀 — 1회 표본이 되물음/거부(thinking OFF)라 `tool_calls` 빈 것을 파서 실패로 오판. A5(ON)는 4/4 PASS | `judge_a4` 관측/미관측 분리 + 모드별 8회 재표본, OFF 전부 미호출이면 평가 조건 ON 으로 파서 확인(OFF 미호출은 ⚠️). **iter600 은 thinking OFF 에서 도구 거부·RULER 퇴행 출력** — no-think 모드 퇴행, 원인 분리 대기. `KNOWN_ISSUES` 09-17 |
 | 09-15 | main1 GPU 7 재발 — 실부하에서 Xid 없이 조용히 정지(SM 100%·mem 0%·115 W), kill 시 Xid 109 ×3 → Xid 120 GSP panic → 노드 8장 CUDA 불가. VBIOS·ECC·NVLink 카운터는 정상 | 보드 불량(리셋 후 재발) → 교체 요청. 판별은 NCCL 플라이트 레코더(낙오 rank) + 단독 GPU 지속 GEMM 대조. **카운터가 깨끗해도 EP8 재개 2-iter 스모크 전엔 GPU 를 믿지 않는다.** sub1 임시 학습(save 100). `KNOWN_ISSUES` 09-15 |
 | 09-15 | 세션 재생성 이미지가 25.03→25.05(torch 2.7→2.8) 로 바뀜 + 셋업 드리프트 3건(cuDNN 9.24 단계 부재·FA3 MAX_JOBS 10·smoke 프리셋 pre-softmax) | TE wheel 은 같은 이미지에서만 재사용, Step 13.5 내장, FA3 jobs 자동(96), 프리셋 수정. 절차 `RESTORE_AFTER_REBOOT.md` §7.6. `KNOWN_ISSUES` 09-15 |
 | 09-14 | sub1 fleet 8대가 기동 직후 전부 사망 (`Engine core initialization failed`), 스위트는 준비 대기 20분 | HOME(`/home/work`)이 **49GB 루프 볼륨**이라 `~/.cache`(vllm 컴파일 캐시·uv·HF·pip 47G)로 100% → ENOSPC. `serve_alpha.sh` 가 `VLLM_CACHE_ROOT=/tmp/vllm_cache` 기본 + 여유 가드. 디스크는 쓰는 경로의 FS 에서 잰다. **컴파일 캐시는 절대경로를 품어 옮기면 깨진다 — 비운다**(옮긴 캐시로 에이전틱 fleet 2차 사망). `KNOWN_ISSUES` 09-14 |
