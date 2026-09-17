@@ -6,9 +6,12 @@
 세션을 못 박아 두므로, 정지를 빨리 끊고 재기동해야 한다(프록시가 연결 거부를 보면 세션을 재배정한다). 컨테이너에는 ptrace
 권한이 없어 스택을 못 잡는다 — 재발 위치(같은 GPU 인가)를 기록해 하드웨어/소프트웨어를 가른다.
 
-판정: `/metrics` 의 num_requests_running > 0 인데 generation_tokens_total 이 STALL_S(기본 120 s) 동안 그대로 → 정지.
-      `/metrics` 자체가 DEAD_S(기본 60 s) 동안 불통 → 사망. 둘 다 같은 argv·env 로 재기동한다(/proc 에서 읽음 — 단계별 플래그
-      차이를 몰라도 된다).
+판정: `/metrics` 의 num_requests_running > 0 인데 generation_tokens_total 이 STALL_S(기본 120 s) 동안 그대로 → 정지(EngineCore 행,
+      :8003 사례). 서버 프로세스가 사라졌거나, `/metrics` 와 `/v1/models` 가 **둘 다** DEAD_S(기본 180 s) 동안 불통 → 사망. 둘 다 같은
+      argv·env 로 재기동한다(/proc 에서 읽음 — 단계별 플래그 차이를 몰라도 된다).
+      2026-09-17 13:19 오탐 교훈: 첫 판은 `/metrics` 60 s 불통만으로 :8001 을 죽였는데, 그때 GPU 1 은 428 W·99% 로 생성 중이었고 API
+      서버 이벤트 루프만 약 90 s 막혀 있었다(긴 프롬프트의 채팅 템플릿 렌더·토크나이즈가 API 서버에서 동기 실행, W=96 에서 몰림).
+      살아 있는 백엔드를 죽이면 in-flight 를 잃고 3분을 버린다 — 사망 판정은 보수적으로, 정지 판정(생성 카운터)은 그대로.
 종료: lb_proxy 가 EXIT_S(기본 90 s) 동안 없으면(stop_fleet 로 단계 종료) 끝난다.
 기록: fleet_logs/watchdog.log + watchdog_events.jsonl (시각·포트·GPU·사유·마지막 통계·nvidia-smi 한 줄).
 
@@ -37,9 +40,17 @@ def log(msg: str) -> None:
         f.write(line + "\n")
 
 
+def models_ok(port: int) -> bool:
+    try:
+        with urllib.request.urlopen(f"http://127.0.0.1:{port}/v1/models", timeout=15) as r:
+            return r.status == 200
+    except Exception:  # noqa: BLE001
+        return False
+
+
 def metrics(port: int) -> dict[str, float] | None:
     try:
-        with urllib.request.urlopen(f"http://127.0.0.1:{port}/metrics", timeout=5) as r:
+        with urllib.request.urlopen(f"http://127.0.0.1:{port}/metrics", timeout=20) as r:
             txt = r.read().decode()
     except Exception:  # noqa: BLE001
         return None
@@ -172,7 +183,7 @@ def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--ports", required=True)
     ap.add_argument("--stall-s", type=int, default=120)
-    ap.add_argument("--dead-s", type=int, default=60)
+    ap.add_argument("--dead-s", type=int, default=180)
     ap.add_argument("--poll-s", type=int, default=15)
     ap.add_argument("--exit-s", type=int, default=90)
     ap.add_argument("--grace-s", type=int, default=600, help="재기동 직후 이 시간 동안은 사망 판정 유예(모델 적재)")
@@ -197,9 +208,17 @@ def main() -> int:
             if m is None:
                 if now - st["restarted"] < a.grace_s:
                     continue
+                if find_server(p) is None:
+                    log(f":{p} 서버 프로세스 없음 — 재기동 불가(argv 를 모른다). 사람이 serve_alpha.sh 로 띄울 것")
+                    st["restarted"] = now   # 반복 로그 방지
+                    continue
+                if models_ok(p):
+                    # API 서버는 살아 있고 /metrics 만 느리다 — 사망 아님(이벤트 루프 잠깐 막힘). 정지 판정도 보류.
+                    st["dead_since"] = None
+                    continue
                 st["dead_since"] = st["dead_since"] or now
                 if now - st["dead_since"] > a.dead_s:
-                    restart(p, f"/metrics 불통 {a.dead_s}s+", None)
+                    restart(p, f"/metrics·/v1/models 둘 다 불통 {a.dead_s}s+", None)
                     st.update(gen=None, since=now, dead_since=None, restarted=now)
                 continue
             st["dead_since"] = None

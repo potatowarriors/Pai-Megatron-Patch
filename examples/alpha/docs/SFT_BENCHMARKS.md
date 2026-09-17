@@ -196,7 +196,7 @@ RL 단계의 rollout 속도가 곧 학습 속도이므로 벤치 fleet 에서 �
 컨테이너 호스트 load 6.4(64 CPU), docker 96. 첫 실행에서 :8003 EngineCore 가 정지해(`KNOWN_ISSUES` 09-17) `eval_sft/fleet_watchdog.py` 를
 붙였다 — 세션 고정은 죽은 백엔드에 세션을 못 박으므로 **정지 감시·재기동이 세트**다.
 
-**다음 기동부터** `--gpu-memory-utilization` 0.90 → **0.95**(사용자 결정 2026-09-17, KV 풀 37.7 → 약 41.7 GiB; iter600 4차 fleet 는 0.90 으로 완주). 턴당 6×, KV 부담 증가 없음. 남은 레버(미적용): ngram 투기 디코딩(decode 5.9 ms/token 은 대역폭 한계 ~1.1 ms 의 5×; GDN 상태 롤백 지원 검증 필요), `MAX_BATCHED_TOKENS` 8192→32768, `--moe-backend` FlashInfer CUTLASS A/B, FP8, 단일 프로세스 DP 재검증(09-07 munmap 원인 해소됨). **RL 트랙 확인 항목**: NeMo-RL `vllm_cfg` 가 `enable_prefix_caching`·`mamba_cache_mode=align` 을 통과시키는지, 벤더 vLLM 버전의 GDN prefix caching 포함 여부, NeMo-Gym 모델 서버의 세션별 워커 고정 여부(NeMo-Gym 평가 경로는 `:8100` 프록시를 쓰므로 세션 고정이 그대로 적용된다).
+**다음 기동부터** `--gpu-memory-utilization` 0.90 → **0.95**(사용자 결정 2026-09-17, KV 풀 37.7 → 약 41.7 GiB; iter600 4차 fleet 는 0.90 으로 완주). 턴당 6×, KV 부담 증가 없음. 남은 레버(미적용): `--api-server-count N`(API 서버 루프가 긴 프롬프트 토크나이즈로 수십 초 막히는 현상 완화, `KNOWN_ISSUES` 09-17 워치독 오탐), ngram 투기 디코딩(decode 5.9 ms/token 은 대역폭 한계 ~1.1 ms 의 5×; GDN 상태 롤백 지원 검증 필요), `MAX_BATCHED_TOKENS` 8192→32768, `--moe-backend` FlashInfer CUTLASS A/B, FP8, 단일 프로세스 DP 재검증(09-07 munmap 원인 해소됨). **RL 트랙 확인 항목**: NeMo-RL `vllm_cfg` 가 `enable_prefix_caching`·`mamba_cache_mode=align` 을 통과시키는지, 벤더 vLLM 버전의 GDN prefix caching 포함 여부, NeMo-Gym 모델 서버의 세션별 워커 고정 여부(NeMo-Gym 평가 경로는 `:8100` 프록시를 쓰므로 세션 고정이 그대로 적용된다).
 
 ### 진행 확인 — 로그를 믿지 말 것
 
