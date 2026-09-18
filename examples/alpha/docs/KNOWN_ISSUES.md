@@ -4,6 +4,34 @@
 CLAUDE.md의 "함정 표"는 이 문서의 한 줄 요약이며, 새 사고는 **여기에 서사를 쓰고 CLAUDE.md 표에는 한 줄만** 추가한다.
 날짜는 절대 표기. 두 스테이지 이상 지난 항목은 스테이지 경계에서 `archive/`로 이동.
 
+## τ³ retail 무효 — tau2 NL-assertion 판정 LLM 이 `gpt-4.1-2025-04-14` 하드코딩, 우리 프록시에서 404 (2026-09-18 🔶 판정 LLM 결정 대기)
+
+**증상**: iter600 τ³(09-18 04:01~05:30, 상대역 gemma4 복구 후 자동 체인) retail 456 표본 중 115 가 `infrastructure_error` 로 제외(harness_fail 25.2% > 10% → 무효).
+airline 200 표본은 제외 0, pass^1 30.5 유효.
+
+**원인**: tau2-bench v1.0.1 `src/tau2/config.py` 의 `DEFAULT_LLM_NL_ASSERTIONS = "gpt-4.1-2025-04-14"` 가 `evaluator_nl_assertions.py` 에서 직접 쓰이며 CLI·env 오버라이드가 없다.
+retail 과제 114 중 40 개가 `nl_assertions` 를 가지며(airline 은 `reward_basis` 에 NL_ASSERTION 없음) **채점 단계**에서 litellm 이 `OPENAI_API_BASE`(= tau_proxy :8110 → fleet)로
+`gpt-4.1-2025-04-14` 를 요청 → vLLM 404 "model does not exist" → 4회 재시도(시뮬레이션 전체 재실행) 후 표본 폐기. fleet 로그 404 2,048건 = 프록시 upstream_errors 2,048.
+실패 과제 39 ⊂ NL 과제 40. 정상 종료(user_stop)한 NL 과제 표본은 하나도 남지 않았고 남은 45 표본은 too_many_errors/max_steps 로 끝나 0점 — 즉 retail 6.5 는 비-NL 74 과제 341 표본의 값.
+4건은 별개(`AssistantMessage must have either content or tool_calls` — 빈 content·무도구 응답).
+
+**왜 지금 발견**: 09-14 스모크는 airline 만, 09-17 1차는 상대역 404 로 10분 만에 중단 — retail 채점 단계까지 간 첫 실행.
+
+**대응(결정 대기)**: 판정 LLM 을 지정할 수단 추가(`config.py` env 오버라이드 또는 프록시 모델 별칭) 후 retail 만 `TAU_FRESH=1` 재실행(≈1h). 판정 LLM 후보:
+(a) 상대역 gemma4 12B — 무료·추이용, 판정 품질 미검증 (b) Gemini — 리더보드 gpt-4.1 에 가까운 판정, 비용. 리더보드와 직접 비교 불가는 상대역과 같은 이유로 이미 전제.
+**교훈**: 하니스가 부르는 LLM 은 agent·user 둘이 아니다 — 채점기·리뷰어 기본 모델을 preflight 에서 함께 검사해야 한다(미구현).
+
+## TB-2 재실행 결과 0.1% — 트라이얼 79% AgentTimeout, 17% 는 컨텍스트 262K 초과 뒤 실패 (2026-09-18 🔶 원인 분리 대기)
+
+**결과**: 1/701 해결(`modernize-scientific-stack` 1/8), 11h. 예외 AgentTimeoutError 564·VerifierTimeoutError 3·RuntimeError 5. 시간 초과 트라이얼의 에이전트 실행 시간 중앙값 900 s(최소 600·최대 12,000) = 과제별 한도(배수 1.0).
+프록시 miss_rate 1.0%(정상), 명령 추출 57.3%, 추론만 있고 명령 없는 스텝 4,252/39,365.
+
+**관찰**: 712 트라이얼 중 119 의 에이전트 로그에 `ContextWindowExceededError`(vLLM 400 "maximum context length")가 있고 119 전부 실패. 프록시 upstream_errors 15,474/56,265 요청(27.5%) —
+프록시가 상태 코드를 안 남겨 전부를 400 으로 확정하진 못했다(fleet 로그는 τ³ fleet 가 덮어씀; 컨테이너 `/opt/harbor/proxy_raw/tb2c3bd2e03/proxy.log` 에는 BrokenPipe 479 만).
+restore 모드는 이전 턴 think 를 히스토리에 되돌리므로 긴 에피소드에서 컨텍스트가 빨리 찬다 — 원인 후보. TB-1 1.2%(phase-1 iter600, terminus-1)와는 하니스가 달라 비교 불가, TB-2 완주 기준선은 이번이 처음.
+
+**다음**: strip 대조 스모크 또는 복원 창 제한(`tau_proxy` 옵트인 플래그)으로 컨텍스트 초과 기여를 분리. 프록시가 upstream 상태 코드 히스토그램을 남기도록 보강(미구현).
+
 ## 세션 재생성 3차 — "main1 GPU 7 해결" 통보 뒤에도 실모델 EP8 게이트에서 all-to-all 정지 재발 (2026-09-18 🔶 GPU 7 재발 확정 — 교체 요청)
 
 **배경**: 2026-09-18 09:13 main1 호스트 재기동(컨테이너 uptime 기준), 10:40 경 세션 재생성(sub1 본 런 224931 은 iter 1002 로그 뒤 사망, ckpt iter 1000). 사용자 통보 "main1 7 GPU 문제 해결". 그러나 GPU 7 S/N 은 **1653124027118 그대로**(보드 미교체, 다른 조치로 추정).

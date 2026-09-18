@@ -6,12 +6,14 @@
 
 **자동 생성 파일 — 손으로 쓰지 말 것.** 체크포인트별 측정 범위·중단 기록·평가 조건 변경은 `docs/SFT_BENCHMARKS.md` §3.10 "측정 이력" (09-14 이전 에이전틱 열은 reasoning 파서 없는 fleet 조건).
 
-| run | iter | mmlu_pro | gpqa_diamond | aime25 | hmmt_feb_2025 | ifeval_prompt_strict | ruler_single_1_avg | ruler_single_2_avg | ruler_multikey_avg | ruler_multivalue_avg | simpleqa_verified | logickor | swe_verified | terminal_bench |
-|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
-| alpha_baseline_48L_sft_128k_full_20260828_081911 | 300 | 47.0 | 32.0 | 무효 | 무효 | 49.3 | 100.0 | 70.0 | 35.0 | 28.8 | 1.2 | 36.8 | 1.6 | 무효 |
-| alpha_baseline_48L_sft_128k_full_20260828_081911 | 600 | 48.6 | 32.2 | 무효 | 무효 | 55.6 | 100.0 | 71.7 | 40.0 | 26.2 | 3.6 | 40.2 | 3.2 | 1.2 |
-| alpha_baseline_48L_sft_128k_full_20260828_081911 | 900 | 49.1 | 33.6 | 무효 | 무효 | 59.4 | 100.0 | 76.7 | 43.3 | 24.2 | 3.5 | 43.1 | 4.4 | 1.7 |
-| alpha_baseline_48L_sft_128k_full_p2_20260907_073414 | 500 | — | — | — | — | — | — | — | — | — | — | 46.1 | — | — |
-| alpha_baseline_48L_sft_128k_full_swap_20260901_101523 | 1200 | 49.5 | 34.1 | 무효 | 무효 | 62.2 | 98.3 | 80.0 | 40.0 | 22.9 | 4.0 | 42.2 | 4.8 | 2.2 |
-| alpha_baseline_48L_sft_128k_full_swap_20260901_101523 | 1500 | 50.3 | 33.9 | 무효 | 무효 | 60.1 | 98.3 | 78.3 | 43.3 | 22.9 | 3.9 | 43.0 | 6.2 | 1.1 |
-| alpha_baseline_48L_sft_128k_full_swap_20260901_101523 | 1800 | 50.9 | 36.9 | 무효 | 무효 | 62.2 | — | — | — | — | 3.5 | 45.4 | 5.4 | — |
+| run | iter | mmlu_pro | gpqa_diamond | aime25 | hmmt_feb_2025 | ifeval_prompt_strict | ruler_single_1_avg | ruler_single_2_avg | ruler_multikey_avg | ruler_multivalue_avg | simpleqa_verified | logickor | swe_verified | terminal_bench | terminal_bench_2 | tau3_retail | tau3_airline | tau3_bench |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| alpha_baseline_48L_sft_128k_final_resume_20260915_174309 | 600 | 49.5 | 35.4 | 무효 | 무효 | 61.1 | 100.0 | 38.3 | 26.7 | 17.5 | 3.8 | 31.2 | 1.8 | — | 0.1 | 무효 | 30.5 | 무효 |
+| alpha_baseline_48L_sft_128k_full_20260828_081911 | 300 | 47.0 | 32.0 | 무효 | 무효 | 49.3 | 100.0 | 70.0 | 35.0 | 28.8 | 1.2 | 36.8 | 1.6 | 무효 | — | — | — | — |
+| alpha_baseline_48L_sft_128k_full_20260828_081911 | 600 | 48.6 | 32.2 | 무효 | 무효 | 55.6 | 100.0 | 71.7 | 40.0 | 26.2 | 3.6 | 40.2 | 3.2 | 1.2 | — | — | — | — |
+| alpha_baseline_48L_sft_128k_full_20260828_081911 | 900 | 49.1 | 33.6 | 무효 | 무효 | 59.4 | 100.0 | 76.7 | 43.3 | 24.2 | 3.5 | 43.1 | 4.4 | 1.7 | — | — | — | — |
+| alpha_baseline_48L_sft_128k_full_p2_20260907_073414 | 500 | — | — | — | — | — | — | — | — | — | — | 46.1 | — | — | — | — | — | — |
+| alpha_baseline_48L_sft_128k_full_swap_20260901_101523 | 1200 | 49.5 | 34.1 | 무효 | 무효 | 62.2 | 98.3 | 80.0 | 40.0 | 22.9 | 4.0 | 42.2 | 4.8 | 2.2 | — | — | — | — |
+| alpha_baseline_48L_sft_128k_full_swap_20260901_101523 | 1500 | 50.3 | 33.9 | 무효 | 무효 | 60.1 | 98.3 | 78.3 | 43.3 | 22.9 | 3.9 | 43.0 | 6.2 | 1.1 | — | — | — | — |
+| alpha_baseline_48L_sft_128k_full_swap_20260901_101523 | 1800 | 50.9 | 36.9 | 무효 | 무효 | 62.2 | — | — | — | — | 3.5 | 45.4 | 5.4 | — | — | — | — | — |
+| alpha_baseline_48L_sft_128k_full_swap_20260901_101523 | 2448 | 50.6 | 35.7 | 무효 | 무효 | 63.3 | — | — | — | — | 4.1 | 45.5 | — | — | — | — | — | — |

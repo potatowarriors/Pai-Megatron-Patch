@@ -166,6 +166,7 @@ submodule `tests/unit_tests/test_step_batch_size_schedule.py`, `test_muon_optimi
 
 | 날짜 | 증상 | 원인 → 대응 |
 |---|---|---|
+| 09-18 | τ³ retail 무효(harness_fail 25%) — 채점 단계에서 `gpt-4.1-2025-04-14` 404 | tau2 `DEFAULT_LLM_NL_ASSERTIONS` 하드코딩·오버라이드 없음 → 우리 프록시로 감. 판정 LLM 지정 수단 추가 후 retail 재실행(결정 대기). 하니스의 채점기 LLM 도 preflight 대상 |
 | 09-18 | "main1 GPU 7 해결" 통보(S/N 동일) 뒤 실모델 EP8 재개 게이트가 첫 iteration all-to-all 600 s 정지. 단독 GEMM 8/8·mock 스모크는 PASS, sub1 같은 게이트는 비트 동일 PASS | 소프트웨어 배제, main1 미해결. **통보·단독 부하 PASS 는 게이트가 아니다** — EP8 재개 2-iter 만 판별식. `KNOWN_ISSUES` 09-18 |
 | 09-17 | 실행 중인 `run_suite.sh` 를 편집 → 구 프로세스가 docker gc 직후 `syntax error near unexpected token` 으로 사망, fleet 종료·집계·wandb 건너뜀(수동 복구) | **bash 는 스크립트를 오프셋으로 읽는다 — 돌고 있는 셸 스크립트는 편집하지 않는다**(복사본을 고쳐 다음 실행에). 파이썬은 import 시점에 읽어 안전. 체인 스크립트의 fleet 준비 판정은 구 fleet 의 200 을 새 fleet 로 오인 → 워치독 조기 기동(grace 로 보완) |
 | 09-17 | TB-2 복원 miss_rate 32.5% 로 무효 오판 — harbor 는 이력에 reasoning 필드를 되돌려 보내 필드 복원(216k)이 분모에서 빠짐. 전체 턴 기준 0.7% | `tau_proxy` miss_rate 분모를 캐시+필드+miss 로, distinct 턴 집계·miss 표본 추가. TB-2 는 τ³ 뒤 `run_suite.sh … tb2` 로 재실행. `KNOWN_ISSUES` 09-17 |
