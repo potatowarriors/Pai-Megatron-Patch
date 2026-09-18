@@ -5,13 +5,16 @@
 # oracle 50/50 and nop 0/50 on that dataset · harbor/tunnel.sh running for this model.
 #
 #   bash harbor/run_harbor.sh <RUN_NAME> <SERVED_MODEL_NAME> [K=4] [W=12]
-#   env: DATASET=pilot_v0  RPORT=8299  MAX_TOKENS=8192  INCLUDE=<glob>  (INCLUDE = smoke subset, not a valid score)
+#   env: DATASET=pilot_v0  MAX_TOKENS=8192  INCLUDE=<glob>  (INCLUDE = smoke subset, not a valid score)
+#        API_BASE=<url>/v1  endpoint as seen FROM THE CONTAINER. Default = harbor/tunnel.sh port (localhost:$RPORT).
+#        A network endpoint the container reaches directly needs no tunnel.
 #
 # Alpha needs the reasoning-restore path of eval_sft/run_terminal_tb2.sh (tau_proxy + interleaved_thinking);
 # this runner talks to the endpoint directly, which is right for models without a reasoning parser.
 set -uo pipefail
 RUN_NAME="${1:?run name}"; MODEL="${2:?served model name}"; K="${3:-4}"; W="${4:-12}"
 DATASET="${DATASET:-pilot_v0}"; RPORT="${RPORT:-8299}"; MAX_TOKENS="${MAX_TOKENS:-8192}"
+API_BASE="${API_BASE:-http://localhost:$RPORT/v1}"
 HERE="$(cd "$(dirname "$0")" && pwd)"; SSHC="/home/work/vidsearch/.ssh-keys/config"
 OUT="$HERE/../results/$RUN_NAME"; mkdir -p "$OUT"
 # compose project names are length-limited — keep the job name short (eval_sft 2026-08-30)
@@ -19,8 +22,8 @@ RID="ffb$(echo "$RUN_NAME" | md5sum | cut -c1-8)"
 FILTER=""; [ -n "${INCLUDE:-}" ] && FILTER="-i ${INCLUDE}" && echo "[ffb] ⚠️ subset '${INCLUDE}' — not a valid score"
 
 ssh -F "$SSHC" -o BatchMode=yes alpha-eval 'bash -s' <<EOF
-  export HOME=/opt/harbor OPENAI_API_KEY=dummy OPENAI_API_BASE=http://localhost:$RPORT/v1
-  curl -s -m 10 -o /dev/null http://localhost:$RPORT/v1/models || { echo "[ffb] ❌ no endpoint on container:$RPORT — start harbor/tunnel.sh"; exit 1; }
+  export HOME=/opt/harbor OPENAI_API_KEY=dummy OPENAI_API_BASE=$API_BASE
+  curl -s -m 10 -f -o /dev/null $API_BASE/models || { echo "[ffb] ❌ container cannot reach $API_BASE"; exit 1; }
   # litellm dies computing cost for an unregistered model (eval_sft 2026-08-30)
   cat > /opt/ffbench/model_registry.json <<JSON
 {"openai/$MODEL": {"max_tokens": $MAX_TOKENS, "max_input_tokens": 262144, "max_output_tokens": $MAX_TOKENS,
@@ -29,7 +32,7 @@ JSON
   export LITELLM_MODEL_REGISTRY_PATH=/opt/ffbench/model_registry.json
   cd /opt/harbor && rm -rf /opt/ffbench/jobs/$RID
   ./venv/bin/harbor run -p /opt/ffbench/$DATASET -a terminus-2 -m openai/$MODEL \
-    --ak api_base=http://localhost:$RPORT/v1 --ak temperature=1.0 --ak parser_name=json \
+    --ak api_base=$API_BASE --ak temperature=1.0 --ak parser_name=json \
     --ak 'llm_call_kwargs={"top_p":0.95,"max_tokens":$MAX_TOKENS}' \
     $FILTER -n $W -k $K -o /opt/ffbench/jobs --job-name $RID -y -q 2>&1 | tail -25
 EOF

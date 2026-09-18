@@ -97,7 +97,7 @@ TB-2 와 같은 경로를 쓴다: gpu06 `alpha-eval` 컨테이너의 Harbor 0.22
 | `harbor/export_harbor.py` | pilot → Harbor 로컬 데이터셋. 기준 정답은 `tests/` 에만 넣는다. Harbor 는 `tests/` 를 채점 시점에만 올리므로 에이전트가 볼 수 없다. 채점 때 입력과 기준 출력을 `/ref_root` 에 새로 만든다(에이전트가 `in/` 을 건드렸을 수 있다) |
 | `harbor/base.Dockerfile` | `alpha-ffmpeg-base:1`. ubuntu:24.04 = ffmpeg 6.1.1, 검증기를 보정한 빌드와 동일. debian bookworm 의 5.1 은 `-display_rotation` 이 없다 |
 | `harbor/tunnel.sh` | 모델 엔드포인트를 컨테이너 `localhost:8299` 로 역터널. **사람이 직접 실행한다.** 8199 는 SFT 평가 fleet 용 |
-| `harbor/run_harbor.sh` | Terminus-2 실행 + 과제별 보상·실패 검사 회수 → `results/<RUN>/trials.json`. **2026-09-18 현재 미실행**(구문 검사만) |
+| `harbor/run_harbor.sh` | Terminus-2 실행 + 과제별 보상·실패 검사 회수 → `results/<RUN>/trials.json`. `API_BASE` 로 컨테이너가 직접 닿는 엔드포인트를 주면 터널 불필요. 2026-09-18 스모크 2/2 뒤 전량 실행 |
 
 ```bash
 S=/tmp/ffb && python3 harbor/export_harbor.py --out $S/pilot_v0
@@ -105,14 +105,40 @@ tar -C $S -cf - pilot_v0 | ssh -F /home/work/vidsearch/.ssh-keys/config alpha-ev
 ssh -F … alpha-eval 'cd /opt/ffbench && docker build -f base.Dockerfile -t alpha-ffmpeg-base:1 .'
 # 파이프라인 관문 (과제·검증기를 바꾸면 다시)
 ssh -F … alpha-eval 'cd /opt/harbor && HOME=/opt/harbor ./venv/bin/harbor run -p /opt/ffbench/pilot_v0 -a oracle -n 12 -o /opt/ffbench/jobs --job-name ffb-oracle -y -q'
-bash harbor/tunnel.sh 8000 8299                      # 별도 터미널
-bash harbor/run_harbor.sh gemma4_12b_pilot gemma-4-12B-it 4 12
+API_BASE=https://gemma4.withai.cj.net:10206/v1 bash harbor/run_harbor.sh gemma4_12b_pilot_v0 gemma-4-12B-it 4 12
+# 컨테이너가 직접 못 닿는 로컬 서버일 때만: bash harbor/tunnel.sh 8000 8299  (별도 터미널, 사람이 실행)
 ```
 
 **파이프라인 관문 2026-09-18: oracle 50/50 (4분 5초, W=12) · nop 0/50 (3분 30초) → PASS.** 종료 후 잔류 컨테이너 0.
 
 Alpha 는 `run_harbor.sh` 를 그대로 쓰면 안 된다. 이전 턴 추론 복원에 `tau_proxy` + `interleaved_thinking` 이 필요하다
 (`eval_sft/run_terminal_tb2.sh` 의 restore 절). Alpha 용 분기는 baseline 단계에서 추가한다.
+
+## baseline 기록
+
+### Gemma4-12B zero-shot, pilot_v0 (2026-09-18)
+
+조건: Terminus-2(json) · 50과제 × 4회 = 200 트라이얼 · W=12 · temp 1.0 / top_p 0.95 / max_tokens 8192 · thinking 끔 ·
+엔드포인트 `https://gemma4.withai.cj.net:10206/v1`(gpu06 컨테이너에서 직접 도달, 터널 불필요) · 예외 0.
+
+| 난이도 | 통과 | 4/4 과제 | 0~1/4 과제 |
+|---|---|---|---|
+| L1 | 76/80 = 95.0% | 18/20 | `l1-bitrate` 1/4 |
+| L2 | 63/72 = 87.5% | 14/18 | `l2-vertical` 0/4 · `l2-segments` 1/4 |
+| L3 | 38/48 = 79.2% | 8/12 | `l3-bake-rotation` 0/4 · `l3-cut-black` 1/4 |
+| 전체 | **177/200 = 88.5%** | 40/50 | |
+
+**판정: pilot_v0 은 너무 쉽다 (목표 구간 40~60%).** 0~1/4 과제의 궤적을 열어 본 결과 검증기 오판은 없었다.
+
+| 과제 | 모델이 한 것 | 실패 유형 |
+|---|---|---|
+| `l3-bake-rotation` | 4회 모두 `-vf transpose=1`. ffmpeg 는 회전 플래그를 자동 적용하므로 두 번 돈다 | 입력 진단 없이 관성으로 명령 |
+| `l3-cut-black` | `-c copy` 로 4초·6초에서 잘라 concat → 키프레임에 끌려감 | 정확성 제약과 stream copy 의 충돌 |
+| `l2-segments` | 4.0초 경계 누락(관문이 잡았던 그 함정) | 도구의 수치 경계 동작 |
+| `l1-bitrate` | 영상만 400k 로 맞춰 오디오를 더하면 403~453 kbps | 제약을 전체가 아닌 일부에만 적용 |
+| `l2-vertical` | 180x320 창을 그대로 crop (축소 없음) | **지시문이 모호함** — v0 에서 "세로 전체를 살린 채" 로 고친다 |
+
+변별력은 단일·복합 연산이 아니라 **입력 진단 · 분석 후 편집 · 수치 제약의 정확한 충족**에서 나온다. v0 은 이 축으로 다시 짠다.
 
 ## 다음 단계
 
