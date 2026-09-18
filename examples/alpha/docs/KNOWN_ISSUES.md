@@ -4,6 +4,19 @@
 CLAUDE.md의 "함정 표"는 이 문서의 한 줄 요약이며, 새 사고는 **여기에 서사를 쓰고 CLAUDE.md 표에는 한 줄만** 추가한다.
 날짜는 절대 표기. 두 스테이지 이상 지난 항목은 스테이지 경계에서 `archive/`로 이동.
 
+## 세션 재생성 3차 — "main1 GPU 7 해결" 통보 뒤에도 실모델 EP8 게이트에서 all-to-all 정지 재발 (2026-09-18 🔶 관리자 재확인 필요)
+
+**배경**: 2026-09-18 09:13 main1 호스트 재기동(컨테이너 uptime 기준), 10:40 경 세션 재생성(sub1 본 런 224931 은 iter 1002 로그 뒤 사망, ckpt iter 1000). 사용자 통보 "main1 7 GPU 문제 해결". 그러나 GPU 7 S/N 은 **1653124027118 그대로**(보드 미교체, 다른 조치로 추정).
+**관측**:
+1. 셋업 전 단독 bf16 8K GEMM 180 s, 8장 동시 — **8/8 PASS**, GPU 7 674.6 TFLOP/s(09-15 에는 10 s 안에 무응답). ECC 0.
+2. 셋업·핀·compat 595·validate·VBIOS 8/8·mock 스모크(12.01052→12.01263, 09-16 비트 동일, teardown SIGSEGV 0) 전부 PASS.
+3. 실모델 재개 게이트(224931 iter1000 → 1001·1002, EP8·CP8, `--save ""`): **sub1 PASS** — 1001 loss 7.617399E-01(원 런 비트 동일), 1002 7.689553E-01(원 런 7.689743E-01, rel 2.5e-5).
+   **main1 FAIL** — ckpt 로드 뒤 첫 iteration 역전파 재계산 중 MoE combine all-to-all(EP 그룹 seq 36843)에서 8 rank 600 s 워치독 타임아웃(11:44:48), SIGABRT.
+   플라이트 레코더: 8 rank 모두 36842 완료·36843 발행 후 미완료 — **09-15 와 달리 낙오 rank 가 덤프에 드러나지 않는다**(`reboot_restore/logs/nccl_trace/main1_gate_20260918_rank*`).
+4. 종료 후 main1 GPU 8장 메모리 0 MiB·VBIOS 판독 정상 — 09-15 처럼 노드 전체가 CUDA 불가로 떨어지지는 않았다. 컨테이너에서 dmesg 불가라 Xid 여부 미확인.
+**해석**: 같은 이미지·코드·ckpt 로 sub1 이 비트 동일 PASS → 소프트웨어 배제. main1 의 실부하 EP all-to-all 정지는 **해결되지 않았다**. 단독 GEMM 은 이번에 통과했으므로 GPU 7 단독 결함인지, 09-17 GPU 3 fleet 무증상 정지(126 W, 아래 09-17)와 같은 노드 수준 문제인지 미판정.
+**교훈**: "해결" 통보·단독 부하 PASS 는 게이트가 아니다 — 09-15 교훈 ①이 그대로 적용됐다(실모델 EP8 재개 2-iter 가 유일한 판별식). 원격 체인 기동 시 `ssh h "cmd > out 2>&1 ... > /dev/null 2>&1 &"` 처럼 리다이렉트를 두 번 쓰면 뒤의 것이 이겨 판정 로그가 사라진다.
+
 ## τ³ 상대역(gemma4 외부 엔드포인트) 404 — preflight 통과 10분 뒤 전 경로 404, retail 전 과제 실패 (2026-09-17 🔶 상대역 결정 대기)
 
 **증상**: 16:06 `run_tau.sh` preflight T2(상대역 chat 1회) 통과 → retail 시작 → 16:15 부터 모든 시뮬레이션이 `litellm.NotFoundError: 404 page not found`
