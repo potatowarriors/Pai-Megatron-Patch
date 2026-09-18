@@ -35,7 +35,7 @@
 |---|---|
 | `media.py` | 합성 입력 생성. lavfi `testsrc2` + `sine`이라 실제 영상이 없고 8코어에서도 가볍다. VFR · 회전 플래그 · 무음 구간 · 검은 구간 · 다중 오디오 · 내장 자막 변형 지원 |
 | `checks.py` | 검사 15종과 `verify()`. LLM 판정 없음 |
-| `env.py` | 작업 디렉터리 준비. 기준 출력은 `work/` 밖 `ref/`에 둬서 셸을 가진 에이전트가 읽지 못한다 |
+| `env.py` | 입력 생성(`make_inputs`)과 작업 디렉터리 준비(`prepare`). 기준 출력은 `work/` 밖 `ref/`에 둬서 셸을 가진 에이전트가 읽지 못한다 |
 | `tasks_pilot.py` → `tasks/pilot_v0.jsonl` | pilot 50과제 (L1 20 · L2 18 · L3 12). **난이도 보정용이며 동결 벤치가 아니다** |
 | `selftest.py` | 검증기 관문 |
 
@@ -87,9 +87,36 @@ python3 selftest.py --workers 6 # 약 2분 (8코어)
 
 `l3_vfr_to_cfr` 정답 27.1 dB, `l2_vertical` 정답 27.4 dB (임계 25). baseline 측정 때 이 두 과제의 실패는 수동으로 열어 본다.
 
+## gpu06 실행 — Harbor + Terminus-2 (사용자 결정 2026-09-18)
+
+이 노드에는 격리 수단이 없다(docker·bwrap 없음, `unshare` 권한 없음). NFS 를 공유하므로 모델이 만든 셸 명령을 여기서 실행하지 않는다.
+TB-2 와 같은 경로를 쓴다: gpu06 `alpha-eval` 컨테이너의 Harbor 0.22 가 과제마다 docker 환경을 띄우고 Terminus-2 가 tmux 로 조작한다.
+
+| 파일 | 역할 |
+|---|---|
+| `harbor/export_harbor.py` | pilot → Harbor 로컬 데이터셋. 기준 정답은 `tests/` 에만 넣는다. Harbor 는 `tests/` 를 채점 시점에만 올리므로 에이전트가 볼 수 없다. 채점 때 입력과 기준 출력을 `/ref_root` 에 새로 만든다(에이전트가 `in/` 을 건드렸을 수 있다) |
+| `harbor/base.Dockerfile` | `alpha-ffmpeg-base:1`. ubuntu:24.04 = ffmpeg 6.1.1, 검증기를 보정한 빌드와 동일. debian bookworm 의 5.1 은 `-display_rotation` 이 없다 |
+| `harbor/tunnel.sh` | 모델 엔드포인트를 컨테이너 `localhost:8299` 로 역터널. **사람이 직접 실행한다.** 8199 는 SFT 평가 fleet 용 |
+| `harbor/run_harbor.sh` | Terminus-2 실행 + 과제별 보상·실패 검사 회수 → `results/<RUN>/trials.json`. **2026-09-18 현재 미실행**(구문 검사만) |
+
+```bash
+S=/tmp/ffb && python3 harbor/export_harbor.py --out $S/pilot_v0
+tar -C $S -cf - pilot_v0 | ssh -F /home/work/vidsearch/.ssh-keys/config alpha-eval 'mkdir -p /opt/ffbench && tar -C /opt/ffbench -xf -'
+ssh -F … alpha-eval 'cd /opt/ffbench && docker build -f base.Dockerfile -t alpha-ffmpeg-base:1 .'
+# 파이프라인 관문 (과제·검증기를 바꾸면 다시)
+ssh -F … alpha-eval 'cd /opt/harbor && HOME=/opt/harbor ./venv/bin/harbor run -p /opt/ffbench/pilot_v0 -a oracle -n 12 -o /opt/ffbench/jobs --job-name ffb-oracle -y -q'
+bash harbor/tunnel.sh 8000 8299                      # 별도 터미널
+bash harbor/run_harbor.sh gemma4_12b_pilot gemma-4-12B-it 4 12
+```
+
+**파이프라인 관문 2026-09-18: oracle 50/50 (4분 5초, W=12) · nop 0/50 (3분 30초) → PASS.** 종료 후 잔류 컨테이너 0.
+
+Alpha 는 `run_harbor.sh` 를 그대로 쓰면 안 된다. 이전 턴 추론 복원에 `tau_proxy` + `interleaved_thinking` 이 필요하다
+(`eval_sft/run_terminal_tb2.sh` 의 restore 절). Alpha 용 분기는 baseline 단계에서 추가한다.
+
 ## 다음 단계
 
-1. 에이전트 하니스 — Terminus-2 형식 셸 루프. Alpha가 터미널 코퍼스 3.35B 토큰을 이 형식으로 학습했다.
+1. ~~에이전트 하니스~~ — Harbor + Terminus-2 재사용, 파이프라인 관문 PASS(위).
 2. baseline 측정 — Gemma4-12B(`localhost:8000`) · Alpha 최신 ckpt · frontier API. **go/no-go 관문**: Gemma4가 40~60% 구간에 오도록 난이도 재조정.
 3. 과제 생성기 확장 → 벤치 v0 규격과 held-out 테스트셋 동결(커밋으로 기록).
 4. SFT 데이터 파이프라인 — 교사 궤적을 이 검증기로 rejection sampling. 납품 규격 문서를 구하면 L3에 반영.

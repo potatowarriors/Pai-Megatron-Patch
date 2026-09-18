@@ -28,15 +28,20 @@ def run_commands(cmds, cwd, timeout=300):
     return True, log
 
 
+def make_inputs(task, work):
+    work = Path(work)
+    (work / "in").mkdir(parents=True, exist_ok=True)
+    (work / "out").mkdir(exist_ok=True)
+    for spec in task["inputs"]:
+        make_input(spec, work / spec["path"])
+
+
 def prepare(task, root):
     """Create inputs and reference outputs. Returns (workdir, refdirs); refdirs[0] is the
     canonical reference, the rest are the task's `variants`."""
     root = Path(root)
     work = root / "work"
-    (work / "in").mkdir(parents=True)
-    (work / "out").mkdir()
-    for spec in task["inputs"]:
-        make_input(spec, work / spec["path"])
+    make_inputs(task, work)
     refs = []
     for i, cmds in enumerate([task["reference"]] + task.get("variants", [])):
         ref = root / ("ref" if i == 0 else f"ref_v{i}")
