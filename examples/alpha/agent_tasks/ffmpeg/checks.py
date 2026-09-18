@@ -57,6 +57,22 @@ def check_vstream(path, ref, c):
                            ("pix_fmt", "pix_fmt"), ("profile", "profile")):
             if key in c:
                 _expect(errors, key, s.get(field), c[key])
+        if "width_any" in c and s.get("width") not in c["width_any"]:
+            errors.append(f"width: got {s.get('width')}, want one of {c['width_any']}")
+        if "height_any" in c and s.get("height") not in c["height_any"]:
+            errors.append(f"height: got {s.get('height')}, want one of {c['height_any']}")
+        if "level" in c:
+            _expect(errors, "level", s.get("level"), c["level"])
+        if "sar" in c and s.get("sample_aspect_ratio", "1:1") != c["sar"]:
+            errors.append(f"sample_aspect_ratio: got {s.get('sample_aspect_ratio')}, want {c['sar']}")
+        if "rotation" in c:
+            rot = [int(d["rotation"]) for d in s.get("side_data_list", []) if "rotation" in d] or [0]
+            if abs(rot[0]) != abs(c["rotation"]):
+                errors.append(f"rotation: got {rot[0]}, want ±{abs(c['rotation'])}")
+        if "frames" in c:
+            n = _run(["ffprobe", "-v", "error", "-select_streams", "v:0", "-count_frames", "-show_entries",
+                      "stream=nb_read_frames", "-of", "csv=p=0", str(path)]).stdout.strip()
+            _expect(errors, "frame count", int(n or 0), c["frames"])
         if "fps" in c and abs(_fps(s) - c["fps"]) > c.get("fps_tol", 0.1):
             errors.append(f"fps: got {_fps(s):.3f}, want {c['fps']}")
         if c.get("no_rotation"):
@@ -117,14 +133,17 @@ def _psnr(cand, ref, shift_cand, shift_ref, region=None):
 def check_frames_match(path, ref, c):
     # valid solutions can differ by one frame at the boundary (-r vs fps filter, -ss placement),
     # so take the best of a +-1 frame alignment
-    best = max(_psnr(path, r, a, b, c.get("region")) for r in c["_refs"] if r.is_file()
-               for a, b in ((0, 0), (1, 0), (0, 1)))
+    # exact: the task is about frame-exact selection, so an off-by-one must not be forgiven
+    shifts = ((0, 0),) if c.get("exact") else ((0, 0), (1, 0), (0, 1))
+    best = max(_psnr(path, r, a, b, c.get("region")) for r in c["_refs"] if r.is_file() for a, b in shifts)
     need = c.get("min_psnr", MIN_PSNR)
     return (best >= need, f"psnr={best:.2f} dB vs reference, need >= {need}")
 
 
-def _band_energy(path, stream_index=0):
-    out = subprocess.run(["ffmpeg", "-v", "error", "-i", str(path), "-map", f"0:a:{stream_index}", "-ac", "1",
+def _band_energy(path, stream_index=0, channel=None):
+    # channel: measure one channel only (0 = left); default is the mono downmix
+    mix = ["-af", f"pan=mono|c0=c{channel}"] if channel is not None else ["-ac", "1"]
+    out = subprocess.run(["ffmpeg", "-v", "error", "-i", str(path), "-map", f"0:a:{stream_index}", *mix,
                           "-ar", "8000", "-f", "s16le", "-"], capture_output=True)
     pcm = np.frombuffer(out.stdout, dtype=np.int16).astype(np.float64)
     if pcm.size < 8000:
@@ -136,7 +155,7 @@ def _band_energy(path, stream_index=0):
 
 
 def check_audio_tones(path, ref, c):
-    energy = _band_energy(path, c.get("index", 0))
+    energy = _band_energy(path, c.get("index", 0), c.get("channel"))
     errors = [f"{hz} Hz missing (share {energy(hz):.3f})" for hz in c.get("present", []) if energy(hz) < 0.05]
     errors += [f"{hz} Hz still present (share {energy(hz):.3f})" for hz in c.get("absent", []) if energy(hz) > 0.01]
     return (not errors, "; ".join(errors) or "ok")
@@ -192,6 +211,59 @@ def check_cfr(path, ref, c):
     deltas = np.diff(pts)
     spread = float(deltas.max() - deltas.min())
     return (spread < 0.002, f"frame interval spread={spread * 1000:.2f} ms over {len(pts)} frames")
+
+
+def _keyframes(path):
+    out = _run(["ffprobe", "-v", "error", "-select_streams", "v:0", "-skip_frame", "nokey", "-show_entries",
+                "frame=pts_time", "-of", "csv=p=0", str(path)])
+    return [float(x.strip(",")) for x in out.stdout.split() if x.strip(",")]
+
+
+def check_gop(path, ref, c):
+    """Keyframes exactly every `seconds` and nowhere else (fixed GOP for adaptive streaming)."""
+    keys, step = _keyframes(path), c["seconds"]
+    dur = float(_streams(probe(path), "video")[0].get("duration") or probe(path)["format"]["duration"])
+    want = [i * step for i in range(int((dur - 0.05) // step) + 1)]  # a single keyframe at 0 is not "every 2 s"
+    ok = len(keys) == len(want) and all(abs(k - w) <= 0.02 for k, w in zip(keys, want))
+    return (ok, f"keyframes at {[round(k, 2) for k in keys][:8]}, want {want}")
+
+
+def check_silence_intervals(path, ref, c):
+    """Silences of >= 0.5 s found in the OUTPUT must equal `expected` ([] = none left)."""
+    out = _run(["ffmpeg", "-hide_banner", "-i", str(path), "-af", "silencedetect=noise=-40dB:d=0.5", "-vn", "-f", "null", "-"])
+    got = list(zip(map(float, re.findall(r"silence_start: (-?[0-9.]+)", out.stderr)),
+                   map(float, re.findall(r"silence_end: ([0-9.]+)", out.stderr))))
+    want, tol = [tuple(x) for x in c["expected"]], c.get("tol", 0.15)
+    ok = len(got) == len(want) and all(abs(g[0] - w[0]) <= tol and abs(g[1] - w[1]) <= tol for g, w in zip(got, want))
+    return (ok, f"silences {got}, want {want}±{tol}")
+
+
+def check_json_records(path, ref, c):
+    """JSON list of objects matched by `key`; numbers compared with tolerance, the rest exactly."""
+    data = json.loads(Path(path).read_text(encoding="utf-8"))
+    key, tol = c["key"], c.get("tol", 0.1)
+    got = {str(d[key]): d for d in data}
+    errors = []
+    for want in c["expected"]:
+        g = got.get(str(want[key]))
+        if g is None:
+            errors.append(f"{want[key]}: missing")
+            continue
+        for k, v in want.items():
+            same = abs(float(g.get(k, "nan")) - v) <= tol if isinstance(v, (int, float)) and not isinstance(v, bool) \
+                else g.get(k) == v
+            if not same:
+                errors.append(f"{want[key]}.{k}: got {g.get(k)!r}, want {v!r}")
+    if len(got) != len(c["expected"]):
+        errors.append(f"{len(got)} records, want {len(c['expected'])}")
+    return (not errors, "; ".join(errors) or "ok")
+
+
+def check_json_numbers(path, ref, c):
+    got = sorted(float(x) for x in json.loads(Path(path).read_text(encoding="utf-8")))
+    want, tol = sorted(c["expected"]), c.get("tol", 0.05)
+    ok = len(got) == len(want) and all(abs(g - w) <= tol for g, w in zip(got, want))
+    return (ok, f"got {got}, want {want}±{tol}")
 
 
 def check_file_count(path, ref, c):

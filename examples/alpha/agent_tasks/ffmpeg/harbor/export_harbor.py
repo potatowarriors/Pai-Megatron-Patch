@@ -7,7 +7,7 @@ Per task:  task.toml · instruction.md · environment/Dockerfile · solution/sol
                 may have touched /work/in) and scores /work against them.
   solution/     the reference commands — `harbor run -a oracle` must score 50/50.
 
-  python3 harbor/export_harbor.py --out <dir>
+  python3 harbor/export_harbor.py --set v0 --out <dir>
 """
 import argparse
 import json
@@ -18,7 +18,7 @@ from pathlib import Path
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE.parent))
 
-from tasks_pilot import TASKS  # noqa: E402
+import importlib  # noqa: E402
 
 BASE_IMAGE = "alpha-ffmpeg-base:1"
 
@@ -72,9 +72,31 @@ sys.path.insert(0, "/tests")
 from checks import verify
 from env import prepare
 
+from checks import probe
+
+
+def fingerprint(path):
+    """Container-level identity of an input: enough to tell a wrong or altered input from the right one."""
+    try:
+        info = probe(path)
+    except Exception as e:
+        return f"unreadable: {e}"
+    streams = [(s["codec_type"], s.get("codec_name"), s.get("width"), s.get("height"), s.get("channels"),
+                [d.get("rotation") for d in s.get("side_data_list", []) if "rotation" in d]) for s in info["streams"]]
+    return [streams, round(float(info["format"].get("duration", 0)), 1)]
+
+
 task = json.load(open("/tests/task.json"))
 _, refs = prepare(task, "/ref_root")
 result = verify(task, "/work", refs)
+# Guard: the inputs the agent worked on must be the inputs this task defines. A mismatch means the
+# environment was wrong (seen once on 2026-09-18: a rot180 task ran on a 90/270-rotated input) or the
+# agent altered in/. Either way the trial is not a clean measurement of the model.
+mismatch = [s["path"] for s in task["inputs"] if s["kind"] in ("video", "audio")
+            and fingerprint("/work/" + s["path"]) != fingerprint("/ref_root/work/" + s["path"])]
+result["env_mismatch"] = mismatch
+if mismatch:
+    print("ENV_MISMATCH", mismatch)
 json.dump(result, open("/logs/verifier/details.json", "w"), ensure_ascii=False, indent=1)
 open("/logs/verifier/reward.txt", "w").write("1" if result["passed"] else "0")
 for r in result["results"]:
@@ -106,7 +128,9 @@ def export(task, out):
 if __name__ == "__main__":
     ap = argparse.ArgumentParser()
     ap.add_argument("--out", required=True)
+    ap.add_argument("--set", default="pilot", help="task module suffix: pilot | v0")
     args = ap.parse_args()
+    TASKS = importlib.import_module(f"tasks_{args.set}").TASKS
     out = Path(args.out)
     if out.exists():
         shutil.rmtree(out)

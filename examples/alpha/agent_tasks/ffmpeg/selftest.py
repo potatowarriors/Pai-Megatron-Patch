@@ -4,7 +4,7 @@ For every task:  reference -> PASS · each alt -> PASS · each negative -> FAIL 
 A reference/alt failure is a false negative (verifier too strict or task broken);
 a negative passing is a false positive (verifier hole). Either one fails the gate.
 
-  python selftest.py [--only ID ...] [--workers 4] [--report selftest_report.json]
+  python selftest.py [--set pilot|v0] [--only ID ...] [--workers 4] [--report selftest_report.json]
 """
 import argparse
 import json
@@ -18,7 +18,7 @@ sys.path.insert(0, str(Path(__file__).parent))
 
 from checks import verify  # noqa: E402
 from env import prepare, reset_output, run_commands  # noqa: E402
-from tasks_pilot import TASKS  # noqa: E402
+import importlib  # noqa: E402
 
 
 def _psnrs(result):
@@ -51,11 +51,13 @@ def run_task(task):
 
 def main():
     ap = argparse.ArgumentParser()
+    ap.add_argument("--set", default="pilot", help="task module suffix: pilot | v0")
     ap.add_argument("--only", nargs="*")
     ap.add_argument("--workers", type=int, default=4)
     ap.add_argument("--report", default=str(Path(__file__).parent / "selftest_report.json"))
     args = ap.parse_args()
-    tasks = [t for t in TASKS if not args.only or t["id"] in args.only]
+    all_tasks = importlib.import_module(f"tasks_{args.set}").TASKS
+    tasks = [t for t in all_tasks if not args.only or t["id"] in args.only]
 
     with ProcessPoolExecutor(max_workers=args.workers) as ex:
         reports = list(ex.map(run_task, tasks))

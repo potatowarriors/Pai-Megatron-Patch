@@ -44,15 +44,21 @@ rows = []
 for f in sorted(glob.glob(os.path.join(os.environ["JOB"], "*", "result.json"))):
     d = json.load(open(f)); t = os.path.dirname(f)
     det = os.path.join(t, "verifier", "details.json")
-    failed = [f"{r['type']}: {r['detail']}" for r in json.load(open(det))["results"] if not r["ok"]] if os.path.exists(det) else None
+    dj = json.load(open(det)) if os.path.exists(det) else None
+    failed = [f"{r['type']}: {r['detail']}" for r in dj["results"] if not r["ok"]] if dj else None
     rows.append({"task": d.get("task_name"), "trial": os.path.basename(t),
                  "reward": ((d.get("verifier_result") or {}).get("rewards") or {}).get("reward"),
-                 "exception": (d.get("exception_info") or {}).get("exception_type"), "failed_checks": failed})
+                 "exception": (d.get("exception_info") or {}).get("exception_type"), "failed_checks": failed,
+                 "env_mismatch": (dj or {}).get("env_mismatch") or []})
 print(json.dumps(rows, ensure_ascii=False, indent=1))
 PY
 python3 - "$OUT/trials.json" <<'PY'
 import json, sys, collections
 rows = json.load(open(sys.argv[1])); by = collections.defaultdict(list)
+bad = [r for r in rows if r.get("env_mismatch")]
+if bad:  # not a model failure: the trial ran on the wrong input, or the agent altered in/
+    print(f"  ⚠️ env_mismatch in {len(bad)} trials (excluded): {sorted(set(r['task'] for r in bad))}")
+rows = [r for r in rows if not r.get("env_mismatch")]
 for r in rows:
     by[r["task"].split("-")[0]].append(1 if r["reward"] == 1 else 0)
 for lv in sorted(by):

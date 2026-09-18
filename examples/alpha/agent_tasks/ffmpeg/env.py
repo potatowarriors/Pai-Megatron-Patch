@@ -7,6 +7,7 @@ Layout under <root>:
 The reference lives outside work/ so an agent with a shell cannot read it.
 """
 import os
+import shutil
 import subprocess
 from pathlib import Path
 
@@ -56,5 +57,9 @@ def prepare(task, root):
 
 def reset_output(work):
     out = Path(work) / "out"
-    for p in out.iterdir():
-        p.unlink()
+    shutil.rmtree(out)
+    out.mkdir()
+    # solutions may leave scratch files next to in/ and out/ (list.txt, part1.mp4 ...)
+    for p in Path(work).iterdir():
+        if p.name not in ("in", "out"):
+            shutil.rmtree(p) if p.is_dir() else p.unlink()
