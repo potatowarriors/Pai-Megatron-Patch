@@ -50,7 +50,7 @@
 | [EVAL_DOCKER_NODE.md](EVAL_DOCKER_NODE.md) | 2026-08-29 | 에이전틱 벤치(SWE·Terminal) 실행용 외부 docker 호스트 gpu06 DinD — 접속·복구·재구축 runbook |
 | [../study/sft_final_blend.md](../study/sft_final_blend.md) | 2026-09-14 | **SFT 최종 블렌드 구성 정본** — 57 멤버 원천·언어·사고 여부·epoch·토큰·비중, 카테고리 vs Ultra, 제외 목록, 생성·검증 절차 |
 | [../study/diloco_sft_ab.md](../study/diloco_sft_ab.md) | 2026-09-14 | **DiLoCo 2노드 vs 단일 노드 SFT A/B 결과** — 같은 데이터 효율 0.60~0.63 정체, 벽시계 가속 1.2×(2×GPU), 오버헤드 3%; 단일 노드 권고 |
-| [SFT_FINAL_PLAN.md](SFT_FINAL_PLAN.md) | 2026-09-13~ | **SFT 최종 단일 런 계획(정본)** — phase-1/2/3 폐기, Ultra 공개 블렌드 비율(토큰 기준) 60B 단일 SFT, 신규 멤버(IF-Chat-v1·스크럽 Chat-v2·When2Call), 프리셋 2종, DiLoCo 2노드 A/B 프로토콜, 게이트 체인 |
+| [SFT_FINAL_PLAN.md](SFT_FINAL_PLAN.md) | 2026-09-13~ | **SFT 최종 단일 런 계획(정본)** — phase-1/2/3 폐기, Ultra 공개 블렌드 비율(토큰 기준) 60B 단일 SFT, 신규 멤버(IF-Chat-v1·스크럽 Chat-v2·When2Call), 프리셋 2종, DiLoCo 2노드 A/B 프로토콜, 게이트 체인. **§1.1 = 57 멤버 실측 에폭·학습 토큰 비중**(`audit_blend_epochs.py`, 2026-09-21) |
 | [SFT_PHASE2_PLAN.md](SFT_PHASE2_PLAN.md) | 2026-09-01~09-13 ⛔ 폐기 | **SFT phase-2 계획** — phase-1 블렌드 결함 3건(opencode repr·identity 반복·chat 복원) 수정 스펙, 시작점·예산 옵션 비교, 게이트 G-P0~P7, 열린 결정 |
 
 ## study/ (실측·규명·스터디)
