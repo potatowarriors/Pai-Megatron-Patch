@@ -293,7 +293,7 @@ RL 단계(PivotRL·MOPD)의 rollout·verifier 가 형태로 갈린다. **code �
 | **reasoning** | 1턴·긴 사고·도구 없음·검증 가능 정답 | 27 | 28.37B (47.3%) | 27.24B (56.6%) | ↑ | 유지 |
 | **chat** | 대화·지시 준수·형식 준수, 사고 짧음 | 9 | 16.89B (28.1%) | 12.21B (25.4%) | ↑ | ↓ |
 | **agent** | 다중 턴 도구 루프 또는 도구 호출 판단 | 18 | 6.20B (10.3%) | 2.14B (4.4%) | ↓ | ↑↑ |
-| **shared** | `science_v2` — 양 블렌드 모두 포함 | 1 | 6.54B (10.9%) | 6.30B (13.1%) | 포함 | 포함 |
+| ~~shared~~ → **reasoning** | `science_v2` — 09-22 정정(§2.12): reasoning 으로 확정 | 1 | 6.54B (10.9%) | 6.30B (13.1%) | 포함 | reasoning 몫 |
 | **etc/long-context** | `finance_v1` | 1 | 1.73B (2.9%) | 0.08B (0.2%) | LC 유지용 | LC 유지용 |
 | **etc/identity** | `identity_v2_fanout` | 1 | 0.30B (0.5%) | 0.16B (0.3%) | 소량 | 소량 |
 
@@ -344,6 +344,58 @@ RL 단계(PivotRL·MOPD)의 rollout·verifier 가 형태로 갈린다. **code �
 128K 급 연습이 필요하면 문서 다중 결합 재구성이 선행돼야 한다.
 
 **다국어 21 종**은 별도 버킷이 아니라 reasoning 안의 태그다 — 전부 1턴 사고형 번역본이라 형태 기준에 맞는다(ko 우선).
+
+### 2.12 두 SFT base 블렌드 목표 — general = 현 런 ckpt, agentic = 추가 SFT (2026-09-22, 사용자 결정)
+
+**정정 (09-22).** §2.11 의 `science_v2` 는 shared 가 아니라 **reasoning** 으로 확정. agent 버킷은 도구 루프만이다.
+
+**전제 두 가지.**
+- "agent 약 6B" 는 현 런의 **소비량**(0.15~0.37 에폭)이지 보유량이 아니다. 버킷별 보유 풀(1 에폭):
+
+| 버킷 | bin-tok | 학습 tok | train% |
+|---|---|---|---|
+| agent/code (SWE·opencode·cuda·NTC swe/code) | 18.52B | 4.82B | 26% |
+| agent/terminal | 4.18B | 2.51B | 60% |
+| agent/tool-call | 5.51B | 1.82B | 33% |
+| agent/search | 0.34B | 0.05B | 15% |
+| agent/usab+safety | 0.14B | 0.12B | 86% |
+| **agent 합** | **28.69B** | **9.32B** | 32% |
+| reasoning (science_v2 포함) | 90.25B | 85.84B | 95% |
+| chat | 9.76B | 7.07B | 72% |
+| etc (finance + identity) | 9.76B | 0.46B | 5% |
+
+- **블렌드 목표는 gradient(학습 tok) 기준으로 정하고 bin 비중으로 역산한다.** train% 가 버킷마다 5~95% 라 같은 bin 비중이라도
+  학습 신호는 최대 20배 다르다. 예: bin A40/R30/C15/E5 는 gradient 로 agent 25 / reasoning 54 / chat 21 — "agentic" 이 아니다.
+  학습 tok 은 변환기가 chat template 로 렌더한 열 위에서 센 값이라 tool 시나리오의 이전 턴 think 보존(DSV4 7(a), NTC 는
+  `--keep-history-think` 강제)이 반영돼 있다.
+
+**general SFT base = 현 런(`sft_128k_final`) 최종 ckpt 그대로.** 현 런은 bin 기준 reasoning 58 / chat 28 / agent 10 / etc 3,
+gradient 기준 reasoning 70 / chat 25 / agent 4 / etc 1. STEM teacher 의 출발점(Ultra STEM teacher SFT 는 reasoning 92.5%)으로
+reasoning 우위가 맞고, agent 4% 는 도구 문법 노출로 MOPD warmup 을 대신한다. 제안됐던 R40/C40/A+E20 재실행은 기각 —
+chat 풀 9.76B 라 60B 에서 2.5 에폭, 현 런 1.7 에폭과 누적 4 에폭 초과(문체 암기 위험), reasoning 은 오히려 감소.
+**조건**: 최종 ckpt(iter 2,862) T1·T3·에이전틱 게이트 통과. chat·IF 가 iter600/1800 대비 퇴행이면 5~10B 낮은 LR chat/IF anneal 만 얹는다.
+
+**agentic SFT base = general ckpt 에서 추가 SFT, 40~60B.** 반복은 어느 예산에서도 없다(60B·A58 에서 agent 1.21 에폭).
+예산은 시간이 정한다: 60B = 단일 노드 ≈10.4일(314 s/iter) / DiLoCo 2노드 ≈5.4일, 40B = ≈7일 / ≈3.6일.
+
+| 버킷 | bin 비중 | 60B 학습 tok | gradient 비중 | 60B 에폭 |
+|---|---|---|---|---|
+| agent | **58%** | 11.3B | **37%** | 1.21 |
+| reasoning (science_v2 포함, 어려운 서브셋 우선) | 22% | 12.5B | 41% | 0.15 |
+| chat (망각 방지 replay) | 15% | 6.5B | 21% | 0.92 |
+| etc (identity 0.5 + finance ≤1.5 권고; 5% 유지 시 finance 는 그 안에서) | 5% | 0.14B | 0.5% | — |
+
+agent 58% 내부 배분(풀 비율 code 65 / tool-call 19 / terminal 15 / search 1.2 를 목표 벤치 SWE-bench·TB-2·τ³ 에 맞게 조정):
+
+| 하위 | 비중 | 60B 에폭 | 비고 |
+|---|---|---|---|
+| code | 45% | 0.85 | SWE·opencode·cuda·NTC swe/code |
+| terminal | 25% | 2.1 | |
+| tool-call | 25% | 1.6 | agentic_v2 tc/ia·kotool·when2call |
+| search | 5% | 5.1 | 풀 0.34B — 비율로 못 올린다. SDG 추가 생성 또는 RL 로 이관 결정 필요 |
+
+소형 셋(search·kotool·when2call·usab·identity)의 4~8 에폭은 생성기 `fixed` 멤버로 고정한다. 생성기는 §1.1 의 bin-tok 기준 정정을
+먼저 반영한다(`SFT_FINAL_PLAN.md` §1.1). 재개 중 가중치 변경 금지(`KNOWN_ISSUES` 09-01 ④)이므로 새 블렌드는 새 런이다.
 
 ## 3. RL 자산
 
