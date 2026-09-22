@@ -1,0 +1,84 @@
+# agentic SFT 블렌드 (general 최종 ckpt 이어서, A58/R22/C15/E5) — gen_sft_blend_v2.py 산출물, 수정 금지 (2026-09-22)
+# 예산 2862 iters × GBS 160 × 131072 = 60.02B bin-tok = 457,920 samples · 학습 tok 32.08B
+# 가중치 = 샘플(bin) 비율: samples = ep × bins × 0.99. 표기 ep = 학습 split 기준 실제 에폭 (audit_blend_epochs.py 와 동일 정의).
+# --targets agent=58,reasoning=22,chat=15,etc=5  --sub-targets 'agent:code=45,terminal=25,tool-call=25,search=5'
+#
+# bucket/sub               bin% bin-tok(B)  train(B)  grad% members     ep min~max
+# agent                   58.00      34.81     12.67  39.49      18  0.840~ 5.050
+#   agent/code            25.76      15.46      4.05  12.61       5  0.840~ 4.000
+#   agent/search           2.85       1.71      0.27   0.85       3  5.050~ 5.050
+#   agent/terminal        14.23       8.54      5.12  15.97       4  2.063~ 2.063
+#   agent/tool-call       14.39       8.63      2.84   8.85       4  1.576~ 3.000
+#   agent/(fixed)          1.08       0.65      0.45   1.41       5  2.000~ 4.000
+# reasoning               22.00      13.20     12.67  39.50      28  0.017~ 1.055
+#   reasoning/code         8.38       5.03      4.89  15.24       1  0.190~ 0.190
+#   reasoning/math         6.28       3.77      3.56  11.11       4  0.042~ 1.055
+#   reasoning/multilingual   2.71       1.63      1.56   4.88      21  0.017~ 0.422
+#   reasoning/science      4.64       2.78      2.66   8.28       2  0.169~ 0.422
+# chat                    15.00       9.00      6.46  20.14       9  0.890~ 8.000
+#   chat/(fixed)           0.27       0.16      0.09   0.28       1  8.000~ 8.000
+# etc                      5.00       3.00      0.28   0.88       2  0.279~18.000
+#   etc/(fixed)            0.52       0.31      0.16   0.48       1 18.000~18.000
+#
+# member                                         bucket     sub        base_ep      k     ep bin-tok(B)         w fill% train%   bins
+# swe_v3_tools_keepthink                         agent      code         1.000  0.840  0.840      8.436  0.140555  99.6   27.3  77416
+# agentic_v2_tc                                  agent      tool-call    1.000  1.576  1.576      6.087  0.101409  99.9   36.0  29762
+# opencode_tools                                 agent      code         1.000  0.840  0.840      5.845  0.097384  98.7   17.4  53638
+# cp_v2                                          reasoning  code         0.450  0.422  0.190      5.029  0.083786 100.0   97.2 204147
+# ntc_v1_math                                    agent      terminal     1.000  2.063  2.063      4.131  0.068829  99.9   66.8  15431
+# ntc_v1_syn_medium                              agent      terminal     1.000  2.063  2.063      3.168  0.052790  99.5   53.8  11835
+# finance_v1                                     etc        -            1.000  0.279  0.279      2.690  0.044824  97.2    4.8  74289
+# science_v2                                     reasoning  science      0.400  0.422  0.169      2.470  0.041158  99.9   96.4 112818
+# agentic_v2_ia                                  agent      tool-call    1.000  1.576  1.576      2.455  0.040902  99.3   26.0  12004
+# chat_v2_on_scrub                               chat       -            1.000  0.890  0.890      2.449  0.040797  99.7   76.2  21200
+# math_v4                                        reasoning  math         0.860  0.422  0.363      2.383  0.039710  99.9   97.4  50627
+# chat_v3_chat                                   chat       -            1.000  0.890  0.890      1.987  0.033098  99.8   59.1  17199
+# ifchat_v1_chat_if                              chat       -            1.000  0.890  0.890      1.613  0.026876  99.7   83.3  13966
+# chat_v2_off_scrub                              chat       -            1.000  0.890  0.890      1.215  0.020245  99.4   77.3  10520
+# ntc_v1_syn_easy                                agent      terminal     1.000  2.063  2.063      1.102  0.018359  99.7   54.6   4116
+# chat_v3_if_fanout_me                           chat       -            1.000  0.890  0.890      0.923  0.015386  99.6   65.7   7995
+# math_proofs_v2                                 reasoning  math         0.450  0.422  0.190      0.752  0.012533  98.8   94.7  30538
+# ntc_v1_swe                                     agent      code         1.000  0.840  0.840      0.690  0.011496  99.7   61.8   6332
+# search_ko_v1                                   agent      search       1.000  5.050  5.050      0.687  0.011453  99.7   15.3   1049
+# agentic_v2_search                              agent      search       1.000  5.050  5.050      0.680  0.011322  99.5   18.5   1037
+# math_proofs_v1_lean                            reasoning  math         0.100  0.422  0.042      0.442  0.007359  99.9   81.3  80682
+# budget_trunc_v1_if                             chat       -            2.500  0.890  2.225      0.431  0.007183  99.5   59.3   1493
+# ntc_v1_code                                    agent      code         1.000  0.840  0.840      0.404  0.006725  99.8   67.8   3704
+# research_ko_v1                                 agent      search       1.000  5.050  5.050      0.341  0.005688  90.3   14.3    521
+# science_v1                                     reasoning  science      1.000  0.422  0.422      0.313  0.005221  99.8   89.4   5724
+# identity_v2_fanout                             etc        -           18.000  1.000 18.000      0.311  0.005176  94.9   52.8    133
+# safety_v2                                      agent      -            3.000  1.000  3.000      0.305  0.005085  99.0   80.6    784
+# ml_ultra-v3_math_ja_translated_final           reasoning  multilingual   1.000  0.422  0.422      0.234  0.003893  99.9   98.7   4268
+# kochat_v3_think                                chat       -            1.000  0.890  0.890      0.197  0.003289  99.8   94.3   1709
+# budget_trunc_v1_math                           reasoning  math         2.500  0.422  1.055      0.189  0.003156  99.9   95.3   1384
+# ml_ultra-v3_code_pt_translated_final           reasoning  multilingual   1.000  0.422  0.422      0.183  0.003053  99.9   96.0   3347
+# ml_ultra-v3_code_ko_translated_final           reasoning  multilingual   1.000  0.422  0.422      0.177  0.002949  99.9   95.9   3233
+# ml_ultra-v3_code_ja_translated_final           reasoning  multilingual   1.000  0.422  0.422      0.177  0.002946  99.9   93.4   3230
+# ml_ultra-v3_math_ko_translated_final           reasoning  multilingual   1.000  0.422  0.422      0.174  0.002901  99.9   98.7   3181
+# ifchat_v1_structured                           chat       -            8.000  1.000  8.000      0.163  0.002715  99.4   55.4    157
+# usab_v1                                        agent      -            4.000  1.000  4.000      0.159  0.002655  99.3   89.1    307
+# ml_ultra-v3_math_pt_translated_final           reasoning  multilingual   1.000  0.422  0.422      0.145  0.002421  99.9   95.5   2655
+# ntc_v1_syn_mixed                               agent      terminal     1.000  2.063  2.063      0.140  0.002333  99.7   52.7    523
+# ml_ultra-v3_stem_pt_translated_postedit_final  reasoning  multilingual   1.000  0.422  0.422      0.117  0.001955  99.8   90.7   2144
+# cuda_v1                                        agent      code         4.000  1.000  4.000      0.088  0.001470  99.4   56.5    170
+# when2call_v1_x2                                agent      tool-call    3.000  1.000  3.000      0.051  0.000850  98.2    4.9    131
+# ml_super-v3_math_it_translated_final           reasoning  multilingual   0.040  0.422  0.017      0.042  0.000707  99.9   99.3  19381
+# kotool_v1_x2                                   agent      tool-call    2.000  1.000  2.000      0.042  0.000696  99.1   39.2    161
+# ml_super-v3_math_de_translated_final           reasoning  multilingual   0.040  0.422  0.017      0.042  0.000692  99.9   99.3  18966
+# ml_super-v3_math_fr_translated_final           reasoning  multilingual   0.040  0.422  0.017      0.037  0.000617  99.9   99.3  16912
+# ml_super-v3_code_zh_translated_final           reasoning  multilingual   0.040  0.422  0.017      0.033  0.000558  99.9   97.1  15287
+# ml_super-v3_math_es_translated_final           reasoning  multilingual   0.040  0.422  0.017      0.033  0.000546  99.9   99.3  14974
+# ml_super-v3_code_it_translated_final           reasoning  multilingual   0.040  0.422  0.017      0.031  0.000523  99.9   96.8  14348
+# ml_super-v3_math_ja_translated_final           reasoning  multilingual   0.040  0.422  0.017      0.031  0.000522  99.9   99.3  14317
+# ml_super-v3_code_fr_translated_final           reasoning  multilingual   0.040  0.422  0.017      0.030  0.000502  99.9   96.8  13749
+# ml_super-v3_code_de_translated_final           reasoning  multilingual   0.040  0.422  0.017      0.029  0.000491  99.9   96.7  13453
+# ml_super-v3_code_es_translated_final           reasoning  multilingual   0.040  0.422  0.017      0.029  0.000484  99.9   96.9  13254
+# ml_super-v3_math_zh_translated_final           reasoning  multilingual   0.040  0.422  0.017      0.028  0.000469  99.9   99.4  12867
+# ml_super-v3_code_ja_translated_final           reasoning  multilingual   0.040  0.422  0.017      0.028  0.000459  99.9   96.7  12584
+# kochat_v3_nothink                              chat       -            1.000  0.890  0.890      0.025  0.000412  99.2   81.0    214
+# ml_ultra-v3_stem_ko_translated_postedit_final  reasoning  multilingual   1.000  0.422  0.422      0.017  0.000282  99.7   87.4    309
+# ml_ultra-v3_stem_ja_translated_postedit_final  reasoning  multilingual   1.000  0.422  0.422      0.006  0.000108  98.9   85.6    118
+data-path: "0.140555 /home/work/Datasets/LL_preprocessed/v5/sft_packed_128k_final_pad16/swe_v3_tools_keepthink/data_text_document 0.101409 /home/work/Datasets/LL_preprocessed/v5/sft_packed_128k_final_pad16/agentic_v2_tc/data_text_document 0.097384 /home/work/Datasets/LL_preprocessed/v5/sft_packed_128k_final_pad16/opencode_tools/data_text_document 0.083786 /home/work/Datasets/LL_preprocessed/v5/sft_packed_128k_final_pad16/cp_v2/data_text_document 0.068829 /home/work/Datasets/LL_preprocessed/v5/sft_packed_128k_final_pad16/ntc_v1_math/data_text_document 0.052790 /home/work/Datasets/LL_preprocessed/v5/sft_packed_128k_final_pad16/ntc_v1_syn_medium/data_text_document 0.044824 /home/work/Datasets/LL_preprocessed/v5/sft_packed_128k_final_pad16/finance_v1/data_text_document 0.041158 /home/work/Datasets/LL_preprocessed/v5/sft_packed_128k_final_pad16/science_v2/data_text_document 0.040902 /home/work/Datasets/LL_preprocessed/v5/sft_packed_128k_final_pad16/agentic_v2_ia/data_text_document 0.040797 /home/work/Datasets/LL_preprocessed/v5/sft_packed_128k_final_pad16/chat_v2_on_scrub/data_text_document 0.039710 /home/work/Datasets/LL_preprocessed/v5/sft_packed_128k_final_pad16/math_v4/data_text_document 0.033098 /home/work/Datasets/LL_preprocessed/v5/sft_packed_128k_final_pad16/chat_v3_chat/data_text_document 0.026876 /home/work/Datasets/LL_preprocessed/v5/sft_packed_128k_final_pad16/ifchat_v1_chat_if/data_text_document 0.020245 /home/work/Datasets/LL_preprocessed/v5/sft_packed_128k_final_pad16/chat_v2_off_scrub/data_text_document 0.018359 /home/work/Datasets/LL_preprocessed/v5/sft_packed_128k_final_pad16/ntc_v1_syn_easy/data_text_document 0.015386 /home/work/Datasets/LL_preprocessed/v5/sft_packed_128k_final_pad16/chat_v3_if_fanout_me/data_text_document 0.012533 /home/work/Datasets/LL_preprocessed/v5/sft_packed_128k_final_pad16/math_proofs_v2/data_text_document 0.011496 /home/work/Datasets/LL_preprocessed/v5/sft_packed_128k_final_pad16/ntc_v1_swe/data_text_document 0.011453 /home/work/Datasets/LL_preprocessed/v5/sft_packed_128k_final_pad16/search_ko_v1/data_text_document 0.011322 /home/work/Datasets/LL_preprocessed/v5/sft_packed_128k_final_pad16/agentic_v2_search/data_text_document 0.007359 /home/work/Datasets/LL_preprocessed/v5/sft_packed_128k_final_pad16/math_proofs_v1_lean/data_text_document 0.007183 /home/work/Datasets/LL_preprocessed/v5/sft_packed_128k_final_pad16/budget_trunc_v1_if/data_text_document 0.006725 /home/work/Datasets/LL_preprocessed/v5/sft_packed_128k_final_pad16/ntc_v1_code/data_text_document 0.005688 /home/work/Datasets/LL_preprocessed/v5/sft_packed_128k_final_pad16/research_ko_v1/data_text_document 0.005221 /home/work/Datasets/LL_preprocessed/v5/sft_packed_128k_final_pad16/science_v1/data_text_document 0.005176 /home/work/Datasets/LL_preprocessed/v5/sft_packed_128k_final_pad16/identity_v2_fanout/data_text_document 0.005085 /home/work/Datasets/LL_preprocessed/v5/sft_packed_128k_final_pad16/safety_v2/data_text_document 0.003893 /home/work/Datasets/LL_preprocessed/v5/sft_packed_128k_final_pad16/ml_ultra-v3_math_ja_translated_final/data_text_document 0.003289 /home/work/Datasets/LL_preprocessed/v5/sft_packed_128k_final_pad16/kochat_v3_think/data_text_document 0.003156 /home/work/Datasets/LL_preprocessed/v5/sft_packed_128k_final_pad16/budget_trunc_v1_math/data_text_document 0.003053 /home/work/Datasets/LL_preprocessed/v5/sft_packed_128k_final_pad16/ml_ultra-v3_code_pt_translated_final/data_text_document 0.002949 /home/work/Datasets/LL_preprocessed/v5/sft_packed_128k_final_pad16/ml_ultra-v3_code_ko_translated_final/data_text_document 0.002946 /home/work/Datasets/LL_preprocessed/v5/sft_packed_128k_final_pad16/ml_ultra-v3_code_ja_translated_final/data_text_document 0.002901 /home/work/Datasets/LL_preprocessed/v5/sft_packed_128k_final_pad16/ml_ultra-v3_math_ko_translated_final/data_text_document 0.002715 /home/work/Datasets/LL_preprocessed/v5/sft_packed_128k_final_pad16/ifchat_v1_structured/data_text_document 0.002655 /home/work/Datasets/LL_preprocessed/v5/sft_packed_128k_final_pad16/usab_v1/data_text_document 0.002421 /home/work/Datasets/LL_preprocessed/v5/sft_packed_128k_final_pad16/ml_ultra-v3_math_pt_translated_final/data_text_document 0.002333 /home/work/Datasets/LL_preprocessed/v5/sft_packed_128k_final_pad16/ntc_v1_syn_mixed/data_text_document 0.001955 /home/work/Datasets/LL_preprocessed/v5/sft_packed_128k_final_pad16/ml_ultra-v3_stem_pt_translated_postedit_final/data_text_document 0.001470 /home/work/Datasets/LL_preprocessed/v5/sft_packed_128k_final_pad16/cuda_v1/data_text_document 0.000850 /home/work/Datasets/LL_preprocessed/v5/sft_packed_128k_final_pad16/when2call_v1_x2/data_text_document 0.000707 /home/work/Datasets/LL_preprocessed/v5/sft_packed_128k_final_pad16/ml_super-v3_math_it_translated_final/data_text_document 0.000696 /home/work/Datasets/LL_preprocessed/v5/sft_packed_128k_final_pad16/kotool_v1_x2/data_text_document 0.000692 /home/work/Datasets/LL_preprocessed/v5/sft_packed_128k_final_pad16/ml_super-v3_math_de_translated_final/data_text_document 0.000617 /home/work/Datasets/LL_preprocessed/v5/sft_packed_128k_final_pad16/ml_super-v3_math_fr_translated_final/data_text_document 0.000558 /home/work/Datasets/LL_preprocessed/v5/sft_packed_128k_final_pad16/ml_super-v3_code_zh_translated_final/data_text_document 0.000546 /home/work/Datasets/LL_preprocessed/v5/sft_packed_128k_final_pad16/ml_super-v3_math_es_translated_final/data_text_document 0.000523 /home/work/Datasets/LL_preprocessed/v5/sft_packed_128k_final_pad16/ml_super-v3_code_it_translated_final/data_text_document 0.000522 /home/work/Datasets/LL_preprocessed/v5/sft_packed_128k_final_pad16/ml_super-v3_math_ja_translated_final/data_text_document 0.000502 /home/work/Datasets/LL_preprocessed/v5/sft_packed_128k_final_pad16/ml_super-v3_code_fr_translated_final/data_text_document 0.000491 /home/work/Datasets/LL_preprocessed/v5/sft_packed_128k_final_pad16/ml_super-v3_code_de_translated_final/data_text_document 0.000484 /home/work/Datasets/LL_preprocessed/v5/sft_packed_128k_final_pad16/ml_super-v3_code_es_translated_final/data_text_document 0.000469 /home/work/Datasets/LL_preprocessed/v5/sft_packed_128k_final_pad16/ml_super-v3_math_zh_translated_final/data_text_document 0.000459 /home/work/Datasets/LL_preprocessed/v5/sft_packed_128k_final_pad16/ml_super-v3_code_ja_translated_final/data_text_document 0.000412 /home/work/Datasets/LL_preprocessed/v5/sft_packed_128k_final_pad16/kochat_v3_nothink/data_text_document 0.000282 /home/work/Datasets/LL_preprocessed/v5/sft_packed_128k_final_pad16/ml_ultra-v3_stem_ko_translated_postedit_final/data_text_document 0.000108 /home/work/Datasets/LL_preprocessed/v5/sft_packed_128k_final_pad16/ml_ultra-v3_stem_ja_translated_postedit_final/data_text_document"
+split: "99,1,0"
+dataset: MMAP
+num-workers: 8

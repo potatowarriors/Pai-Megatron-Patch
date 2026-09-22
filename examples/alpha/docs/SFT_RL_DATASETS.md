@@ -377,6 +377,8 @@ chat 풀 9.76B 라 60B 에서 2.5 에폭, 현 런 1.7 에폭과 누적 4 에폭 
 
 **agentic SFT base = general ckpt 에서 추가 SFT, 40~60B.** 반복은 어느 예산에서도 없다(60B·A58 에서 agent 1.21 에폭).
 예산은 시간이 정한다: 60B = 단일 노드 ≈10.4일(314 s/iter) / DiLoCo 2노드 ≈5.4일, 40B = ≈7일 / ≈3.6일.
+**사용자 결정 09-22: 1차 예산 60B.** 이어서 하는 학습이라 짧은 warmup 뒤 **constant LR** 만 유지하므로(cosine 아님), 60B 로 계획하고
+40B 에서 중단해도 스케줄 왜곡이 없다. 중단 시점 ckpt 를 그대로 base 로 쓰되, 짧은 decay 를 얹을지는 그때 게이트로 판단.
 
 | 버킷 | bin 비중 | 60B 학습 tok | gradient 비중 | 60B 에폭 |
 |---|---|---|---|---|
@@ -392,10 +394,22 @@ agent 58% 내부 배분(풀 비율 code 65 / tool-call 19 / terminal 15 / search
 | code | 45% | 0.85 | SWE·opencode·cuda·NTC swe/code |
 | terminal | 25% | 2.1 | |
 | tool-call | 25% | 1.6 | agentic_v2 tc/ia·kotool·when2call |
-| search | 5% | 5.1 | 풀 0.34B — 비율로 못 올린다. SDG 추가 생성 또는 RL 로 이관 결정 필요 |
+| search | 5% | 5.1 | 풀 0.34B. **사용자 결정 09-22: 5%·5 에폭 그대로 간다**(SDG 추가 생성 없음) |
 
 소형 셋(search·kotool·when2call·usab·identity)의 4~8 에폭은 생성기 `fixed` 멤버로 고정한다. 생성기는 §1.1 의 bin-tok 기준 정정을
 먼저 반영한다(`SFT_FINAL_PLAN.md` §1.1). 재개 중 가중치 변경 금지(`KNOWN_ISSUES` 09-01 ④)이므로 새 블렌드는 새 런이다.
+
+**산출물 (2026-09-22, 커밋).**
+
+| 파일 | 내용 |
+|---|---|
+| `toolkits/sft_data_preprocessing/gen_sft_blend_v2.py` | 생성기 v2 — bin-tok 기준(samples = ep × bins × 0.99), 2단 목표(`--targets`, `--sub-targets`), fixed 멤버. 구 생성기의 fill 편차 정정 |
+| `toolkits/sft_data_preprocessing/sft_128k_agentic_spec.tsv` | 57 멤버 bucket/sub/base_ep/fixed. cuda 4·usab 4·safety 3·kotool 2(≡4)·when2call 3(≡6)·structured 8·identity 18 고정 |
+| `examples/alpha/configs/data/sft_128k_agentic_blend.yaml` | 생성 결과. bin agent 58 / reasoning 22 / chat 15 / etc 5 → **gradient 39.5 / 39.5 / 20.1 / 0.9**, 학습 tok 32.08B. 검증: `audit_blend_epochs.py` 와 57 멤버 ep 최대 차 0.001 |
+| `examples/alpha/configs/training/sft_128k_agentic.yaml` | `sft_128k_final.yaml` 전체 복제 + diff 6키: warmup 50 iters, **constant LR**, load = general 최종 ckpt, finetune + no-load-optim. **⚠ lr 1.0e-5 는 자리표시자** — 사용자 결정 필요 |
+
+하위별 gradient 비중(agent 58% 안): code 12.6 / terminal 16.0 / tool-call 8.9 / search 0.9 / 고정(usab·safety·cuda) 1.4 — sub 목표는 bin 기준이라
+train% 낮은 SWE·opencode(17~27%)가 gradient 에서는 terminal 보다 작다. 이 배분을 gradient 로 다시 맞출지는 열린 결정.
 
 ## 3. RL 자산
 

@@ -1,0 +1,68 @@
+# agentic SFT 블렌드 스펙 (2026-09-22, 사용자 결정 — docs/SFT_RL_DATASETS.md §2.11·§2.12). general 최종 ckpt 에서 이어서 학습, 60B(40B 중단 허용).
+# 열: member  bucket  sub  base_ep  fixed. 목표는 gen_sft_blend_v2.py 인자: --targets agent=58,reasoning=22,chat=15,etc=5  --sub-targets agent:code=45,terminal=25,tool-call=25,search=5
+# fixed=1 은 소형 셋 에폭 고정(버킷 목표에서 먼저 차감). *_x2 는 행 2벌이라 고유 에폭 = 표기 × 2.
+# --- agent / code (SWE·opencode·cuda·NTC swe/code) — sub 안에서는 base_ep 1 = 풀 비례
+swe_v3_tools_keepthink	agent	code	1	0
+opencode_tools	agent	code	1	0
+ntc_v1_swe	agent	code	1	0
+ntc_v1_code	agent	code	1	0
+cuda_v1	agent	code	4	1
+# --- agent / terminal (NTC Terminus-2)
+ntc_v1_math	agent	terminal	1	0
+ntc_v1_syn_easy	agent	terminal	1	0
+ntc_v1_syn_medium	agent	terminal	1	0
+ntc_v1_syn_mixed	agent	terminal	1	0
+# --- agent / tool-call (API 호출·대화형 에이전트·미호출 판단). kotool 2 ≡ 4ep 고유, when2call 3 ≡ 6ep 고유
+agentic_v2_tc	agent	tool-call	1	0
+agentic_v2_ia	agent	tool-call	1	0
+kotool_v1_x2	agent	tool-call	2	1
+when2call_v1_x2	agent	tool-call	3	1
+# --- agent / search (풀 0.34B — 5%·≈5ep 유지, 사용자 09-22)
+agentic_v2_search	agent	search	1	0
+search_ko_v1	agent	search	1	0
+research_ko_v1	agent	search	1	0
+# --- agent / usability·safety (사용자 09-22: agent 소속) — 고정 에폭
+usab_v1	agent	-	4	1
+safety_v2	agent	-	3	1
+# --- reasoning (science_v2 포함, 09-22 정정). base_ep 는 현 런 스펙의 상대 비율 유지
+cp_v2	reasoning	code	0.45	0
+math_v4	reasoning	math	0.86	0
+math_proofs_v2	reasoning	math	0.45	0
+math_proofs_v1_lean	reasoning	math	0.10	0
+science_v2	reasoning	science	0.40	0
+science_v1	reasoning	science	1	0
+budget_trunc_v1_math	reasoning	math	2.5	0
+ml_ultra-v3_code_ja_translated_final	reasoning	multilingual	1	0
+ml_ultra-v3_code_ko_translated_final	reasoning	multilingual	1	0
+ml_ultra-v3_code_pt_translated_final	reasoning	multilingual	1	0
+ml_ultra-v3_math_ja_translated_final	reasoning	multilingual	1	0
+ml_ultra-v3_math_ko_translated_final	reasoning	multilingual	1	0
+ml_ultra-v3_math_pt_translated_final	reasoning	multilingual	1	0
+ml_ultra-v3_stem_ja_translated_postedit_final	reasoning	multilingual	1	0
+ml_ultra-v3_stem_ko_translated_postedit_final	reasoning	multilingual	1	0
+ml_ultra-v3_stem_pt_translated_postedit_final	reasoning	multilingual	1	0
+ml_super-v3_code_de_translated_final	reasoning	multilingual	0.04	0
+ml_super-v3_code_es_translated_final	reasoning	multilingual	0.04	0
+ml_super-v3_code_fr_translated_final	reasoning	multilingual	0.04	0
+ml_super-v3_code_it_translated_final	reasoning	multilingual	0.04	0
+ml_super-v3_code_ja_translated_final	reasoning	multilingual	0.04	0
+ml_super-v3_code_zh_translated_final	reasoning	multilingual	0.04	0
+ml_super-v3_math_de_translated_final	reasoning	multilingual	0.04	0
+ml_super-v3_math_es_translated_final	reasoning	multilingual	0.04	0
+ml_super-v3_math_fr_translated_final	reasoning	multilingual	0.04	0
+ml_super-v3_math_it_translated_final	reasoning	multilingual	0.04	0
+ml_super-v3_math_ja_translated_final	reasoning	multilingual	0.04	0
+ml_super-v3_math_zh_translated_final	reasoning	multilingual	0.04	0
+# --- chat (망각 방지 replay). 구조화 8ep 고정은 유지
+ifchat_v1_structured	chat	-	8	1
+ifchat_v1_chat_if	chat	-	1	0
+chat_v3_chat	chat	-	1	0
+chat_v3_if_fanout_me	chat	-	1	0
+chat_v2_on_scrub	chat	-	1	0
+chat_v2_off_scrub	chat	-	1	0
+kochat_v3_think	chat	-	1	0
+kochat_v3_nothink	chat	-	1	0
+budget_trunc_v1_if	chat	-	2.5	0
+# --- etc: identity 고정 18ep(≈0.5%), 잔여는 finance(long-context 유지)
+identity_v2_fanout	etc	-	18	1
+finance_v1	etc	-	1	0

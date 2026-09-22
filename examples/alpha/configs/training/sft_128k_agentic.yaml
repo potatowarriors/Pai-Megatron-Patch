@@ -1,0 +1,111 @@
+# agentic SFT — general 최종 ckpt(sft_128k_final iter 2,862)에서 이어서, A58/R22/C15/E5 (2026-09-22 사용자 결정)
+#
+#   bash train.sh baseline_48L sft_128k_agentic sft_128k_agentic_blend        # 단일 노드
+#
+# 설계: docs/SFT_RL_DATASETS.md §2.11(분류)·§2.12(비율·근거). 데이터: configs/data/sft_128k_agentic_blend.yaml —
+#   bin 비중 agent 58(code 45/terminal 25/tool-call 25/search 5) · reasoning 22 · chat 15 · etc 5 → gradient agent 39.5 / reasoning 39.5 /
+#   chat 20.1 / etc 0.9. 57 멤버, 생성기 toolkits/sft_data_preprocessing/gen_sft_blend_v2.py(bin-tok 기준, SFT_FINAL_PLAN §1.1 정정 반영).
+# 예산: 60.02B = 457,920 samples = 2,862 iters @ GBS 160 (agent 1.21 에폭). **constant LR 이라 40B(≈1,900 iters)에서 중단 가능**(사용자 09-22).
+# LR: 짧은 warmup(50 iters) 뒤 constant. ⚠ lr 값은 미확정 — 현 런 종료 LR 1.5e-6 과 peak 2.5e-5 사이, 아래 1.0e-5 는 자리표시자(사용자 결정 필요).
+# 시작점: general 최종 ckpt(load: 아래, 현 런 완주 후 iter_0002862 존재 확인). dataset 변경이므로 finetune + no-load-optim(스케줄러·Muon 리셋,
+#   consumed_samples 0). 이 프리셋은 sft_128k_final.yaml 전체 복제 후 diff (09-09 교훈: 차이 키만 담은 프리셋 금지).
+# diff 대비 sft_128k_final.yaml: 헤더 · train-samples 주석 · lr-warmup-samples 8000 · lr 1.0e-5 · min-lr 1.0e-5 · lr-decay-style constant · load 경로.
+train-mode: finetune
+
+# ── 예산 / LR ─────────────────────────────────────────────────────────────
+train-samples: 457920             # 2,862 iters @ GBS 160 (60.02B; sft_128k_agentic_blend.yaml). 40B 중단 = iter ≈1,900
+lr-warmup-samples: 8000           # 50 iters — 이어서 하는 학습, 짧은 warmup 뒤 constant
+lr-decay-samples: 457920
+lr: 1.0e-5                        # ⚠ 미확정 자리표시자 (헤더 참조)
+min-lr: 1.0e-5                    # constant: lr 와 동일
+lr-decay-style: constant
+
+# ── 병렬화 (128K = CP8 강제; offload 로 GO — MUON_OFFLOAD_BACKPORT S5) ────
+tensor-model-parallel-size: 1
+pipeline-model-parallel-size: 1
+expert-model-parallel-size: 8
+expert-tensor-parallel-size: 1
+context-parallel-size: 8
+
+chunked-optimizer-state-offload: true
+optimizer-state-offload-chunk-size-mb: 256
+
+# ── 배치 / 시퀀스 (THD는 MBS 1 필수 — helper assert) ──────────────────────
+seq-length: 131072
+micro-batch-size: 1
+# GBS 160 = 20.97M tok/iter (사용자, 2026-08-28: Ultra SFT 18.9M 스케일).
+# 실측(2-iter 스모크): 329.7s/iter = 63.6k tok/s, 263 TFLOP/s — GBS 96(62.9k) 대비
+# +1% 로 처리량은 사실상 동일(iter 고정비 ~6s). 근거는 최적화 설계: Ultra 배치
+# 동일 스케일·스텝 2,448(Ultra 3,200 동급)·LR 비율 이식 무보정. 메모리 불변(MBS 1).
+global-batch-size: 160
+
+# ── THD 문서 격리 플래그셋 (SFT 경로: 음수 마커 기반 리셋, EOD 무관) ──────
+reset-position-ids: true
+no-create-attention-mask-in-dataloader: true
+reset-attention-mask: false
+eod-mask-loss: false
+
+# ── 리컴퓨트 ──────────────────────────────────────────────────────────────
+recompute-granularity: selective
+recompute-modules: "layernorm moe"
+
+# ── MoE 라우팅 (DSV3-strict, 전 스테이지 동일) ────────────────────────────
+moe-router-load-balancing-type: seq_aux_loss
+moe-router-score-function: sigmoid
+moe-router-enable-expert-bias: true
+moe-router-bias-update-rate: 0.001
+moe-token-dispatcher-type: alltoall
+
+# ── Optimizer (전 스테이지 연속성: Muon 유지) ─────────────────────────────
+optimizer: dist_muon
+weight-decay: 0.1
+adam-beta1: 0.9
+adam-beta2: 0.95
+muon-momentum: 0.95
+muon-use-nesterov: true
+muon-num-ns-steps: 5
+muon-scale-mode: spectral
+muon-fp32-matmul-prec: medium
+muon-tp-mode: blockwise
+muon-extra-scale-factor: 0.2
+init-method-std: 0.008
+
+clip-grad: 8.0                    # ×cp 산식 (lc_a.yaml 실측), CP8
+
+# ── LayerNorm WD ──────────────────────────────────────────────────────────
+no-weight-decay-cond-type: apply_wd_to_qk_layernorm
+
+# ── Precision ─────────────────────────────────────────────────────────────
+bf16: true
+
+# ── 체크포인트 / 평가 (2,862 iters 규모) ──────────────────────────────────
+save-interval: 100                # 2.1B tok (~9h) 간격 — 프로브·게이트 체인 단위 (사용자, 09-13)
+# optimizer state 저장 기본 (63c466f) — 무봉합 재개
+ckpt-format: torch_dist
+eval-iters: 4
+eval-interval: 100
+# 58 멤버 valid 분할의 Σceil 부풀림 대비 버퍼 (KNOWN_ISSUES 09-09 IndexError)
+mid-level-dataset-surplus: 0.05
+
+# ── 로깅 / 런타임 ─────────────────────────────────────────────────────────
+log-interval: 1
+log-timers-to-tensorboard: true
+log-memory-to-tensorboard: true
+log-validation-ppl-to-tensorboard: true
+log-throughput: true
+tensorboard-queue-size: 1
+# 26종 128k 콜드 캐시 빌드 실측 25분 (64k 는 80분+) — 콜드 재빌드 대비 여유
+distributed-timeout-minutes: 180
+manual-gc: true
+manual-gc-interval: 5
+overlap-grad-reduce: true
+attention-backend: auto
+cross-entropy-loss-fusion: true
+cross-entropy-fusion-impl: te
+wandb-project: alpha-posttraining
+
+# ── Stage 전환 (dataset 변경 → finetune: true, 카운터 리셋) ────────────────
+# LC-B 최종 ckpt iter 320 (STATUS.md 정본). --finetune 은 optimizer state 미로드.
+load: /home/work/vidsearch/repos/project_s/Pai-Megatron-Patch/examples/alpha/outputs/alpha_baseline_48L_sft_128k_final_resume_20260918_125936/checkpoints   # general 최종(iter 2862) — 완주 후 확인
+finetune: true
+no-load-optim: true
