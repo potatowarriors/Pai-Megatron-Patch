@@ -276,6 +276,75 @@ is_task_complete`)인데 학습 데이터는 Terminus-2 스키마다. 스키마�
 Chat-v2 on 히스토리 think 학습·identity fan-out 누락·agentless user 프롬프트 특수토큰)과 도구 영역 무사고 타깃 비중(p1 ≈35% → p2 43.6% →
 p3 22.9%)은 그 항목에, 교정 멤버 4종은 `convert_sft_128k_terminal_fix.sh`. 스캔 스크립트·산출물: `/home/work/vidsearch/tools/sft_consistency/`.
 
+### 2.11 SFT 멤버 개념 분류 — general / agentic 두 SFT base 를 위한 버킷 (2026-09-22, 사용자 결정)
+
+**목적.** SFT 뒤 MOPD 는 Ultra 와 같이 **두 SFT base** 에서 출발한다 — general(STEM·Chat·IF teacher 의 base, reasoning·chat 비중 ↑)
+과 agentic(agent·coding·reasoning 비중 ↑). 현 57 멤버(`SFT_FINAL_PLAN.md` §1.1)를 두 블렌드에 배분하기 위한 **개념 분류**이며
+디렉토리·파일은 옮기지 않는다. 최종 블렌드 비율은 이 절이 아니라 각 블렌드 계획 문서에서 정한다.
+
+**분류 축 = 상호작용 형태.** 도메인(code/math/…)이 아니라 형태로 자른다 — reasoning 은 단일 턴 사고, agent 는 다중 턴 도구 루프라
+RL 단계(PivotRL·MOPD)의 rollout·verifier 가 형태로 갈린다. **code 는 독립 버킷이 아니다**: 경쟁 프로그래밍(1턴 사고)은 reasoning,
+저장소·터미널 조작(도구 루프)은 agent. Ultra Figure 10 도 Coding Teacher 는 STEM 계보, SWE Teacher 는 agentic 계보에 둔다.
+도메인은 태그로 남겨 두 블렌드에서 code 비중을 따로 조절한다.
+근거 측정(2026-09-21): 원천 파일 57 종 × 300 행 — assistant 턴 수·think 비율·도구 선언/호출.
+
+| 버킷 | 기준 | 멤버 수 | bin-tok(현 런) | 학습 tok | general SFT | agentic SFT |
+|---|---|---|---|---|---|---|
+| **reasoning** | 1턴·긴 사고·도구 없음·검증 가능 정답 | 27 | 28.37B (47.3%) | 27.24B (56.6%) | ↑ | 유지 |
+| **chat** | 대화·지시 준수·형식 준수, 사고 짧음 | 9 | 16.89B (28.1%) | 12.21B (25.4%) | ↑ | ↓ |
+| **agent** | 다중 턴 도구 루프 또는 도구 호출 판단 | 18 | 6.20B (10.3%) | 2.14B (4.4%) | ↓ | ↑↑ |
+| **shared** | `science_v2` — 양 블렌드 모두 포함 | 1 | 6.54B (10.9%) | 6.30B (13.1%) | 포함 | 포함 |
+| **etc/long-context** | `finance_v1` | 1 | 1.73B (2.9%) | 0.08B (0.2%) | LC 유지용 | LC 유지용 |
+| **etc/identity** | `identity_v2_fanout` | 1 | 0.30B (0.5%) | 0.16B (0.3%) | 소량 | 소량 |
+
+**reasoning (27)**
+
+| 도메인 태그 | 멤버 | bin-tok | 형태 근거 |
+|---|---|---|---|
+| code | `cp_v2` | 13.07B | 1턴, think 100%, 도구 0 |
+| code·다국어 | `ml_ultra-v3_code_{ja,ko,pt}` `ml_super-v3_code_{de,es,fr,it,ja,zh}` | 1.88B | 1턴 번역본 |
+| math | `math_v4` `math_proofs_v2` `math_proofs_v1_lean` `budget_trunc_v1_math` | 10.22B | 1턴, think 71~100% |
+| math·다국어 | `ml_ultra-v3_math_{ja,ko,pt}` `ml_super-v3_math_{de,es,fr,it,ja,zh}` | 2.01B | 1턴 번역본 |
+| science | `science_v1` | 0.83B | 1턴 MCQ/RQA |
+| stem·다국어 | `ml_ultra-v3_stem_{ja,ko,pt}` | 0.37B | 1턴 번역본 |
+
+**chat (9)**
+
+| 하위 | 멤버 | bin-tok |
+|---|---|---|
+| 일반 대화 | `chat_v3_chat` `chat_v2_on_scrub` `chat_v2_off_scrub` `kochat_v3_think` `kochat_v3_nothink` | 11.22B |
+| 지시 준수 | `chat_v3_if_fanout_me` `ifchat_v1_chat_if`(capability_target chat 80%·IF 20%) `budget_trunc_v1_if` | 5.46B |
+| 구조화 출력 | `ifchat_v1_structured` | 0.16B |
+
+**agent (18)**
+
+| 하위 | 멤버 | bin-tok | 형태 근거 |
+|---|---|---|---|
+| code(저장소·터미널 조작) | `swe_v3_tools_keepthink` `opencode_tools` `cuda_v1` `ntc_v1_swe` `ntc_v1_code` | 3.64B | `cuda_v1` 은 이름과 달리 OpenCode 에이전트 궤적(bash·glob·read·write, assistant p50 14턴·max 108) |
+| terminal | `ntc_v1_math` `ntc_v1_syn_easy` `ntc_v1_syn_medium` `ntc_v1_syn_mixed` | 0.62B | Terminus-2 다중 턴 |
+| search | `agentic_v2_search` `search_ko_v1` `research_ko_v1` | 0.25B | p50 4~12턴 검색 루프 |
+| tool-call | `agentic_v2_tc` `agentic_v2_ia` `kotool_v1_x2` `when2call_v1_x2` | 1.24B | API 호출·대화형 에이전트·미호출 판단 |
+| usability·safety | `usab_v1` `safety_v2` | 0.45B | 사용자 결정 09-22. Ultra Figure 10 도 Usability·Agentic Safety Teacher 를 agentic 계보에 둔다 |
+
+**shared — `science_v2`** (rqa/so/syn_mcq 3 split). 내용은 과학 QA 이지만 행의 80~96% 가 `evaluate_code`(선택지 채점) 도구를
+1회 호출하는 `<tool_call>` → tool 응답 → 최종 답 사이클이다. reasoning 에는 내용을, agent 에는 도구 문법과 tool 응답 뒤 재개를
+가르치므로 양쪽에 넣는다(사용자 결정 09-22, agent 규모 보강 겸). 단 agent 계열에 합치면 학습 tok 8.44B 중 75% 가 이 셋이라
+**agentic 블렌드의 실제 도구 루프 비중은 science_v2 를 제외하고 따로 관리**한다. 재료는 §1.1 미사용 에이전틱 22.5B.
+
+**etc/long-context — `finance_v1`** (SEC 10-K/10-Q 템플릿 SDG, 326,698행). alpha tokenizer 1,500행 표본(2026-09-22):
+
+| | mean | p10 | p50 | p90 | p99 | max |
+|---|---|---|---|---|---|---|
+| 전체 | 27,736 | 17,258 | 30,396 | 30,642 | 30,995 | 31,530 |
+| user(문서+질문) | 27,507 | 17,129 | 30,213 | 30,317 | 30,391 | 30,651 |
+| assistant | 229 | 96 | 195 | 400 | 720 | 1,254 |
+
+≤8K 1.9% · ≤16K 9.3% · ≤32K 100%. 길이가 **30K 상한에 몰린 분포**(생성 시 문서를 ~30K 에서 절단)라 128K 창의 1/4 만
+커버하고, 답이 ~200 tok 이라 train% 4.8. long-context 유지용 소량 외의 용도(reasoning 뼈대)로는 쓰지 않는다(사용자 결정 09-22).
+128K 급 연습이 필요하면 문서 다중 결합 재구성이 선행돼야 한다.
+
+**다국어 21 종**은 별도 버킷이 아니라 reasoning 안의 태그다 — 전부 1턴 사고형 번역본이라 형태 기준에 맞는다(ko 우선).
+
 ## 3. RL 자산
 
 ### 3.1 훈련 블렌드 3종 (즉시 실행 가능한 레시피 — NeMo Gym 소비 포맷)
