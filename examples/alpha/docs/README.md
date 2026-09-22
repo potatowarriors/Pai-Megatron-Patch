@@ -59,6 +59,7 @@
 |---|---|
 | [../study/terminal_sdg_study.md](../study/terminal_sdg_study.md) | 터미널 에이전트 증강 데이터 스터디 — 흐름·도구(Harbor/Terminus-2/vLLM, Data Designer 미사용 이유)·기능·데이터 형태·4층 검증 (2026-09-08) |
 | [../study/nemo_gym_assessment.md](../study/nemo_gym_assessment.md) | NeMo-Gym 분석 — 구조·사용법·우리 문제 4종(파서·이전 턴 보존·하니스·docker) 대응·SFT 단계 활용 3안·도입 제약·스모크 순서 (2026-09-15) |
+| [../study/pivotrl_study.md](../study/pivotrl_study.md) | PivotRL 스터디 — 방법(turn 단위 피벗·로컬 검증기·분산/평균 선별)·Ultra 사용처·공개 자산 실사(NeMo-RL 에 단계 설정 없음, Gym 에 검증기·포맷 도구, HF `SWE-Pivot-v1` 은 E2E 과제셋·`Terminal-Pivot-v1` 은 미프로파일 31k)·agentic SFT 이후 루프·검증기 매핑·게이트 (2026-09-22) |
 | [../study/gradient_reduce.md](../study/gradient_reduce.md) | gradient reduction 스터디 노트 |
 | [../study/2node_project_report.md](../study/2node_project_report.md) | 2노드 프로젝트 종합 보고 (2026-07-12~15) |
 | [../study/diloco_pilot.md](../study/diloco_pilot.md) | DiLoCo 파일럿 전체 실측·검증 (2026-07-14) |
