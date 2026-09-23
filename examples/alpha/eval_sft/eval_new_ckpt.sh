@@ -13,6 +13,8 @@
 # 환경변수: GPUS (기본 0~7; 변환은 그중 num_experts 약수 개수만 사용), SWE_W, TERM_W
 set -uo pipefail
 RUN_DIR="${1:?run dir (outputs/<sft_run>)}"; ITER="${2:?iteration (예: 600)}"
+# 절대경로로 고정한다 — run_convert.sh 는 내부에서 cd 하므로 상대경로가 깨진다(2026-09-23 iter2300, KNOWN_ISSUES).
+RUN_DIR="$(cd "$RUN_DIR" 2>/dev/null && pwd)" || { echo "[new-ckpt] ❌ run dir 없음: $1"; exit 1; }
 STAGES="${3:-t1,t3,agentic,t2}"
 HERE="$(cd "$(dirname "$0")" && pwd)"; ALPHA="$(dirname "$HERE")"
 REPO="$(dirname "$(dirname "$ALPHA")")"
@@ -23,7 +25,9 @@ RUN_TAG="$(basename "$RUN_DIR")_iter$ITERPAD"
 echo "[new-ckpt] run=$RUN_DIR iter=$ITER tag=$RUN_TAG stages=$STAGES"
 
 # ---- 1) 변환 (이미 있으면 재사용) ----
-if [ -f "$HFDIR/generation_config.json" ] && [ -f "$HFDIR/config.json" ]; then
+# 재사용 판정은 **가중치 인덱스까지** 본다. config·generation_config 는 변환 초입에 먼저 쓰이므로 실패한 변환도
+# 남긴다 — 2026-09-23 그 둘만 보고 재사용해 가중치 없는 디렉토리로 fleet 를 띄울 뻔했다.
+if [ -f "$HFDIR/generation_config.json" ] && [ -f "$HFDIR/config.json" ] && [ -f "$HFDIR/model.safetensors.index.json" ]; then
   echo "[new-ckpt] HF 변환본 재사용: $HFDIR"
 else
   echo "[new-ckpt] MG→HF 변환 시작 (G1 게이트 내장)"

@@ -4,6 +4,25 @@
 CLAUDE.md의 "함정 표"는 이 문서의 한 줄 요약이며, 새 사고는 **여기에 서사를 쓰고 CLAUDE.md 표에는 한 줄만** 추가한다.
 날짜는 절대 표기. 두 스테이지 이상 지난 항목은 스테이지 경계에서 `archive/`로 이동.
 
+## MG→HF 변환이 가중치 없이 끝남 — `run_convert.sh` 가 인자 파싱 뒤 `cd` 해 상대 `--hf-dir`/`--save-dir` 가 허브 repo id 로 해석 (2026-09-23 ✅)
+
+**증상**: iter 2300 벤치 체인(main1 GPU 0~6, `eval_new_ckpt.sh outputs/<run> 2300 t1,t3,t2`)의 변환이 1분 만에 종료.
+`hfmodel_0002300` 에 config·generation_config·tokenizer·modeling 파일만 남고 safetensors 0개. 6 랭크 전부
+`HFValidationError: Repo id must be in the form 'repo_name' or 'namespace/repo_name': 'outputs/.../hfmodel_0002300'` → `OSError: Can't load the configuration`.
+
+**원인**: `run_convert.sh` 는 config 자동생성·G1 까지는 호출자 cwd(`examples/alpha`)에서 상대경로로 정상 수행한 뒤 `cd ${CONVERTOR_DIR}` 하고 torchrun 을 띄운다.
+그 뒤 `--hf-dir outputs/...` 는 존재하지 않는 상대경로가 되고, transformers `AutoConfig.from_pretrained` 는 로컬에 없는 문자열을 허브 repo id 로 취급한다.
+iter2448(절대경로 호출)·iter600(별도 경로에서 변환)은 우연히 피했다.
+
+**연쇄 결함**: ① `eval_new_ckpt.sh` 의 "변환본 재사용" 판정이 config.json + generation_config.json 만 봤다 — 실패한 변환도 이 둘은 남기므로 다음 호출(에이전틱)이
+가중치 없는 디렉토리를 재사용해 fleet 를 띄우려 했다(정지시켜 20분 폴링 낭비에 그침). ② 체인 스크립트의 단계 간 가드도 config.json 만 봤다.
+③ 정지 명령 `pkill -f <스크립트명>` 이 그 문자열을 담은 내 셸을 함께 죽였다 — `suite_running.sh` 헤더의 자기 매치 교훈 그대로. 브래킷 패턴(`[b]ench_…`)으로 재실행.
+
+**조치**: `run_convert.sh` 가 `cd` 전에 LOAD_DIR·SAVE_DIR·HF_DIR 을 절대화(`auto*`·빈 값은 그대로). `eval_new_ckpt.sh` 는 RUN_DIR 을 절대화하고 재사용 판정에
+`model.safetensors.index.json` 을 요구. 재실행: 변환 약 3분(EP=6), `verify_hf_export.py` 텐서 14,181 == weight_map 14,181 · NaN/Inf 0 · 29.85 GiB, G1·G2·G3 PASS.
+
+**교훈**: 산출물 존재 판정은 **마지막에 생기는 파일**(가중치 인덱스)로 한다. 초입에 생기는 config 류는 실패한 실행도 남긴다.
+
 ## τ³ retail 무효 — tau2 NL-assertion 판정 LLM 이 `gpt-4.1-2025-04-14` 하드코딩, 우리 프록시에서 404 (2026-09-18 🔶 판정 LLM 결정 대기)
 
 **증상**: iter600 τ³(09-18 04:01~05:30, 상대역 gemma4 복구 후 자동 체인) retail 456 표본 중 115 가 `infrastructure_error` 로 제외(harness_fail 25.2% > 10% → 무효).

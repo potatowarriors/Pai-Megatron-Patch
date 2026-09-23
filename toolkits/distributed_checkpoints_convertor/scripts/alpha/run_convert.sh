@@ -75,6 +75,13 @@ USE_CUDA=$5
 PR=$6
 HF_DIR=$7
 
+# Resolve relative paths against the caller's cwd NOW. The launch below does `cd ${CONVERTOR_DIR}`,
+# after which a relative --hf-dir/--save-dir points elsewhere and transformers treats the string as a
+# Hub repo id ("Repo id must be in the form 'repo_name'" → 2026-09-23 iter2300: conversion left only
+# config.json/tokenizer in hfmodel_*, no weights). "auto"/"auto:N" and empty stay as they are.
+abspath() { case "$1" in ""|/*|auto*) echo "$1";; *) echo "${PWD}/$1";; esac; }
+LOAD_DIR=$(abspath "${LOAD_DIR}"); SAVE_DIR=$(abspath "${SAVE_DIR}"); HF_DIR=$(abspath "${HF_DIR}")
+
 # ============================================================================
 # Auto Mode Detection (SAVE_DIR == "auto" or "auto:ITERATION")
 # ============================================================================

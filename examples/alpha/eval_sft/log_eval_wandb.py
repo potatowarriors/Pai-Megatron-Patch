@@ -50,6 +50,11 @@ RUN_ALIASES = {
         "alpha_baseline_48L_sft_128k_final_20260913_022854",
     "alpha_baseline_48L_sft_128k_final_resume_20260916_224931":
         "alpha_baseline_48L_sft_128k_final_20260913_022854",
+    # 재개 4차(iter1000 승계, 09-18)·5차(iter2300 승계, 09-23) — 같은 계보(RESTORE §7.9-23).
+    "alpha_baseline_48L_sft_128k_final_resume_20260918_125936":
+        "alpha_baseline_48L_sft_128k_final_20260913_022854",
+    "alpha_baseline_48L_sft_128k_final_resume_20260923_120718":
+        "alpha_baseline_48L_sft_128k_final_20260913_022854",
 }
 # 합친 런에 남길 추가 config. 블렌드 교체 지점은 swap 계보에만 있다 — 재개 계보는 순수 연속이라 없음.
 RUN_ALIAS_CONFIG = {
