@@ -16,6 +16,9 @@
 # 2026-09-18 재개 4차: 09-16 22:49 sub1 재개 런(…final_resume_20260916_224931)이 iter 1002 로그 뒤 컴퓨팅 세션 재생성(≈10:40)으로 사망 →
 #   load: 를 그 런의 checkpoints(latest = iter 1000, optimizer 포함) 로 변경. 계보 … → 174309 iter600 → 224931 iter1000 → (이 프리셋). 잔여 1,862 iters.
 #   사용자 결정 09-18: sub1 에서 재개(main1 GPU7 재발 확정, KNOWN_ISSUES 09-18). 재개 게이트 PASS(1001 loss 7.617399E-01 비트 동일). 절차 RESTORE §7.8.
+# 2026-09-23 재개 5차: 09-18 12:59 sub1 재개 런(…final_resume_20260918_125936)이 iter 2339 로그 뒤 컴퓨팅 세션 재생성(≈10:25)으로 사망 →
+#   load: 를 그 런의 checkpoints(latest = iter 2300, optimizer 포함) 로 변경. 계보 … → 224931 iter1000 → 125936 iter2300 → (이 프리셋). 잔여 562 iters.
+#   main1 GPU7 미해결(사용자 확인 09-23) → sub1 재개. 재개 게이트: 2301 loss 7.308551E-01 비트 동일(RESTORE §7.9). 절차 RESTORE §7.8·§7.9.
 train-mode: finetune
 
 # ── 예산 / LR ─────────────────────────────────────────────────────────────
@@ -111,5 +114,5 @@ cross-entropy-loss-fusion: true
 cross-entropy-fusion-impl: te
 wandb-project: alpha-posttraining
 
-# ── 재개 (같은 dataset 연장: load 만, finetune/no-load-optim 없음 — KNOWN_ISSUES 09-01 ⑥). 09-15: iter 300 → 09-16: iter 600 → 09-18: iter 1000 ckpt 로 갱신 ──
-load: /home/work/vidsearch/repos/project_s/Pai-Megatron-Patch/examples/alpha/outputs/alpha_baseline_48L_sft_128k_final_resume_20260916_224931/checkpoints
+# ── 재개 (같은 dataset 연장: load 만, finetune/no-load-optim 없음 — KNOWN_ISSUES 09-01 ⑥). 09-15: iter 300 → 09-16: iter 600 → 09-18: iter 1000 → 09-23: iter 2300 ckpt 로 갱신 ──
+load: /home/work/vidsearch/repos/project_s/Pai-Megatron-Patch/examples/alpha/outputs/alpha_baseline_48L_sft_128k_final_resume_20260918_125936/checkpoints
