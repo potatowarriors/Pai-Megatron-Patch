@@ -94,6 +94,12 @@ ssh -F "$SSHC" -o BatchMode=yes "$CONTAINER" '
   docker image prune -f   2>&1 | tail -1
 ' 2>/dev/null
 
+# 컨테이너에 keep 마커(/opt/swebench/.keep_images_*)가 있으면 sweb.eval 이미지를 보존한다 — Docker Hub 미인증 IP 는
+# **시간당 100 pull** 제한이라 500 이미지 재취득에 5시간이 든다(2026-09-25 iter2300 SWE 500/500 환경 실패, KNOWN_ISSUES).
+# pre-pull 을 마친 이미지를 SWE 단계 직전 gc 가 지우면 안 된다. 마커는 SWE 가 끝난 뒤 사람이 지운다.
+if [ "$PURGE_IMAGES" = "1" ] && ssh -F "$SSHC" -o BatchMode=yes "$CONTAINER" 'ls /opt/swebench/.keep_images_* >/dev/null 2>&1' 2>/dev/null; then
+  echo "[gc] keep 마커 있음(/opt/swebench/.keep_images_*) — sweb.eval 이미지 보존"; PURGE_IMAGES=0
+fi
 if [ "$PURGE_IMAGES" = "1" ]; then
   echo "[gc] sweb.eval 인스턴스 이미지 정리 (다음 SWE 실행에서 재취득)"
   ssh -F "$SSHC" -o BatchMode=yes "$CONTAINER" \
