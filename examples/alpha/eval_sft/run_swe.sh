@@ -100,11 +100,15 @@ ssh -F "$SSHC" -o BatchMode=yes alpha-eval 'bash -s' <<EOF
     -c model.model_kwargs.temperature=1.0 \
     -c model.model_kwargs.top_p=0.95 \
     -c model.model_kwargs.max_tokens=${SWE_MAX_TOKENS:-32768} $STEP_ARG \
+    -c environment.pull_timeout=${SWE_PULL_TIMEOUT:-1800} \
     -o /opt/swebench/preds_${RUN_NAME} 2>&1 | tail -8
   kill \$PX 2>/dev/null; sleep 2   # SIGTERM → 프록시가 stats 를 flush 하고 종료
 EOF
 ssh -F "$SSHC" -o BatchMode=yes alpha-eval "cat $RAW_C/proxy_stats.json 2>/dev/null" \
   > "$OUT/swe_proxy_stats.json" 2>/dev/null || true
+# 에이전트 종료 상태 — 환경 실패(docker 기동 실패·타임아웃)를 모델 실패와 가르는 근거 (2026-09-24, KNOWN_ISSUES).
+ssh -F "$SSHC" -o BatchMode=yes alpha-eval "cat \$(ls -t /opt/swebench/preds_${RUN_NAME}/exit_statuses_*.yaml 2>/dev/null | head -1) 2>/dev/null" \
+  > "$OUT/swe_exit_statuses.yaml" 2>/dev/null || true
 
 echo "[swe] 채점 (swebench eval)"
 ssh -F "$SSHC" -o BatchMode=yes alpha-eval "
@@ -181,6 +185,29 @@ else:
     # 들어가 restore 와 구분되지 않았다. 재발 시 ON/OFF 비교가 오염되므로 무효.
     if px.get("reattach") is False and applied > 0:
         invalid.append(f"strip 모드인데 추론이 이력에 {applied}회 삽입됨 — restore 와 구분되지 않는다")
+# ── 에이전트 종료 상태 — 환경 실패는 모델 실패와 구분한다 (2026-09-24) ──
+# 2026-09-23 iter2300: 이미지 캐시가 빈 상태(docker_gc 표준 정리)에서 W=96 동시 `docker run` 이 pull_timeout 120 s 를
+# 넘겨 CalledProcessError 426 + TimeoutExpired 74 = 500/500 빈 패치, 프록시 요청 0. 모델이 한 번도 호출되지 않았는데
+# 위 규칙은 전부 통과해 0.0 이 '유효'로 집계됐다. 종료 상태(mini-swe-agent exit_statuses_*.yaml)를 세어 환경 실패율이
+# 임계를 넘거나 모델 호출이 0 이면 무효. iter600 대조: Submitted 135 · LimitsExceeded 215 · RepeatedFormatError 81 (환경 0).
+ENV_FAIL = ("CalledProcessError", "TimeoutExpired")
+exit_counts = {}
+try:
+    cur = None
+    for line in open(os.path.join(outd, "swe_exit_statuses.yaml")):
+        t = line.rstrip("\n")
+        if t.startswith("    ") and not t.startswith("    - ") and t.strip().endswith(":"):
+            cur = t.strip()[:-1]; exit_counts.setdefault(cur, 0)
+        elif t.startswith("    - ") and cur:
+            exit_counts[cur] += 1
+except Exception:
+    pass
+env_fail = sum(exit_counts.get(k, 0) for k in ENV_FAIL)
+env_fail_rate = env_fail / total if total else 0.0
+if env_fail_rate > 0.10:
+    invalid.append(f"환경 실패 {env_fail}/{total} = {env_fail_rate*100:.0f}% > 10% (docker 기동 실패·타임아웃 — 모델과 무관)")
+if px and total and px.get("requests", 0) == 0:
+    invalid.append("프록시 요청 0 — 에이전트가 모델을 한 번도 호출하지 않았다")
 if invalid:
     res["no_answer,none"] = 1.0
 json.dump({"results": {"swe_bench_verified": res},
@@ -189,6 +216,7 @@ json.dump({"results": {"swe_bench_verified": res},
                           "empty_patch_rate": (empty / total if total else 0.0),
                           "resolved_given_completed": (resolved / comp if comp else 0.0),
                           "think_mode": os.environ.get("SWE_THINK", "restore"),
+                          "exit_statuses": exit_counts, "env_fail_rate": env_fail_rate,
                           "proxy": proxy, "invalid": invalid}},
           open(os.path.join(outd, "results_swe.json"), "w"), indent=2)
 mark = "  [부분표본 → 무효]" if sub else ("  [리포트 없음 → 무효]" if total == 0 else "")
@@ -197,6 +225,7 @@ if invalid:
 print(f"[swe] resolved {resolved}/{total} = {acc*100:.1f}%{mark}")
 print(f"[swe] 게이트 — 빈패치 {empty}/{total} = {empty/max(total,1)*100:.1f}% · "
       f"평가오류 {errs} · 채점기준 적중 {resolved}/{comp} = {resolved/max(comp,1)*100:.1f}%")
+print(f"[swe] 종료 상태 — {exit_counts or '기록 없음'} · 환경 실패 {env_fail}/{total} = {env_fail_rate*100:.1f}%")
 if px:
     print(f"[swe] 프록시 — 모드 {os.environ.get('SWE_THINK','restore')} · 요청 {px.get('requests',0)} · "
           f"추론(필드 {px.get('think_from_field',0)} / 인라인 {px.get('think_stripped',0)} / 없음 {px.get('think_absent',0)}) · "

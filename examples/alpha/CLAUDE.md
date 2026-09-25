@@ -166,6 +166,7 @@ submodule `tests/unit_tests/test_step_batch_size_schedule.py`, `test_muon_optimi
 
 | 날짜 | 증상 | 원인 → 대응 |
 |---|---|---|
+| 09-25 | SWE 0/500 이 '유효'로 집계 — 500 전부 빈 패치, 프록시 요청 0 | docker_gc 뒤 빈 이미지 캐시 + W=96 동시 `docker run` 이 mini-swe-agent `pull_timeout` 120 s 초과(CalledProcessError 426 · TimeoutExpired 74). `run_swe.sh`: pull_timeout 1800 + 종료 상태·프록시 요청 0 무효 규칙. **에이전틱 0점은 종료 상태 분포부터 본다** |
 | 09-23 | MG→HF 변환이 1분 만에 끝나고 `hfmodel_*` 에 config·tokenizer 만 남음(`HFValidationError: Repo id must be…`) | `run_convert.sh` 가 `cd` 뒤 상대 `--hf-dir` 을 넘김 → 허브 repo id 로 해석. `cd` 전 절대화 + `eval_new_ckpt.sh` 재사용 판정에 `model.safetensors.index.json` 요구. **산출물 존재 판정은 마지막에 생기는 파일로** |
 | 09-18 | τ³ retail 무효(harness_fail 25%) — 채점 단계에서 `gpt-4.1-2025-04-14` 404 | tau2 `DEFAULT_LLM_NL_ASSERTIONS` 하드코딩·오버라이드 없음 → 우리 프록시로 감. 판정 LLM 지정 수단 추가 후 retail 재실행(결정 대기). 하니스의 채점기 LLM 도 preflight 대상 |
 | 09-18 | "main1 GPU 7 해결" 통보(S/N 동일) 뒤 실모델 EP8 재개 게이트가 첫 iteration all-to-all 600 s 정지. 단독 GEMM 8/8·mock 스모크는 PASS, sub1 같은 게이트는 비트 동일 PASS | 소프트웨어 배제, main1 미해결. **통보·단독 부하 PASS 는 게이트가 아니다** — EP8 재개 2-iter 만 판별식. `KNOWN_ISSUES` 09-18 |

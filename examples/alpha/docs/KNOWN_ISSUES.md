@@ -4,6 +4,22 @@
 CLAUDE.md의 "함정 표"는 이 문서의 한 줄 요약이며, 새 사고는 **여기에 서사를 쓰고 CLAUDE.md 표에는 한 줄만** 추가한다.
 날짜는 절대 표기. 두 스테이지 이상 지난 항목은 스테이지 경계에서 `archive/`로 이동.
 
+## SWE 0/500 이 '유효'로 집계 — 빈 이미지 캐시에서 W=96 동시 `docker run` 이 mini-swe-agent `pull_timeout` 120 s 초과 (2026-09-25 ✅ 게이트·타임아웃 수정 · 🔶 SWE 재실행 결정 대기)
+
+**증상**: iter2300 에이전틱(09-23 20:03 기동) SWE 단계가 5분 만에 끝남. 500/500 빈 패치, 프록시 요청 0 — 모델이 한 번도 호출되지 않았다.
+mini-swe-agent 종료 상태: `CalledProcessError` 426(`docker run … sweb.eval.x86_64.<inst>:latest` exit 125) · `TimeoutExpired` 74(같은 명령 120 s 초과). 오류는 20:06:01~20:07:55 두 분 안에 전부 발생.
+그런데 `run_swe.sh` 게이트(프록시 miss·복원·strip 규칙)는 전부 통과해 `results_swe.json` 이 유효, TRACKING 에 **0.0** 이 기록되고 wandb 에도 올라갔다.
+
+**원인**: ① `docker_gc.sh` 표준 정책(09-08)이 매 에이전틱 종료 시 sweb.eval 인스턴스 이미지를 지운다 → 이 런은 500 이미지를 전부 새로 당겨야 했다.
+② mini-swe-agent `DockerEnvironmentConfig.pull_timeout` 기본 120 s 가 `docker run`(pull 포함) 전체에 걸린다. W=96 동시 pull 이 대역폭을 나누니 어느 것도 120 s 안에 못 끝났고, 동시 pull 충돌은 exit 125 로 떨어졌다.
+③ 게이트에 "환경 실패" 개념이 없었다 — 빈 패치는 모델이 제출을 못 한 경우(iter600 404/500)와 구분되지 않았고, 프록시 요청 0 도 규칙 대상이 아니었다.
+**왜 iter600 은 됐나**: 09-17 4차 재기동 시점엔 이미지가 남아 있었다(iter2448·1~3차 시도가 당긴 캐시, gc 는 τ³ 종료 뒤 09-18 에 실행). 종료 상태 Submitted 135 · LimitsExceeded 215 · RepeatedFormatError 81 · ContextWindowExceeded 5, 환경 실패 0.
+
+**조치**: `run_swe.sh` ① `-c environment.pull_timeout=${SWE_PULL_TIMEOUT:-1800}` ② 컨테이너의 `exit_statuses_*.yaml` 을 결과 디렉토리로 회수(`swe_exit_statuses.yaml`)해 종료 상태를 세고,
+환경 실패(CalledProcessError·TimeoutExpired) > 10% 또는 프록시 요청 0 이면 무효(`no_answer=1.0`) ③ `swe_detail.exit_statuses`·`env_fail_rate` 기록. 기존 산출물에 새 게이트를 재적용해 TRACKING 을 무효로 재집계했다.
+**남은 일**: SWE 재실행(사용자 결정, ≈3h + pull) — `GPUS=0..6 bash eval_sft/eval_new_ckpt.sh <run> 2300 swe`. wandb 의 iter2300 swe 0.0 은 재실행 값이 덮는다.
+**교훈**: 에이전틱 0점은 **종료 상태 분포**부터 본다. "빈 패치" 는 원인이 아니라 결과이고, 프록시 요청 수가 0 이면 모델은 측정된 적이 없다.
+
 ## MG→HF 변환이 가중치 없이 끝남 — `run_convert.sh` 가 인자 파싱 뒤 `cd` 해 상대 `--hf-dir`/`--save-dir` 가 허브 repo id 로 해석 (2026-09-23 ✅)
 
 **증상**: iter 2300 벤치 체인(main1 GPU 0~6, `eval_new_ckpt.sh outputs/<run> 2300 t1,t3,t2`)의 변환이 1분 만에 종료.
