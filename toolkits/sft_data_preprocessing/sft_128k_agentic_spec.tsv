@@ -1,5 +1,6 @@
 # agentic SFT 블렌드 스펙 (2026-09-22, 사용자 결정 — docs/SFT_RL_DATASETS.md §2.11·§2.12). general 최종 ckpt 에서 이어서 학습, 60B(40B 중단 허용).
-# 열: member  bucket  sub  base_ep  fixed. 목표는 gen_sft_blend_v2.py 인자: --targets agent=58,reasoning=22,chat=15,etc=5  --sub-targets agent:code=45,terminal=25,tool-call=25,search=5
+# 열: member  bucket  sub  base_ep  fixed. 목표는 gen_sft_blend_v2.py 인자: --targets agent=58,reasoning=22,chat=15,etc=5  --sub-targets 'agent:code=56.4,terminal=13.7,tool-call=24.9,search=5'
+#   (2026-09-25 사용자 결정 "대안 B": agent 하위를 gradient 기준 code 45 / terminal 25 / tool-call 25 로 — bin 으로 역산한 값이 위 인자. 09-22 초안은 bin 45/25/25/5 였고 gradient 로는 terminal > code 였다. §2.12 정정 참조)
 # fixed=1 은 소형 셋 에폭 고정(버킷 목표에서 먼저 차감). *_x2 는 행 2벌이라 고유 에폭 = 표기 × 2.
 # --- agent / code (SWE·opencode·cuda·NTC swe/code) — sub 안에서는 base_ep 1 = 풀 비례
 swe_v3_tools_keepthink	agent	code	1	0

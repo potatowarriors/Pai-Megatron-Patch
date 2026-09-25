@@ -65,7 +65,7 @@ Flat YAML. 현행 preset (★ = 현재 파이프라인; `arxive/`는 레거시·
 ```
 configs/model/     baseline_48L ★  analysis_24L(프로파일용 반깊이)  smoke
 configs/training/  stage1, stage1_resume, stage2 ★(P2/P2b/P3 커리큘럼 헤더 참조), stage2_ab,
-                   lc_a ★, lc_a_resume ★, lc_b ★, sft_64k ★, sft_128k ★, sft_128k_final ★, sft_128k_agentic(준비, lr 미확정), profile*, smoke
+                   lc_a ★, lc_a_resume ★, lc_b ★, sft_64k ★, sft_128k ★, sft_128k_final ★, sft_128k_agentic ★(2026-09-25~, general 완주 ckpt 이어서), profile*, smoke
 configs/data/      stage1_v5_blend, stage2_v5_blend_packed{,_p2,_p2b,_p3} ★,
                    lc_a_32k_blend ★, lc_filler_32k_pad16 ★, lc_b_128k_blend ★, lc_thd_check_32k, lc_a_smoke_blend,
                    sft_40b_blend ★, sft_128k_blend ★, sft_smoke_64k, mock

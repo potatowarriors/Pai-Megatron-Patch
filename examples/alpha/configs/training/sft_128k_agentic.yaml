@@ -3,9 +3,10 @@
 #   bash train.sh baseline_48L sft_128k_agentic sft_128k_agentic_blend        # 단일 노드
 #
 # 설계: docs/SFT_RL_DATASETS.md §2.11(분류)·§2.12(비율·근거). 데이터: configs/data/sft_128k_agentic_blend.yaml —
-#   bin 비중 agent 58(code 45/terminal 25/tool-call 25/search 5) · reasoning 22 · chat 15 · etc 5 → gradient agent 39.5 / reasoning 39.5 /
-#   chat 20.1 / etc 0.9. 57 멤버, 생성기 toolkits/sft_data_preprocessing/gen_sft_blend_v2.py(bin-tok 기준, SFT_FINAL_PLAN §1.1 정정 반영).
-# 예산: 60.02B = 457,920 samples = 2,862 iters @ GBS 160 (agent 1.21 에폭). **constant LR 이라 40B(≈1,900 iters)에서 중단 가능**(사용자 09-22).
+#   bin 비중 agent 58 · reasoning 22 · chat 15 · etc 5, agent 하위는 **gradient 기준 code 45 / terminal 25 / tool-call 25**(search 5%·5ep 고정) =
+#   bin code 56.4 / terminal 13.7 / tool-call 24.9 / search 5 (사용자 결정 2026-09-25 "대안 B"; 09-22 초안 bin 45/25/25/5 는 gradient 로 terminal > code 라 폐기)
+#   → gradient agent 36.9 / reasoning 41.2 / chat 21.0 / etc 0.9, 학습 tok 30.77B. 57 멤버, 생성기 toolkits/sft_data_preprocessing/gen_sft_blend_v2.py(bin-tok 기준).
+# 예산: 60.02B = 457,920 samples = 2,862 iters @ GBS 160 (에폭 code 1.05 · terminal 1.13 · tool-call 1.57 · search 5.05). **constant LR 이라 40B(≈1,900 iters)에서 중단 가능**(사용자 09-22).
 # LR: 짧은 warmup(50 iters) 뒤 constant 1.0e-5 (사용자 결정 2026-09-25). general 런 cosine(2.5e-5→1.5e-6)의 61% 지점(iter ≈1,742, valid 0.611)에
 #   해당하고 cosine 평균 1.32e-5 와 비슷하다. WSD 관점의 stable 단계 LR — anneal 이득은 종료 시 짧은 decay(별도 프리셋)로 회수한다.
 # 저장 200 / valid 100 (사용자 결정 2026-09-25; 09-22 초안 save 100). 200 iters = 4.2B tok ≈ 18h, ckpt 153 GB × 14 ≈ 2.1 TB.

@@ -405,10 +405,26 @@ agent 58% 내부 배분(풀 비율 code 65 / tool-call 19 / terminal 15 / search
 |---|---|
 | `toolkits/sft_data_preprocessing/gen_sft_blend_v2.py` | 생성기 v2 — bin-tok 기준(samples = ep × bins × 0.99), 2단 목표(`--targets`, `--sub-targets`), fixed 멤버. 구 생성기의 fill 편차 정정 |
 | `toolkits/sft_data_preprocessing/sft_128k_agentic_spec.tsv` | 57 멤버 bucket/sub/base_ep/fixed. cuda 4·usab 4·safety 3·kotool 2(≡4)·when2call 3(≡6)·structured 8·identity 18 고정 |
-| `examples/alpha/configs/data/sft_128k_agentic_blend.yaml` | 생성 결과. bin agent 58 / reasoning 22 / chat 15 / etc 5 → **gradient 39.5 / 39.5 / 20.1 / 0.9**, 학습 tok 32.08B. 검증: `audit_blend_epochs.py` 와 57 멤버 ep 최대 차 0.001 |
-| `examples/alpha/configs/training/sft_128k_agentic.yaml` | `sft_128k_final.yaml` 전체 복제 + diff 6키: warmup 50 iters, **constant LR**, load = general 최종 ckpt, finetune + no-load-optim. **⚠ lr 1.0e-5 는 자리표시자** — 사용자 결정 필요 |
+| `examples/alpha/configs/data/sft_128k_agentic_blend.yaml` | 생성 결과. bin agent 58 / reasoning 22 / chat 15 / etc 5 → **gradient 39.5 / 39.5 / 20.1 / 0.9**, 학습 tok 32.08B. 검증: `audit_blend_epochs.py` 와 57 멤버 ep 최대 차 0.001. **09-25 대안 B 로 재생성 — 아래 "하위 배분 정정"** |
+| `examples/alpha/configs/training/sft_128k_agentic.yaml` | `sft_128k_final.yaml` 전체 복제 + diff 6키: warmup 50 iters, **constant LR**, load = general 최종 ckpt, finetune + no-load-optim. lr **1.0e-5 constant · save 200 / valid 100** 확정(사용자 09-25) |
 
 하위별 gradient 비중(agent 58% 안): code 12.6 / terminal 16.0 / tool-call 8.9 / search 0.9 / 고정(usab·safety·cuda) 1.4 — sub 목표는 bin 기준이라
+
+**하위 배분 정정 (2026-09-25, 사용자 결정 — 대안 B).** 위 표의 code 45 / terminal 25 / tool-call 25 / search 5 는 bin 기준이라 gradient 로는 terminal 이 code 를
+앞섰다(16.0 vs 12.6). 이 절의 원칙(gradient 기준으로 정하고 bin 으로 역산)을 하위에도 적용해 **gradient code 45 / terminal 25 / tool-call 25**(search 는 5%·5 에폭 고정
+유지)로 재생성했다. 생성기 인자 `--sub-targets 'agent:code=56.4,terminal=13.7,tool-call=24.9,search=5'`. 검증: `audit_blend_epochs.py` 와 57 멤버 에폭 일치, agent gradient 36.90%.
+비교 대안 C(Ultra SFT 원가중치 비율 code 58 / terminal 16 / tool-call 21 / search 5 → gradient 16.8 / 10.6 / 7.7)는 tool-call 이 작아 기각.
+
+| 하위 | bin (agent 내 %) | 학습 tok | gradient (전체 %) | gradient (agent 내 %) | 에폭 |
+|---|---|---|---|---|---|
+| code (SWE·opencode·NTC swe/code) | 55.6 | 5.06B | 16.4 | 45 | 1.05 |
+| terminal (NTC 4종) | 13.4 | 2.81B | 9.1 | 25 | 1.13 |
+| tool-call (agentic_v2 tc/ia·kotool·when2call) | 24.7 | 2.83B | 9.2 | 25 | 1.57 |
+| search | 4.9 | 0.27B | 0.9 | 2 | 5.05 |
+| 고정 (cuda·usab·safety) | 1.9 | 0.45B | 1.5 | 4 | 2~4 |
+
+버킷 전체 gradient: **agent 36.9 / reasoning 41.2 / chat 21.0 / etc 0.9** (학습 tok 30.77B; 09-22 초안 39.5 / 39.5 / 20.1 / 0.9). 09-22 초안 대비 code 학습 tok +25%,
+terminal 은 2.06 → 1.13 에폭(반복 감소). 프리셋 확정(09-25): lr 1.0e-5 constant(general cosine 의 61% 지점 상당) · warmup 50 iters · save 200 / valid 100.
 train% 낮은 SWE·opencode(17~27%)가 gradient 에서는 terminal 보다 작다. 이 배분을 gradient 로 다시 맞출지는 열린 결정.
 
 ## 3. RL 자산
