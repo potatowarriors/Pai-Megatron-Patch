@@ -722,6 +722,10 @@ before/after 로 그 가설이 갈린다.
 
 ## 3.13 τ³-bench 온보딩 — tau2-bench v1.0.1 + think 분리·복원 프록시 (2026-09-14)
 
+> **NL-assertion 판정기 = `gemini/gemini-3.7-flash` (2026-09-27, 사용자 결정).** upstream 은 gpt-4.1 하드코딩이라 `eval_sft/tau2_judge_patch.py` 로 env
+> 오버라이드를 넣었고(`install_tau2.sh` 가 적용), `run_tau.sh` 의 `TAU_JUDGE_LLM` 이 정본이다. Gemini 는 `response_format=json_object` 가 필수(없으면 펜스로
+> 파싱 실패). preflight T3 가 판정기 도달·JSON 파싱을 검사한다. retail 40/114 과제만 판정기를 쓴다(airline 0). 서사: `KNOWN_ISSUES` 09-18/09-27.
+
 **왜**: 도구 사용 능력을 tool + agent + **user** 3자 상호작용에서 재는 표준 벤치. 기술보고서·리더보드가 τ 계열을 쓴다.
 사용자 결정(09-14): τ³ v1.0.1 `base` split(τ² 대비 과제 수정 75건+ → τ² 보고서 수치와 직접 비교 불가, ckpt 간 추이가 목적),
 4 trials, 상대역 = `gemma-4-12B-it` @ `https://gemma4.withai.cj.net:10206/v1`(외부 vLLM, 비용 0 — 매 ckpt API 비용을 피한다).

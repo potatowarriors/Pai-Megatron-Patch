@@ -39,7 +39,7 @@ iter2448(절대경로 호출)·iter600(별도 경로에서 변환)은 우연히 
 
 **교훈**: 산출물 존재 판정은 **마지막에 생기는 파일**(가중치 인덱스)로 한다. 초입에 생기는 config 류는 실패한 실행도 남긴다.
 
-## τ³ retail 무효 — tau2 NL-assertion 판정 LLM 이 `gpt-4.1-2025-04-14` 하드코딩, 우리 프록시에서 404 (2026-09-18 🔶 판정 LLM 결정 대기)
+## τ³ retail 무효 — tau2 NL-assertion 판정 LLM 이 `gpt-4.1-2025-04-14` 하드코딩, 우리 프록시에서 404 (2026-09-18 🔶 → 2026-09-27 ✅ gemini-3.7-flash 채택·구현, retail 재측정 예약)
 
 **증상**: iter600 τ³(09-18 04:01~05:30, 상대역 gemma4 복구 후 자동 체인) retail 456 표본 중 115 가 `infrastructure_error` 로 제외(harness_fail 25.2% > 10% → 무효).
 airline 200 표본은 제외 0, pass^1 30.5 유효.
@@ -55,6 +55,14 @@ retail 과제 114 중 40 개가 `nl_assertions` 를 가지며(airline 은 `rewar
 **대응(결정 대기)**: 판정 LLM 을 지정할 수단 추가(`config.py` env 오버라이드 또는 프록시 모델 별칭) 후 retail 만 `TAU_FRESH=1` 재실행(≈1h). 판정 LLM 후보:
 (a) 상대역 gemma4 12B — 무료·추이용, 판정 품질 미검증 (b) Gemini — 리더보드 gpt-4.1 에 가까운 판정, 비용. 리더보드와 직접 비교 불가는 상대역과 같은 이유로 이미 전제.
 **교훈**: 하니스가 부르는 LLM 은 agent·user 둘이 아니다 — 채점기·리뷰어 기본 모델을 preflight 에서 함께 검사해야 한다(미구현).
+
+**해결(2026-09-27, 사용자 결정 gemini-3.7-flash)**: ① vendored tau2 `config.py` 에 env 오버라이드(`TAU2_LLM_NL_ASSERTIONS`, `TAU2_LLM_NL_ASSERTIONS_EXTRA_ARGS`) —
+`eval_sft/tau2_judge_patch.py` 가 멱등 적용, `install_tau2.sh` 가 checkout 직후 호출. ② `run_tau.sh`: `TAU_JUDGE_LLM`(기본 `gemini/gemini-3.7-flash`) export,
+Gemini 엔 `response_format=json_object` 강제 — **없으면 ```json 펜스를 씌워 tau2 의 `json.loads` 가 실패**(스모크 실측: 펜스 있음 → 파싱 실패, json_object → OK).
+③ preflight **T3**(`tau_judge_preflight.py`): retail 포함 시 판정기 1회 호출·JSON 파싱까지 확인, 실패 시 중단 — 위 교훈의 "미구현" 해소. ④ `tau_combine.py` 가
+`tau_detail.nl_assertion_judge` 기록. 끝단 검증: iter600 retail 궤적 3건(과제 44·3·46)에 판정기 적용 → 파싱 OK, 판정 근거 타당(12개 중 2개 품절인데 "10개"
+미언급 → false 등), 건당 2~3 s. 리더보드 비교 불가는 사용자 시뮬레이터(gemma4)와 같은 전제. 재측정: `outputs/tau_retail_after_agentic_chain_20260927.sh`
+가 agentic iter200 체인 종료 후 iter2862·iter200 을 `TAU_DOMAINS="retail airline"`(airline 은 auto-resume 재사용)로 실행.
 
 ## TB-2 재실행 결과 0.1% — 트라이얼 79% AgentTimeout, 17% 는 컨텍스트 262K 초과 뒤 실패 (2026-09-18 🔶 원인 분리 대기)
 

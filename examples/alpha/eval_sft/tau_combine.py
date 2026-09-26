@@ -115,7 +115,7 @@ def summarize_domain(raw: str, d: str, K: int, reattach: bool, xcheck: bool = Tr
 
 
 def combine(out: str, raw: str, K: int, domains: list[str], skipped: dict, user_llm: str, user_args: dict,
-            agent_args: dict, reattach: bool, home: str, subsampled: bool, xcheck: bool = True) -> dict:
+            agent_args: dict, reattach: bool, home: str, subsampled: bool, xcheck: bool = True, judge_llm: str = "") -> dict:
     try:
         commit = open(os.path.join(home, ".pinned_commit")).read().strip()
     except Exception:  # noqa: BLE001
@@ -142,7 +142,7 @@ def combine(out: str, raw: str, K: int, domains: list[str], skipped: dict, user_
             r["no_answer,none"] = 1.0
     out_json = {"results": results,
                 "tau_detail": {"harness": "tau2-bench v1.0.1 (τ³)", "harness_commit": commit, "domains_requested": domains,
-                               "skipped_domains": skipped, "user_llm": user_llm, "user_llm_args": user_args,
+                               "skipped_domains": skipped, "user_llm": user_llm, "user_llm_args": user_args, "nl_assertion_judge": judge_llm,
                                "agent_llm_args": agent_args, "trials": K, "reattach": reattach,
                                "domains": detail_doms, "invalid_reasons": invalid, "subsampled": subsampled}}
     os.makedirs(out, exist_ok=True)
@@ -156,13 +156,14 @@ def main() -> int:
     ap.add_argument("--trials", type=int, required=True); ap.add_argument("--domains", required=True)
     ap.add_argument("--skipped-json", default="{}"); ap.add_argument("--user-llm", default="")
     ap.add_argument("--user-args", default="{}"); ap.add_argument("--agent-args", default="{}")
+    ap.add_argument("--judge-llm", default="")
     ap.add_argument("--reattach", default="1"); ap.add_argument("--home", default="")
     ap.add_argument("--subsampled", action="store_true"); ap.add_argument("--no-xcheck", action="store_true")
     a = ap.parse_args()
     logging.disable(logging.CRITICAL)
     o = combine(a.out, a.raw, a.trials, a.domains.split(), json.loads(a.skipped_json), a.user_llm,
                 json.loads(a.user_args), json.loads(a.agent_args), a.reattach == "1", a.home, a.subsampled,
-                xcheck=not a.no_xcheck)
+                xcheck=not a.no_xcheck, judge_llm=a.judge_llm)
     K = a.trials
     for d, dd in o["tau_detail"]["domains"].items():
         r = o["results"][f"tau_{d}"]

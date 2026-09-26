@@ -28,6 +28,8 @@ fi
 cd "$TAU2_HOME"
 git fetch -q --depth 1 origin "refs/tags/$TAG:refs/tags/$TAG" 2>/dev/null || true
 git checkout -q "$TAG"
+# [alpha-patch] NL-assertion 판정기 env 오버라이드(멱등) — 사용자 결정 2026-09-27 gemini-3.7-flash. 근거·env 이름은 tau2_judge_patch.py.
+python3 "$(dirname "$0")/tau2_judge_patch.py" "$PWD" || { echo "❌ tau2 판정기 패치 실패"; exit 1; }
 git rev-parse HEAD > .pinned_commit
 echo "   commit $(cat .pinned_commit)"
 

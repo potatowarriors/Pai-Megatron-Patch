@@ -19,7 +19,7 @@
 #
 # 사용: bash eval_sft/run_tau.sh <RUN_NAME> [N_TASKS=0] [TRIALS=4] [W=8]
 #   N_TASKS: 0=전량. 양수면 도메인당 앞 N 과제(부분 표본, 무효 표시).  W: 동시 시뮬레이션 수.
-# 환경변수: TAU_DOMAINS("retail airline") TAU_SPLIT_<dom>(base) TAU_USER_LLM TAU_USER_ARGS TAU_MAX_TOKENS(32768)
+# 환경변수: TAU_JUDGE_LLM(gemini/gemini-3.7-flash; NL 판정기, 2026-09-27) TAU_DOMAINS("retail airline") TAU_SPLIT_<dom>(base) TAU_USER_LLM TAU_USER_ARGS TAU_MAX_TOKENS(32768)
 #   TAU_REATTACH(1; 0=프록시 복원 끔, differential 용) TAU_FRESH(0; 1=기존 시뮬레이션 삭제 후 처음부터)
 #   TAU_TASK_IDS("" ; 지정 시 --task-ids) TAU_DOMAIN_TIMEOUT(12h) TAU_SIM_TIMEOUT(7200) BASE_URL SKIP_GATES
 set -uo pipefail
@@ -48,6 +48,12 @@ export OPENAI_API_KEY=dummy OPENAI_API_BASE="http://localhost:$PROXY_PORT/v1"
 for K in GEMINI_API_KEY OPENROUTER_API_KEY; do
   if [ -z "${!K:-}" ]; then v=$(grep -E "^$K=" "$HERE/../.env" 2>/dev/null | cut -d= -f2- | tr -d "\"'" || true); [ -n "$v" ] && export "$K=$v"; fi
 done
+# NL-assertion 판정기(retail 40/114 과제의 채점 단계) — 사용자 결정 2026-09-27: gemini-3.7-flash(LogicKor 판정기와 동일 계열).
+# upstream 은 gpt-4.1 하드코딩 → vendored config.py 에 env 오버라이드(tau2_judge_patch.py, install_tau2.sh 가 적용).
+# Gemini 는 response_format=json_object 없이는 ```json 펜스를 씌워 json.loads 가 실패한다(2026-09-27 스모크) → EXTRA_ARGS 로 강제.
+TAU_JUDGE_LLM="${TAU_JUDGE_LLM:-gemini/gemini-3.7-flash}"
+export TAU2_LLM_NL_ASSERTIONS="$TAU_JUDGE_LLM"
+case "$TAU_JUDGE_LLM" in gemini/*) export TAU2_LLM_NL_ASSERTIONS_EXTRA_ARGS='{"response_format":{"type":"json_object"}}';; esac
 AGENT_ARGS=$(printf '{"api_base":"http://localhost:%s/v1","api_key":"dummy","temperature":1.0,"top_p":0.95,"max_tokens":%s,"extra_body":{"skip_special_tokens":false}}' "$PROXY_PORT" "$TAU_MAX_TOKENS")
 
 # ── 게이트 A1·A4 (SKIP_GATES=1 은 스위트가 이미 통과시킨 경우) ────────────────────
@@ -109,6 +115,11 @@ USER_TOOLS=$(printf '%s\n' "$T2_OUT" | grep -oE '^USER_TOOLS=[01]$' | tail -1 | 
 [ -z "$USER_TOOLS" ] && rc=1
 if [ "$rc" -ne 0 ]; then echo "[tau] ❌ T2 상대역($TAU_USER_LLM) 응답 실패: $(head -c 300 "$RAW/user_preflight.err")"; exit 1; fi
 echo "[tau] T2 상대역 $TAU_USER_LLM OK (tools=$USER_TOOLS)"
+# T3: NL-assertion 판정기 1회 호출(tau_judge_preflight.py) — retail 이 있을 때만. 실패 = retail 채점 전부 infra_error 이므로 중단.
+if echo " $TAU_DOMAINS " | grep -q " retail "; then
+  (cd "$TAU2_HOME" && PIP_CONSTRAINT= "$PY" "$HERE/tau_judge_preflight.py") \
+    || { echo "[tau] ❌ T3 판정기($TAU_JUDGE_LLM) 실패 — retail 채점 불가, 중단"; exit 1; }
+fi
 
 # ── 표본·도메인 ────────────────────────────────────────────────────────────────
 NTASKS=""; SUBSAMPLED=false
@@ -140,5 +151,5 @@ done
 
 # ── 합산 → results_tau.json (tau_combine.py; tests/test_tau_combine.py 로 검증) ─────────
 "$PY" "$HERE/tau_combine.py" --out "$OUT" --raw "$RAW" --trials "$TRIALS" --domains "$TAU_DOMAINS" \
-  --skipped-json "$SKIPPED_JSON" --user-llm "$TAU_USER_LLM" --user-args "$TAU_USER_ARGS" --agent-args "$AGENT_ARGS" \
+  --skipped-json "$SKIPPED_JSON" --user-llm "$TAU_USER_LLM" --user-args "$TAU_USER_ARGS" --agent-args "$AGENT_ARGS" --judge-llm "$TAU_JUDGE_LLM" \
   --reattach "$TAU_REATTACH" --home "$TAU2_HOME" $( [ "$SUBSAMPLED" = true ] && echo --subsampled )
