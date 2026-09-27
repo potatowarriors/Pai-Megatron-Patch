@@ -63,6 +63,12 @@ Gemini 엔 `response_format=json_object` 강제 — **없으면 ```json 펜스�
 `tau_detail.nl_assertion_judge` 기록. 끝단 검증: iter600 retail 궤적 3건(과제 44·3·46)에 판정기 적용 → 파싱 OK, 판정 근거 타당(12개 중 2개 품절인데 "10개"
 미언급 → false 등), 건당 2~3 s. 리더보드 비교 불가는 사용자 시뮬레이터(gemma4)와 같은 전제. 재측정: `outputs/tau_retail_after_agentic_chain_20260927.sh`
 가 agentic iter200 체인 종료 후 iter2862·iter200 을 `TAU_DOMAINS="retail airline"`(airline 은 auto-resume 재사용)로 실행.
+**재측정 결과·2차 결함(2026-09-27 23:50)**: iter2862 retail **pass^1 9.2**(114×4=456 표본, 인프라 제외 0, 판정기 오류 0, pass^4 3.5) · airline 29.0(재사용) · 평균 19.1.
+그런데 1차 집계가 **전부 무효(harness_fail 100%)** 로 찍혔다 — airline 을 auto-resume 으로 재사용하니 프록시에 새 요청이 0 건이라 `tau_combine.py` 의
+"프록시가 think 를 못 봤다" 규칙이 airline 을 무효로 판정했고, 무효 사유가 있으면 모든 도메인의 no_answer 를 1.0 으로 만드는 설계라 정상인 retail 까지 무효가 됐다.
+2차로 사고마감률도 0 이 돼 summarize 의 "사고마감 <50%" 규칙에 걸렸다. **수정**: 새 요청 0 건 + 시뮬레이션 전량인 도메인을 `resumed` 로 표시해 프록시 규칙(miss_rate·think 관측)
+에서 제외하고 사고마감률은 None(규칙 대상 아님)으로 기록(`tau_detail.domains.<d>.resumed`), `tau_bench` 의 사고마감률은 None 을 제외한 최소값. 테스트 `test_resumed_domain_skips_proxy_rules`
+추가(7/7). 기존 iter2862 산출물을 재집계해 TRACKING·wandb 갱신. **교훈**: "이번 실행의 서빙 조건" 검사 규칙은 이번 실행에서 실제 요청이 있었던 도메인에만 적용해야 한다.
 
 ## TB-2 재실행 결과 0.1% — 트라이얼 79% AgentTimeout, 17% 는 컨텍스트 262K 초과 뒤 실패 (2026-09-18 🔶 원인 분리 대기)
 

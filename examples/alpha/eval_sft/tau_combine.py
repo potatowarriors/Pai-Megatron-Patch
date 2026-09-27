@@ -95,12 +95,18 @@ def summarize_domain(raw: str, d: str, K: int, reattach: bool, xcheck: bool = Tr
     no_answer = (harness_fail / n_sims) if n_sims else 1.0
     pd = proxy_delta(raw, d)
     st, un = pd.get("think_stripped", 0) + pd.get("think_from_field", 0), pd.get("think_unclosed", 0)
-    think_closed = (st / (st + un)) if (st + un) else 0.0
+    # 재사용(resume) 도메인: tau2 --auto-resume 이 완료된 시뮬레이션을 그대로 재집계해 프록시에 새 요청이 0 건인 경우.
+    # 프록시 규칙(miss_rate·think 관측)은 "이번 실행의 서빙 조건" 검사라 재사용분엔 적용할 대상이 없다 — 그 시뮬레이션은
+    # 원 실행에서 이미 같은 규칙을 통과했다. 2026-09-27 retail 재측정에서 airline 재사용분이 "think 를 못 봤다" 로 무효가
+    # 돼 정상인 retail 456 표본까지 no_answer=1.0 이 됐던 결함.
+    resumed = bool(pd) and pd.get("requests", 0) == 0 and n_sims >= len(tasks) * K
+    # 재사용 도메인의 사고마감률은 측정 대상이 없다 → None (summarize/bench_registry 는 비수치 값을 규칙에서 건너뛴다).
+    think_closed = None if resumed else ((st / (st + un)) if (st + un) else 0.0)
     if n_sims < len(tasks) * K:
         invalid.append(f"{d}: sims {n_sims} < {len(tasks)}×{K}")
-    if reattach and pd.get("miss_rate", 0) > 0.05:
+    if reattach and not resumed and pd.get("miss_rate", 0) > 0.05:
         invalid.append(f"{d}: 프록시 miss_rate {pd['miss_rate']:.3f} > 0.05")
-    if pd and (st + un) == 0:
+    if pd and not resumed and (st + un) == 0:
         invalid.append(f"{d}: 프록시가 think 를 하나도 못 봤다 (경로 우회 또는 reasoning 파서 ON?)")
     res = {f"pass{k},none": pk[k] for k in pk}
     res["no_answer,none"] = no_answer
@@ -110,7 +116,7 @@ def summarize_domain(raw: str, d: str, K: int, reattach: bool, xcheck: bool = Tr
               "termination_reasons": term, "n_infra_excluded": n_infra,
               "avg_agent_turns": (sum(turns) / len(turns)) if turns else None,
               "avg_duration_s": (sum(dur) / len(dur)) if dur else None,
-              "pass_k_tau2_xcheck": xc, "proxy": pd}
+              "pass_k_tau2_xcheck": xc, "proxy": pd, "resumed": resumed}
     return res, detail, invalid
 
 
@@ -133,7 +139,8 @@ def combine(out: str, raw: str, K: int, domains: list[str], skipped: dict, user_
         ks = [k for k in next(iter(results.values())) if k.startswith("pass")]
         agg = {k: sum(r[k] for r in results.values()) / len(results) for k in ks}
         agg["no_answer,none"] = max(r["no_answer,none"] for r in results.values())
-        agg["think_closed,none"] = min(r["think_closed,none"] for r in results.values())
+        tcs = [r["think_closed,none"] for r in results.values() if r.get("think_closed,none") is not None]
+        agg["think_closed,none"] = min(tcs) if tcs else None
         results["tau_bench"] = agg
     if subsampled:
         invalid.append("부분 표본(subsampled)")

@@ -111,3 +111,19 @@ def test_restored_fallback_for_pre_a834e48_stats(tmp_path):
     _write_domain(raw, "mock", [_sim("m1", 0, 1.0)], ["m1"], P0, new_stats)
     d = tc.proxy_delta(str(raw), "mock")
     assert d["restored"] == 4 and "restored_derived" not in d
+
+
+def test_resumed_domain_skips_proxy_rules(tmp_path):
+    """auto-resume 재사용 도메인(새 프록시 요청 0, 시뮬레이션은 전량)은 think 관측·miss_rate 규칙 대상이 아니다 (2026-09-27)."""
+    raw = tmp_path / "raw"; out = tmp_path / "out"
+    _write_domain(raw, "airline", [_sim("t1", 0, 1.0), _sim("t2", 0, 0.0)], ["t1", "t2"], P0, dict(P0))  # delta 0
+    pa = dict(P0, requests=4, reinlined=2, miss=0, think_stripped=4)
+    _write_domain(raw, "retail", [_sim("r1", 0, 1.0)], ["r1"], P0, pa)
+    o = tc.combine(str(out), str(raw), 1, ["retail", "airline"], {}, "u", {}, {}, True, str(tmp_path), False, xcheck=False)
+    assert o["tau_detail"]["invalid_reasons"] == []
+    assert o["tau_detail"]["domains"]["airline"]["resumed"] is True
+    assert o["tau_detail"]["domains"]["retail"]["resumed"] is False
+    assert o["results"]["tau_airline"]["no_answer,none"] == 0.0
+    assert o["results"]["tau_airline"]["think_closed,none"] is None          # 재사용분: 사고마감 측정 대상 없음
+    assert o["results"]["tau_bench"]["think_closed,none"] == o["results"]["tau_retail"]["think_closed,none"]
+
