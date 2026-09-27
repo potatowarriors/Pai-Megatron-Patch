@@ -9,6 +9,7 @@
 | run | iter | mmlu_pro | gpqa_diamond | aime25 | hmmt_feb_2025 | ifeval_prompt_strict | ruler_single_1_avg | ruler_single_2_avg | ruler_multikey_avg | ruler_multivalue_avg | simpleqa_verified | logickor | swe_verified | terminal_bench | terminal_bench_2 | tau3_retail | tau3_airline | tau3_bench |
 |---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
 | alpha_baseline_48L_sft_128k_agentic_20260925_215257 | 200 | 54.5 | 36.3 | 무효 | 무효 | 65.2 | 100.0 | 63.3 | 30.0 | 20.4 | 4.9 | 39.1 | 3.6 | — | 0.4 | 7.0 | 28.0 | 17.5 |
+| alpha_baseline_48L_sft_128k_agentic_20260925_215257 | 600 | 54.5 | 38.1 | 무효 | 무효 | 66.1 | 100.0 | 63.3 | 28.3 | 19.6 | 4.2 | 40.0 | — | — | — | — | — | — |
 | alpha_baseline_48L_sft_128k_final_resume_20260915_174309 | 600 | 49.5 | 35.4 | 무효 | 무효 | 61.1 | 100.0 | 38.3 | 26.7 | 17.5 | 3.8 | 31.2 | 1.8 | — | 0.1 | 무효 | 30.5 | 무효 |
 | alpha_baseline_48L_sft_128k_final_resume_20260918_125936 | 2300 | 52.2 | 34.5 | 무효 | 무효 | 65.5 | 98.3 | 60.0 | 33.3 | 20.0 | 4.2 | 39.6 | 무효 | — | 0.4 | — | 30.0 | 30.0 |
 | alpha_baseline_48L_sft_128k_final_resume_20260923_120718 | 2862 | 52.6 | 37.0 | 무효 | 무효 | 66.5 | 98.3 | 61.7 | 33.3 | 20.0 | 3.8 | 40.2 | 2.8 | — | 0.1 | 9.2 | 29.0 | 19.1 |
