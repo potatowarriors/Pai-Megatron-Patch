@@ -4,6 +4,25 @@
 CLAUDE.md의 "함정 표"는 이 문서의 한 줄 요약이며, 새 사고는 **여기에 서사를 쓰고 CLAUDE.md 표에는 한 줄만** 추가한다.
 날짜는 절대 표기. 두 스테이지 이상 지난 항목은 스테이지 경계에서 `archive/`로 이동.
 
+## GPU 7 결함 종결 — 보드 교체 확인·양 노드 실모델 EP8 게이트 PASS · 세션 재생성 5차에서 노드 이름과 물리 호스트가 뒤바뀜 (2026-10-01 ✅)
+
+**배경**: 사용자 통보 "main1 rank 7 GPU 수리 완료". 컴퓨팅 세션은 10-01 00:21 KST 에 양 컨테이너가 재생성돼 있었다(이미지 동일 25.05). agentic 본 런(`…agentic_20260925_215257`)은 iter 1337 로그 뒤 사망, ckpt iter 1200.
+
+**발견 1 — 이름이 바뀌었다**: 재생성 뒤 `main1` 의 VBIOS 가 96.00.bc → 96.00.a5(이전 sub1 값), 호스트 가동 448일(이전 main1 은 09-22 재기동)이었다. 이전 런 `wandb-metadata.json` 의 `gpu_nvidia[].uuid` 와 대조:
+현 **main1 = 이전 sub1 호스트**(UUID 8/8 일치), 현 **sub1 = 이전 main1 호스트**(6/8 일치). `main1`·`sub1` 은 Backend.AI 클러스터 세션의 역할 이름이라 재생성 때 다른 에이전트에 배치될 수 있다.
+**발견 2 — 보드는 실제로 교체됐다**: 결함 보드 `GPU-929fdd1a`(S/N 1653124027118, 슬롯 DB:00.0)가 목록에서 사라졌다. 슬롯 1(3B:00.0)에 새 보드 `GPU-36829142`(S/N 1651326130044), 슬롯 7(DB:00.0)에는 기존 슬롯 1 보드 `GPU-b8cfbe4a` 가 옮겨 왔다. VBIOS 8장 96.00.da.00.0c 로 갱신. 09-16·09-18 의 "해결" 통보 때는 S/N 이 그대로였다.
+
+**검증** (체인 `reboot_restore/logs/post_setup_chain_20261001.sh`, 양 노드 동일):
+단독 GEMM 180 s 16/16 완주(651~678 TFLOP/s) · 셋업 28분 ERROR 0·핀 09-23 과 동일 · compat 595 · mock 8 GPU 12.01052→12.01263(비트 동일, rc=0) ·
+**실모델 EP8 재개 게이트 PASS** — iter 1201 lm loss 5.699727E-01 · seq_aux 5.429169E-01 · grad norm 0.108 이 **양 노드 모두 원 런과 비트 동일**, 1202 는 main1 6.012632E-01 / sub1 6.012429E-01(원 런 6.012515E-01, rel 1.9e-5 / 1.4e-5), Traceback·Watchdog 0, max-alloc 55.3 GB.
+수리 호스트(현 sub1)는 09-15 두 번·09-18 한 번 멈췄던 첫 iteration EP all-to-all 을 통과했고, 종료 뒤 GPU 8장 0 MiB·VBIOS 8/8 판독(과거 종착 상태인 `??`·nvidia-smi abort 없음).
+
+**조치**: GPU 7 가드(`CUDA_VISIBLE_DEVICES=0..6`, RESTORE §7.7-15) 해제 — 양 노드 8장 전부 사용(사용자 결정 10-01). 학습 = 현 sub1(수리 호스트)에서 agentic 본 런 iter 1200 재개(`sft_128k_agentic_resume.yaml`), 벤치 = 현 main1 fleet 8대. 절차 정본 `project_s/RESTORE_AFTER_REBOOT.md` §7.10.
+**남은 관찰**: 2-iter 게이트는 "첫 iteration 에서 멈추는" 과거 서명을 배제할 뿐 장시간 안정성의 증명은 아니다(첫 사고는 재개 141 iters 뒤). 재발 서명은 전 rank SM 100%·전력 113~123 W·iteration 로그 정지 — 본 런 save 200 이라 손실 상한 ≈17 h.
+09-17 의 fleet :8003(GPU 3) 무증상 정지는 **현 sub1 호스트**(당시 main1)에서 났다. 벤치는 이제 다른 호스트(현 main1)에서 돌므로, 재발 GPU 로 하드웨어/align 을 가르려던 판별은 호스트가 바뀐 것을 감안해야 한다.
+**교훈**: ① 노드 이름은 역할이다 — 호스트는 GPU UUID 로 식별하고 재생성마다 기록한다(`gpu_identity_<node>_<date>.txt`). 이름만 보는 `hostname` 가드와 "sub1 은 …" 식 서술은 배치가 바뀌면 반대 호스트를 가리킨다.
+② "교체" 통보의 검증 순서는 UUID·S/N 대조(실제로 바뀌었나) → 실모델 EP8 게이트(고쳐졌나). 앞의 것만으로 쓰지 않고, 뒤의 것 없이 쓰지도 않는다.
+
 ## SWE 0/500 이 '유효'로 집계 — 빈 이미지 캐시에서 W=96 동시 `docker run` 이 mini-swe-agent `pull_timeout` 120 s 초과 (2026-09-25 ✅ 게이트·타임아웃 수정 · 🔶 SWE 재실행 결정 대기)
 
 **증상**: iter2300 에이전틱(09-23 20:03 기동) SWE 단계가 5분 만에 끝남. 500/500 빈 패치, 프록시 요청 0 — 모델이 한 번도 호출되지 않았다.
@@ -81,7 +100,7 @@ restore 모드는 이전 턴 think 를 히스토리에 되돌리므로 긴 에�
 
 **다음**: strip 대조 스모크 또는 복원 창 제한(`tau_proxy` 옵트인 플래그)으로 컨텍스트 초과 기여를 분리. 프록시가 upstream 상태 코드 히스토그램을 남기도록 보강(미구현).
 
-## 세션 재생성 3차 — "main1 GPU 7 해결" 통보 뒤에도 실모델 EP8 게이트에서 all-to-all 정지 재발 (2026-09-18 🔶 GPU 7 재발 확정 — 교체 요청)
+## 세션 재생성 3차 — "main1 GPU 7 해결" 통보 뒤에도 실모델 EP8 게이트에서 all-to-all 정지 재발 (2026-09-18 🔶 GPU 7 재발 확정 — 교체 요청 → 2026-10-01 ✅ 보드 교체·게이트 PASS, 맨 위 항목)
 
 **배경**: 2026-09-18 09:13 main1 호스트 재기동(컨테이너 uptime 기준), 10:40 경 세션 재생성(sub1 본 런 224931 은 iter 1002 로그 뒤 사망, ckpt iter 1000). 사용자 통보 "main1 7 GPU 문제 해결". 그러나 GPU 7 S/N 은 **1653124027118 그대로**(보드 미교체, 다른 조치로 추정).
 **관측**:
@@ -174,7 +193,7 @@ API 서버 프로세스의 엔진 통계 로그만 13:17:50 부터 약 90 s 끊�
 **조치**: 스모크 판정 기준을 iteration 줄 수 + `successfully saved checkpoint` 로(rc·Traceback 카운트 단독 금지 — elastic 런처 트레이스가 섞임). 사용자 결정: main1 GPU 0~6 추론용만(GPU 7 제외, `CUDA_VISIBLE_DEVICES` 가드), 실모델 EP8 게이트 미실행(sub1 학습 중 main1 정지 → 관리자 리셋 → sub1 런 사망 위험).
 sub1 본 런 재개 3차: `load:` → 174309/iter600, 런 224931, 첫 iteration 게이트로 등가 확인. 절차 정본 `project_s/RESTORE_AFTER_REBOOT.md` §7.7.
 
-## main1 GPU 7 하드웨어 결함 재발 — 실부하에서 무증상 정지 → Xid 109 CTX SWITCH TIMEOUT → Xid 120 GSP panic (2026-09-15 🔶 교체 요청, sub1 임시 학습)
+## main1 GPU 7 하드웨어 결함 재발 — 실부하에서 무증상 정지 → Xid 109 CTX SWITCH TIMEOUT → Xid 120 GSP panic (2026-09-15 🔶 교체 요청, sub1 임시 학습 → 2026-10-01 ✅ 보드 교체·게이트 PASS, 맨 위 항목)
 
 **배경**: 09-15 03:47 SFT 본 런이 iter 441 에서 EP all-to-all NCCL 타임아웃 → SIGABRT, 이후 nvidia-smi `Failed to fill in device global IDs`·
 CUDA 텐서 생성 코어덤프, GPU 7(`0000:db:00.0`) VBIOS 판독 불능. 관리자 리셋 = 멀티노드 세션 재생성(15:07). 재셋업 후 GPU 8장 VBIOS·ECC·NVLink 전부 정상으로 보였다.

@@ -15,7 +15,7 @@ instruct 능력을 측정한다. 참조 좌표는 DSV4 post-training 표 + Nemot
 |---|---|
 | SWE-bench·Terminal-Bench | **필수 요구**. Backend.AI 노드는 docker 불가(§4) → **외부 docker 호스트 gpu06 DinD 컨테이너로 해결·검증 완료**(2026-08-29, [EVAL_DOCKER_NODE.md](EVAL_DOCKER_NODE.md)). 하니스 구축 대기 |
 | judge | **gemini-3.7-flash** 확정(사용자, 2026-08-29). 키 검증 완료(`examples/alpha/.env`). 러너는 provider-agnostic(Gemini/OpenAI 호환) |
-| 실행 노드 | sub1 (유휴 8×H100). main1은 SFT 학습 전용 |
+| 실행 노드 | **학습하지 않는 노드의 8×H100 전부**(fleet 8대, `GPUS=0..7`). 2026-10-01 현재 벤치 = main1 · 학습 = sub1 (사용자 결정). 09-16~09-28 의 "main1 GPU 0~6 7장"은 GPU 7 결함 우회였고 **보드 교체로 종료**(`KNOWN_ISSUES` 10-01). 초기 배치(08-29)는 벤치 sub1 · 학습 main1 — 노드 이름은 세션 재생성 때 물리 호스트와 뒤바뀔 수 있다 |
 | Terminal-Bench 버전 (09-07) | TB-1 → **TB 2.0 + Harbor + Terminus-2** 가 정본, TB-1 은 참고치. 학습 데이터가 Terminus-2 스키마다 (§3.11) |
 | SWE 인스턴스 이미지 (09-08) | **표준 정책** — 인스턴스별 이미지 500개를 상시 보존하지 않고 실행 후 정리(`docker_gc.sh` 기본). 레이어는 공유된다 (§7 디스크, `KNOWN_ISSUES` 09-08) |
 | 평가 대상 (09-13) | phase-1·2·3 계보 폐기 → 최종 단일 SFT(`SFT_FINAL_PLAN.md`). phase-1 최종 iter2448 은 **기준선**으로 잰다 |

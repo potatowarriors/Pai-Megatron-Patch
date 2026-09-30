@@ -65,7 +65,8 @@ Flat YAML. 현행 preset (★ = 현재 파이프라인; `arxive/`는 레거시·
 ```
 configs/model/     baseline_48L ★  analysis_24L(프로파일용 반깊이)  smoke
 configs/training/  stage1, stage1_resume, stage2 ★(P2/P2b/P3 커리큘럼 헤더 참조), stage2_ab,
-                   lc_a ★, lc_a_resume ★, lc_b ★, sft_64k ★, sft_128k ★, sft_128k_final ★, sft_128k_agentic ★(2026-09-25~, general 완주 ckpt 이어서), profile*, smoke
+                   lc_a ★, lc_a_resume ★, lc_b ★, sft_64k ★, sft_128k ★, sft_128k_final ★, sft_128k_agentic ★(2026-09-25~, general 완주 ckpt 이어서),
+                   sft_128k_agentic_resume ★(같은 런 재개: load 교체 + finetune/no-load-optim 제거), profile*, smoke
 configs/data/      stage1_v5_blend, stage2_v5_blend_packed{,_p2,_p2b,_p3} ★,
                    lc_a_32k_blend ★, lc_filler_32k_pad16 ★, lc_b_128k_blend ★, lc_thd_check_32k, lc_a_smoke_blend,
                    sft_40b_blend ★, sft_128k_blend ★, sft_smoke_64k, mock
@@ -166,15 +167,16 @@ submodule `tests/unit_tests/test_step_batch_size_schedule.py`, `test_muon_optimi
 
 | 날짜 | 증상 | 원인 → 대응 |
 |---|---|---|
+| 10-01 | 세션 재생성 뒤 `main1` 의 VBIOS·호스트 가동 시간이 이전 sub1 값 — 노드 이름과 물리 호스트가 뒤바뀜(수리된 호스트가 `sub1` 로 올라옴) | 이름은 역할이다. **호스트는 GPU UUID 로 식별**(`gpu_identity_*`, 이전 런 `wandb-metadata.json`). GPU 7 결함은 보드 교체 + 양 노드 EP8 게이트 PASS 로 종결, 가드 해제·양 노드 8장. `KNOWN_ISSUES` 10-01 |
 | 09-25 | SWE 0/500 이 '유효'로 집계 — 500 전부 빈 패치, 프록시 요청 0 | docker_gc 뒤 빈 이미지 캐시 + W=96 동시 `docker run` 이 mini-swe-agent `pull_timeout` 120 s 초과(CalledProcessError 426 · TimeoutExpired 74). `run_swe.sh`: pull_timeout 1800 + 종료 상태·프록시 요청 0 무효 규칙. **에이전틱 0점은 종료 상태 분포부터 본다** |
 | 09-23 | MG→HF 변환이 1분 만에 끝나고 `hfmodel_*` 에 config·tokenizer 만 남음(`HFValidationError: Repo id must be…`) | `run_convert.sh` 가 `cd` 뒤 상대 `--hf-dir` 을 넘김 → 허브 repo id 로 해석. `cd` 전 절대화 + `eval_new_ckpt.sh` 재사용 판정에 `model.safetensors.index.json` 요구. **산출물 존재 판정은 마지막에 생기는 파일로** |
 | 09-18 | τ³ retail 무효(harness_fail 25%) — 채점 단계에서 `gpt-4.1-2025-04-14` 404 | tau2 `DEFAULT_LLM_NL_ASSERTIONS` 하드코딩·오버라이드 없음 → 우리 프록시로 감. 판정 LLM 지정 수단 추가 후 retail 재실행(결정 대기). 하니스의 채점기 LLM 도 preflight 대상 |
-| 09-18 | "main1 GPU 7 해결" 통보(S/N 동일) 뒤 실모델 EP8 재개 게이트가 첫 iteration all-to-all 600 s 정지. 단독 GEMM 8/8·mock 스모크는 PASS, sub1 같은 게이트는 비트 동일 PASS | 소프트웨어 배제, main1 미해결. **통보·단독 부하 PASS 는 게이트가 아니다** — EP8 재개 2-iter 만 판별식. `KNOWN_ISSUES` 09-18 |
+| 09-18 | "main1 GPU 7 해결" 통보(S/N 동일) 뒤 실모델 EP8 재개 게이트가 첫 iteration all-to-all 600 s 정지. 단독 GEMM 8/8·mock 스모크는 PASS, sub1 같은 게이트는 비트 동일 PASS | 소프트웨어 배제, 당시 미해결(10-01 보드 교체로 종결). **통보·단독 부하 PASS 는 게이트가 아니다** — EP8 재개 2-iter 만 판별식. `KNOWN_ISSUES` 09-18 |
 | 09-17 | 실행 중인 `run_suite.sh` 를 편집 → 구 프로세스가 docker gc 직후 `syntax error near unexpected token` 으로 사망, fleet 종료·집계·wandb 건너뜀(수동 복구) | **bash 는 스크립트를 오프셋으로 읽는다 — 돌고 있는 셸 스크립트는 편집하지 않는다**(복사본을 고쳐 다음 실행에). 파이썬은 import 시점에 읽어 안전. 체인 스크립트의 fleet 준비 판정은 구 fleet 의 200 을 새 fleet 로 오인 → 워치독 조기 기동(grace 로 보완) |
 | 09-17 | TB-2 복원 miss_rate 32.5% 로 무효 오판 — harbor 는 이력에 reasoning 필드를 되돌려 보내 필드 복원(216k)이 분모에서 빠짐. 전체 턴 기준 0.7% | `tau_proxy` miss_rate 분모를 캐시+필드+miss 로, distinct 턴 집계·miss 표본 추가. TB-2 는 τ³ 뒤 `run_suite.sh … tb2` 로 재실행. `KNOWN_ISSUES` 09-17 |
-| 09-17 | fleet :8003(GPU 3) EngineCore 무증상 정지 — W=96+prefix caching 첫 실행 2.5분 뒤 SM 100%·126 W·생성 0, SIGTERM 무반응. 세션 고정이라 15 세션이 못 박힘 | SIGKILL 재기동 + `eval_sft/fleet_watchdog.py`(생성 120 s 정지/`/metrics` 60 s 불통 → 같은 argv 재기동·기록). 원인은 GPU 3 하드웨어 vs align 모드 경합 미판정 — **재발 GPU 로 판별**. `KNOWN_ISSUES` 09-17 |
+| 09-17 | fleet :8003(GPU 3) EngineCore 무증상 정지 — W=96+prefix caching 첫 실행 2.5분 뒤 SM 100%·126 W·생성 0, SIGTERM 무반응. 세션 고정이라 15 세션이 못 박힘 | SIGKILL 재기동 + `eval_sft/fleet_watchdog.py`(생성 120 s 정지/`/metrics` 60 s 불통 → 같은 argv 재기동·기록). 원인은 GPU 3 하드웨어 vs align 모드 경합 미판정 — **재발 GPU 로 판별**(당시 main1 = 10-01 이후 sub1 호스트). `KNOWN_ISSUES` 09-17 |
 | 09-17 | iter600 에이전틱이 A4 FAIL 로 두 번 건너뜀 — 1회 표본이 되물음/거부(thinking OFF)라 `tool_calls` 빈 것을 파서 실패로 오판. A5(ON)는 4/4 PASS | `judge_a4` 관측/미관측 분리 + 모드별 8회 재표본, OFF 전부 미호출이면 평가 조건 ON 으로 파서 확인(OFF 미호출은 ⚠️). iter600 의 OFF 거부는 **When2Call(no-think·전부 미호출) 학습 신호** 로 설명되는 정상 행동(사용자 지적). RULER Reasoning-Off 숫자 나열 퇴행은 별도 미해결. `KNOWN_ISSUES` 09-17 |
-| 09-15 | main1 GPU 7 재발 — 실부하에서 Xid 없이 조용히 정지(SM 100%·mem 0%·115 W), kill 시 Xid 109 ×3 → Xid 120 GSP panic → 노드 8장 CUDA 불가. VBIOS·ECC·NVLink 카운터는 정상 | 보드 불량(리셋 후 재발) → 교체 요청. 판별은 NCCL 플라이트 레코더(낙오 rank) + 단독 GPU 지속 GEMM 대조. **카운터가 깨끗해도 EP8 재개 2-iter 스모크 전엔 GPU 를 믿지 않는다.** sub1 임시 학습(save 100). `KNOWN_ISSUES` 09-15 |
+| 09-15 | main1 GPU 7 재발 — 실부하에서 Xid 없이 조용히 정지(SM 100%·mem 0%·115 W), kill 시 Xid 109 ×3 → Xid 120 GSP panic → 노드 8장 CUDA 불가. VBIOS·ECC·NVLink 카운터는 정상 | 보드 불량(리셋 후 재발) → 교체 요청(10-01 교체·게이트 PASS 로 종결). 판별은 NCCL 플라이트 레코더(낙오 rank) + 단독 GPU 지속 GEMM 대조. **카운터가 깨끗해도 EP8 재개 2-iter 스모크 전엔 GPU 를 믿지 않는다.** sub1 임시 학습(save 100). `KNOWN_ISSUES` 09-15 |
 | 09-15 | 세션 재생성 이미지가 25.03→25.05(torch 2.7→2.8) 로 바뀜 + 셋업 드리프트 3건(cuDNN 9.24 단계 부재·FA3 MAX_JOBS 10·smoke 프리셋 pre-softmax) | TE wheel 은 같은 이미지에서만 재사용, Step 13.5 내장, FA3 jobs 자동(96), 프리셋 수정. 절차 `RESTORE_AFTER_REBOOT.md` §7.6. `KNOWN_ISSUES` 09-15 |
 | 09-14 | sub1 fleet 8대가 기동 직후 전부 사망 (`Engine core initialization failed`), 스위트는 준비 대기 20분 | HOME(`/home/work`)이 **49GB 루프 볼륨**이라 `~/.cache`(vllm 컴파일 캐시·uv·HF·pip 47G)로 100% → ENOSPC. `serve_alpha.sh` 가 `VLLM_CACHE_ROOT=/tmp/vllm_cache` 기본 + 여유 가드. 디스크는 쓰는 경로의 FS 에서 잰다. **컴파일 캐시는 절대경로를 품어 옮기면 깨진다 — 비운다**(옮긴 캐시로 에이전틱 fleet 2차 사망). `KNOWN_ISSUES` 09-14 |
 | 09-14 | 에이전틱 fleet 가 `</think>` 소실 — SWE·TB-2 전 계열, **도구 미선언 요청도** | TOOLS=1 서버 플래그만으로 vLLM 0.25.1 파서 엔진이 THINK_END 소비(SWE 보존 0/74,833턴, 무도구 6/6). 템플릿이 이력을 `<think></think>`+추론문으로 재렌더 → 구조 왜곡. 수정은 reasoning 파서 + 추론 복원 경로(τ³ `tau_proxy.py` 방식). harbor 는 vLLM `reasoning` 키를 못 읽어 TB-2 도 프록시 필수 |
@@ -228,7 +230,8 @@ submodule `tests/unit_tests/test_step_batch_size_schedule.py`, `test_muon_optimi
 ## 환경 불변량·운영 함정
 
 - **wandb 409 "filestream at capacity" 1건**으로 run이 죽은 것처럼 보여도 학습은 무영향. 판별은 노드 로그의 iteration 타임스탬프 + `[diloco]` sync 라인. `wandb sync <run_dir>`로 백필.
-- **sub1 시계가 main1보다 ~5.4분 늦고 TZ 라벨도 다름** — 두 노드 로그 시각 직접 비교 금지. Megatron iteration 로그는 **마지막 rank**(2노드면 sub1)에 찍힘.
+- **`main1`·`sub1` 은 역할 이름이지 물리 호스트가 아니다** — 세션 재생성 때 배치가 바뀔 수 있다(2026-10-01 실제로 뒤바뀜). 호스트 식별은 GPU UUID(`reboot_restore/logs/gpu_identity_<노드>_<날짜>.txt`). 과거 문서의 노드 이름은 그 날짜의 배치로 읽는다.
+- **두 노드 시계 차이는 세션마다 실측한다** (2026-10-01: 0.2 s, 양쪽 KST. 09월 세션은 sub1 이 5.4분 늦고 TZ 라벨도 달랐다 — 그 기간 로그 시각은 직접 비교 금지). Megatron iteration 로그는 **마지막 rank**(2노드면 sub1)에 찍힘.
 - **alpha 풀모델은 실행 간 비결정** (TE fused attention bwd, iter 3부터 상대 ~2.7e-3). `NVTE_ALLOW_NONDETERMINISTIC_ALGO=0` 무효. A/B는 같은 구성 재실행의 산포 포락선으로 판정, 비트 검증은 결정론 유닛 골든 (`study/nondeterminism_probe.md`).
 - **CP>1의 PyTorch UserWarning `c10d::allreduce_: an autograd kernel was not registered`는 무해** (첫 backward 랭크당 1회). helper.py loss CP 집계가 fallback identity-backward에 의존 — 수학적으로 정확(∂Σ/∂local=1), upstream pretrain_gpt 동일 패턴. 증거: CP{1,2,4} grad 등가 1.2e-4 + LC-A 완주. CP1에선 안 나옴.
 - 감시 스크립트의 `pgrep -f`는 자기 명령줄과 자기매치 → `[p]attern`. ssh 원격 `A && nohup X &`는 체인 전체가 백그라운드로 가 nohup 미도달.
