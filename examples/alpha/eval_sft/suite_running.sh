@@ -24,7 +24,9 @@
 # 새 감시 스크립트는 직접 pgrep 하지 말고 **이 스크립트를 호출**한다.
 #   while bash eval_sft/suite_running.sh; do sleep 300; done   # 종료 대기
 set -uo pipefail
-BENCH_HOST="${BENCH_HOST:-sub1}"
+# 기본 = 이 스크립트를 돌리는 노드. 벤치 노드는 시기마다 다르다(09월 sub1 → 2026-10-01 부터 main1; 이름은 역할일 뿐).
+# 다른 노드를 보려면 BENCH_HOST=<노드>. 10-01 까지 기본이 sub1 이라 main1 스위트를 "없음"으로 읽었다.
+BENCH_HOST="${BENCH_HOST:-$(hostname)}"
 
 read -r -d '' PROBE <<'AWK'
 ps -eo args --no-headers | awk '

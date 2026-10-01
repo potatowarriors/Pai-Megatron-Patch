@@ -11,11 +11,11 @@ HERE="$(cd "$(dirname "$0")" && pwd)"
 SSHC=/home/work/vidsearch/.ssh-keys/config
 TAG="${1:-}"
 
-# 스위트와 fleet 는 **sub1** 에서 돈다. main1 에서 이 스크립트를 돌리면 로그(NFS 공유)는
-# 보이지만 프로세스·포트는 안 보인다 — 2026-09-01 에 이것 때문에 정상 실행 중인 iter900
-# 스위트를 "프로세스 없음 / 백엔드 0/8" 로 읽어 중단된 줄 알았다. 산출물로 세라고 만든
-# 스크립트가 정작 자기 진단은 로컬 가정으로 했다.
-BENCH_HOST="${BENCH_HOST:-sub1}"
+# 프로세스·포트는 **스위트가 도는 노드**에서만 보인다(로그는 NFS 라 어디서나). 다른 노드에서 돌리면
+# "프로세스 없음 / 백엔드 0/8" 로 읽힌다 — 2026-09-01 에 정상 실행 중인 iter900 스위트를 중단된 줄 알았다.
+# 벤치 노드는 시기마다 다르다(09월 sub1 → 10-01 부터 main1, 이름은 역할일 뿐 — CLAUDE.md 환경 불변량).
+# 기본은 이 스크립트를 돌리는 노드. 다른 노드를 보려면 BENCH_HOST=<노드>.
+BENCH_HOST="${BENCH_HOST:-$(hostname)}"
 if [ "$(hostname)" = "$BENCH_HOST" ]; then
   ON() { bash -c "$1"; }
 else
@@ -49,18 +49,24 @@ if [ -n "$TAG" ]; then
   # `ls -dt | head -1` 로 최신 디렉토리를 잡으면 **다른 체크포인트의 중단된 실행**을
   # 현재 진행률로 보고한다 — 2026-09-01 에 iter900 을 물었는데 iter300 의 42/80
   # (중단분)이 나왔다. 태그로 지목해야 한다.
-  # echo 의 개행까지 해싱한다 — run_terminal.sh 가 `echo "$RUN_NAME" | md5sum` 이므로
+  # echo 의 개행까지 해싱한다 — 러너가 `echo "$RUN_NAME" | md5sum` 이므로
   # printf '%s' 를 쓰면 해시가 달라져 없는 디렉토리를 가리킨다.
-  TB_RID="tb$(echo "$TAG" | md5sum | cut -c1-8)"
+  H8="$(echo "$TAG" | md5sum | cut -c1-8)"
+  # TB-1(run_terminal.sh, /opt/terminalbench/runs/tb<h8>) 은 09-07 에 TB-2 로 대체됐다. TB-2 는 harbor job
+  # /opt/harbor/jobs/tb2<h8>(2.0) · tb21<h8>(2.1, 2026-10-01~) — 트라이얼 = 89 과제 × 8 = 712, 끝난 것은 result.json 으로 센다.
+  # 2026-10-01 까지 이 절이 TB-1 경로만 봐서 돌고 있는 TB-2 를 "미시작"으로 찍었다.
   ssh -F "$SSHC" -o BatchMode=yes -o ConnectTimeout=10 alpha-eval "
     D=/opt/swebench/preds_$TAG
     [ -d \$D ] && echo \"  SWE: \$(ls -d \$D/*/ 2>/dev/null | wc -l)/500  (로그 \$(stat -c %y \$D/minisweagent.log 2>/dev/null | cut -c12-19))\"
-    R=/opt/terminalbench/runs/$TB_RID
-    if [ -d \"\$R\" ]; then
-      echo \"  Terminal: \$(ls -d \$R/*/ 2>/dev/null | wc -l)/80  ($TB_RID)\"
-    else
-      echo \"  Terminal: 미시작 ($TB_RID)\"
-    fi
+    found=0
+    for J in /opt/harbor/jobs/tb21$H8 /opt/harbor/jobs/tb2$H8; do
+      [ -d \"\$J\" ] || continue; found=1
+      case \${J##*/} in tb21*) V=2.1;; *) V=2.0;; esac
+      echo \"  Terminal-Bench \$V: 완료 \$(find \$J -mindepth 2 -maxdepth 2 -name result.json | wc -l)/712 · 시작된 트라이얼 \$(ls -d \$J/*/ 2>/dev/null | wc -l)  (\${J##*/})\"
+    done
+    [ \$found = 1 ] || echo \"  Terminal-Bench: 미시작 (tb21$H8 / tb2$H8)\"
+    R=/opt/terminalbench/runs/tb$H8
+    [ -d \"\$R\" ] && echo \"  Terminal(TB-1, 구): \$(ls -d \$R/*/ 2>/dev/null | wc -l)/80  (tb$H8)\"
     echo \"  실행 중 컨테이너: \$(docker ps -q | wc -l)\"" 2>/dev/null || echo "  (컨테이너 접속 실패)"
 else
   echo "  RUN_TAG 를 인자로 주면 계수한다"

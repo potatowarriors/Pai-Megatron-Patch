@@ -44,6 +44,15 @@ HEADLINE: dict[str, tuple[str | tuple[str, ...], str]] = {
     "terminal_bench":         ("resolved",     "terminal_bench"),
     # run_terminal_tb2.sh 는 `terminal_bench_2` 키를 쓴다 — 미등록이라 TB-2 가 TRACKING.md 에서 빠져 있었다 (2026-09-14 수정)
     "terminal_bench_2":       ("resolved",     "terminal_bench_2"),
+    # TB 2.1 (사용자 결정 2026-10-01: iter1200 체인까지 2.0, 다음 체인부터 2.1). 과제 89 동일·28 수정(이미지·지시문·테스트·한도) —
+    #   2.0 계열과 **비교하지 않는다**. 러너 run_terminal_tb2.sh 가 TB_VERSION 에 따라 키를 고른다.
+    "terminal_bench_2_1":     ("resolved",     "terminal_bench_2_1"),
+    # 부분 통과율 (2026-10-01): 검증기는 AgentTimeout 트라이얼에도 돌아 테스트별 통과를 남긴다(verifier/ctrf.json). 전부-통과는
+    #   이진이라 1/712 수준에서 추이가 안 보인다 → 트라이얼 평균 테스트 통과율 · ≥1개 통과 비율을 옆 열로(러너 추출 단계가 낸다).
+    "terminal_bench_2_partial":   ("partial_pass", "tb2_partial_pass"),
+    "terminal_bench_2_anypass":   ("any_pass",     "tb2_any_pass"),
+    "terminal_bench_2_1_partial": ("partial_pass", "tb21_partial_pass"),
+    "terminal_bench_2_1_anypass": ("any_pass",     "tb21_any_pass"),
     # ── τ³-bench (tau2-bench v1.0.1, eval_sft/run_tau.sh). 대표 = pass^1 (리더보드 주지표); pass^2~4 는 JSON 에.
     "tau_retail":             ("pass1",        "tau3_retail"),
     "tau_airline":            ("pass1",        "tau3_airline"),
@@ -58,7 +67,9 @@ TASK_ORDER = [
     "ruler_niah_multikey_1_aa", "ruler_niah_multivalue_aa",
     "ruler_niah_single_1_512k", "ruler_niah_single_2_512k",
     "ruler_niah_multikey_1_512k", "ruler_niah_multivalue_512k",
-    "simpleqa_verified", "logickor", "swe_bench_verified", "terminal_bench", "terminal_bench_2",
+    "simpleqa_verified", "logickor", "swe_bench_verified", "terminal_bench",
+    "terminal_bench_2", "terminal_bench_2_partial", "terminal_bench_2_anypass",
+    "terminal_bench_2_1", "terminal_bench_2_1_partial", "terminal_bench_2_1_anypass",
     "tau_retail", "tau_airline", "tau_telecom", "tau_bench",
 ]
 

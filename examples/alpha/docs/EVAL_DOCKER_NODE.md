@@ -176,6 +176,24 @@ cd /opt/terminalbench
 엔드포인트는 **하니스 프로세스(컨테이너) 기준 localhost** — 태스크 컨테이너가 아니라 컨테이너의 8199(역터널).
 러너: `examples/alpha/eval_sft/run_terminal.sh`. 베이스라인(약한 SFT)은 ~0 예상.
 
+### 6.8 Terminal-Bench 2.1 (2026-10-01, 사용자 결정: iter1200 체인까지 2.0 · 다음 체인부터 2.1)
+
+TB-2(09-07 전환, Harbor 0.22 + Terminus-2)는 `harbor run -d terminal-bench@2.0`(레지스트리)으로 돌렸다. 2.1 은 Harbor Hub 형식
+(`terminal-bench/terminal-bench-2-1`)이라 **harbor 0.22 가 id 를 모른다** → 저장소 클론을 `-p` 로 준다. 컨테이너 안에 준비해 둔 것:
+
+| 자산 | 위치 (컨테이너 `alpha-eval`) | 비고 |
+|---|---|---|
+| 2.1 과제 클론 | `/opt/harbor/terminal-bench-2-1` (harbor-framework/terminal-bench-2-1 **@7131e43**) | `tasks/` 89 과제, schema 1.1. `--install-only` 로 파싱·환경 셋업 확인(10-01, 예외 0) |
+| 재고정 이미지 10장 | `alexgshaw/{caffe-cifar-10,compile-compcert,extract-moves-from-video,fix-git,overfull-hbox,protein-assembly}:20260403` · `alexgshaw/{hf-model-inference,mteb-leaderboard,mteb-retrieve,pytorch-model-recovery}:20260430` | 10-01 pre-pull(`/opt/harbor/tb21_pull.log`). 나머지 79장은 2.0 과 동일 태그 |
+| 2.0 과제 | `/opt/harbor/terminal-bench` (schema 1.0) | 2.0 계열 재실행용(`TB_VERSION=2.0`) |
+
+2.0 → 2.1 차이(diff 실측, `reboot_restore` 아님 — 세션 스크래치 `tb21_diff.py`): 과제 89 동일, **28 수정** = 이미지 재고정 10 · 지시문 11 ·
+테스트 10 · 에이전트 시간 한도 2(caffe-cifar-10 1200→3600 s + CPU 1→4, crack-7z-hash 900→1800) · 검증기 한도 2(filter-js-from-html,
+query-optimize 900→1800). 한도 중앙값 900 s 그대로, 합계 +2.2%. 발표: 28 과제 결함 수정 뒤 미해결 과제 0, 최대 상승 Claude Code+Opus 4.6 +12.1%.
+
+**재구축 시**: §5 뒤에 `git clone --depth 1 https://github.com/harbor-framework/terminal-bench-2-1 /opt/harbor/terminal-bench-2-1 && git -C … checkout 7131e43`
+(태그 고정이 없으므로 커밋을 박는다) + 위 이미지 10장 pull. 러너 `run_terminal_tb2.sh` 가 시작 시 클론 존재(89 과제)를 검사한다.
+
 ## 7. 주의
 
 - **공용 서버다.** gpu06에는 타 사용자 컨테이너 20+개가 상시 가동 중(`docker ps` 확인).
