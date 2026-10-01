@@ -17,8 +17,12 @@
 #     벤치 하니스(eval_sft/search_agent_eval.py)가 모두 Tavily 라 결과 형식이 가장 가깝다. 키는 런처가
 #     examples/alpha/.env 의 TAVILY_API_KEY 를 .env 로 옮긴다 (2026-09-09).
 #   - baseURL 의 ${ALPHA_VLLM_URL} 은 런처가 .env 에 써 넣는다 (기본 http://localhost:8001/v1).
-#   - 컨텍스트 창: 미등록 모델명은 LibreChat 기본 32,000 토큰. vLLM 의 max_model_len 은 읽지 않는다.
-#     더 긴 창이 필요하면 UI 파라미터 패널의 Max Context Tokens 로 지정.
+#   - tokenConfig: 컨텍스트 창을 serve_chat.sh 의 MAX_LEN(131072)과 맞춘다. LibreChat 은 vLLM 의
+#     max_model_len 을 읽지 않고, 미등록 모델명은 기본 32,000 토큰(예산 = ×0.95 = 30,400)이다.
+#     한국어 웹검색 결과 1건이 42,959 토큰으로 세어져 메시지가 전부 가지치기됐다 (2026-10-01,
+#     `Empty messages after pruning`, smoke §7 FAIL). 계수기는 o200k_base 로 alpha 토크나이저보다
+#     5~15% 많이 세므로 같은 값을 써도 vLLM 창을 넘지 않는다. MAX_LEN 을 바꾸면 여기도 바꾼다.
+#     prompt/completion 은 과금 단가 — 로컬 모델이라 0.
 version: 1.3.15
 cache: true
 
@@ -50,6 +54,9 @@ endpoints:
       customParams:
         reasoningKey: 'reasoning'
         includeReasoningHistory: true
+      tokenConfig:                    # served name 둘 다 (serve_chat.sh: alpha-v2-sft + 별칭 alpha)
+        alpha-v2-sft: { prompt: 0, completion: 0, context: 131072 }
+        alpha: { prompt: 0, completion: 0, context: 131072 }
 
 webSearch:
   searchProvider: 'tavily'

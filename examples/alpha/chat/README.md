@@ -84,10 +84,10 @@ UI 가 vLLM 에 보내는 본문은 `model` · `stream` · `messages` 뿐이다 
 | `titleConvo: false` | 제목 생성(영어 메타 프롬프트)을 같은 모델에 보내지 않는다 |
 | `interface.*: false` | 코드실행·파일검색·에이전트 UI 를 감춘다. 도구가 하나라도 붙으면 템플릿이 tool 시나리오로 분기한다 |
 | `interface.webSearch: true` + `webSearch:` | 웹검색 도구만 **대화별 opt-in** 으로 연다 (§5.1). 토글이 꺼진 대화는 위 규칙 그대로 도구 없이 렌더된다 |
+| `tokenConfig.<모델명>.context: 131072` | 컨텍스트 창을 `serve_chat.sh` 의 MAX_LEN 과 맞춘다. 없으면 기본 32,000 이라 한국어 웹검색 결과 1건에 대화가 끊긴다 (2026-10-01, 근거는 `librechat.yaml` 상단 주석) |
 
-알아둘 것: 미등록 모델명의 컨텍스트 창은 LibreChat 기본 **32,000 토큰**이다 (vLLM 의 `max_model_len` 을 읽지 않는다).
-더 긴 대화가 필요하면 파라미터 패널의 Max Context Tokens 로 올린다. 웹검색은 도구 결과가 크므로(호출당 1~3만 자) 검색을
-많이 쓰는 대화는 이 값을 올리는 편이 안전하다.
+알아둘 것: LibreChat 은 vLLM 의 `max_model_len` 을 읽지 않는다. 창은 `tokenConfig` 가 정한다.
+MAX_LEN 이나 served name 을 바꿔 띄우면 `tokenConfig` 의 값·키도 같이 바꾼다.
 
 ### 5.1 도구 (웹검색, 2026-09-09)
 
@@ -121,6 +121,8 @@ python3 eval_sft/check_gates.py --base-url http://localhost:8001/v1     # G3 (G2
 1인 사용 중에 돌린다 — 동시에 다른 대화가 있으면 증분이 오염된다. UI 없는 fleet 은 `LC_URL=none` 으로 명시 스킵.
 
 2026-09-09 실측 (8080 이관 직후): smoke vLLM **9/9 PASS** · UI 게이트 §6 **7/7** · §7 **8/8 PASS**, 일반 대화 프롬프트 증분 **17 토큰**.
+
+2026-10-01 실측 (agentic iter1200, `tokenConfig` 적용 후): smoke vLLM **10/10 PASS** · UI 게이트 §6 **7/7** · §7 **8/8 PASS**, 일반 대화 증분 **17 토큰**, 웹검색 대화 증분 44,373 토큰. 적용 전에는 §7 이 7/8 (도구 결과 뒤 본문 0자).
 
 ## 7. 설치·재빌드 (컨테이너 재생성 등으로 설치본이 없을 때)
 
