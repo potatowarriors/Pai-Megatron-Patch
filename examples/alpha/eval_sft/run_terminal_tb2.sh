@@ -1,5 +1,14 @@
 #!/bin/bash
-# run_terminal_tb2.sh — Terminal-Bench **2.0** (Harbor + Terminus-2).
+# run_terminal_tb2.sh — Terminal-Bench **2.1** (기본) / 2.0 (Harbor + Terminus-2).
+#
+# TB 2.0 → 2.1 (사용자 결정 2026-10-01: iter1200 체인은 2.0 으로 끝내고 **다음 체인부터 2.1**):
+#   2.1 = harbor-framework/terminal-bench-2-1 @7131e43 의 로컬 클론 /opt/harbor/terminal-bench-2-1 (gpu06). 과제 89 동일, 28 수정
+#   (이미지 재고정 10 · 지시문 11 · 테스트 10 · 에이전트 한도 2 · 검증기 한도 2; 한도 중앙값 900 s 그대로 — SFT_BENCHMARKS §3.11).
+#   harbor 0.22 는 Hub id(`terminal-bench/terminal-bench-2-1`)를 모른다 → `-p <클론>/tasks` 로 준다(`--install-only` 로 schema 1.1 파싱 확인).
+#   결과 키·job 접두를 버전별로 나눈다(terminal_bench_2 / terminal_bench_2_1 · tb2 / tb21) → TRACKING 열이 섞이지 않는다.
+#   2.0 계열(general 600·2300·2862 · agentic 200·1200)과 2.1 수치는 비교하지 않는다. TB_VERSION=2.0 이면 종전 그대로.
+# 부분 통과율 (2026-10-01): 검증기는 타임아웃 트라이얼에도 돌아 verifier/ctrf.json 에 테스트별 통과를 남긴다. 전부-통과(공식)는
+#   1/712 수준이라 추이가 안 보여 트라이얼 평균 테스트 통과율·≥1개 통과 비율을 보조 키로 함께 낸다(TB_VERSION 무관).
 #
 # 왜 TB-1 을 대체하는가 (사용자 결정 2026-09-07, `SFT_RL_DATASETS.md` §2.9):
 #   학습 데이터의 Terminus 행은 **Terminus-2 스키마**
@@ -28,13 +37,24 @@
 # 사용: bash eval_sft/run_terminal_tb2.sh <RUN_NAME> [N_TASKS] [W]
 #   N_TASKS: 0/미지정 = 전량(89). 양수면 부분 표본(무효 표시).
 #   env TB2_THINK=restore(기본)|strip — 이전 턴 추론 보존 여부(아래 절) · TB2_INCLUDE=<glob> — 스모크용 과제 필터(부분 표본)
+#   env TB_VERSION=2.1(기본)|2.0 — 과제 세트 버전(위 헤더)
 set -uo pipefail
 RUN_NAME="${1:?run name}"; N="${2:-0}"; W="${3:-8}"
 HERE="$(cd "$(dirname "$0")" && pwd)"; SSHC="/home/work/vidsearch/.ssh-keys/config"
 BASE_URL="${BASE_URL:-http://localhost:8100/v1}"
 OUT="$HERE/results/$RUN_NAME"; mkdir -p "$OUT"
+# ── 과제 세트 버전 (헤더 참조) ──
+TB_VERSION="${TB_VERSION:-2.1}"
+case "$TB_VERSION" in
+  2.1) HARBOR_DS="-p /opt/harbor/terminal-bench-2-1/tasks"; DS_LABEL="terminal-bench-2.1 (harbor-framework/terminal-bench-2-1@7131e43 local clone)"
+       RIDP="tb21"; RES_KEY="terminal_bench_2_1"
+       ssh -F "$SSHC" -o BatchMode=yes alpha-eval "test -d /opt/harbor/terminal-bench-2-1/tasks && [ \$(ls -d /opt/harbor/terminal-bench-2-1/tasks/*/ | wc -l) -eq 89 ]" || {
+         echo "[term2] ❌ gpu06 에 2.1 클론(/opt/harbor/terminal-bench-2-1/tasks, 89 과제)이 없다 — EVAL_DOCKER_NODE.md 재구축 절 참조"; exit 1; } ;;
+  2.0) HARBOR_DS="-d terminal-bench@2.0"; DS_LABEL="terminal-bench@2.0"; RIDP="tb2"; RES_KEY="terminal_bench_2" ;;
+  *) echo "[term2] ❌ TB_VERSION=$TB_VERSION — 2.0 또는 2.1"; exit 1 ;;
+esac
 # compose 프로젝트명 길이 제한 때문에 job 이름은 짧게 (2026-08-30 사고, 71a1d84)
-RID="tb2$(echo "$RUN_NAME" | md5sum | cut -c1-8)"
+RID="${RIDP}$(echo "$RUN_NAME" | md5sum | cut -c1-8)"
 
 if [ "${SKIP_GATES:-0}" != "1" ]; then
   # A5 는 required 다. terminus-2 는 요청에 tools 를 안 보내지만, **TOOLS=1 fleet 에서 reasoning 파서가
@@ -53,7 +73,7 @@ elif [ "$N" -gt 0 ] 2>/dev/null; then
   NTASKS="-l $N"; SUBSAMPLED=true
   echo "[term2] ⚠️ 부분 표본 $N 태스크 — 결과에 subsampled=true (집계 무효)"
 else
-  echo "[term2] 전량 (terminal-bench@2.0, 89 tasks)"
+  echo "[term2] 전량 ($DS_LABEL, 89 tasks)"
 fi
 
 # ── 이전 턴 추론 보존 (2026-09-14) ─────────────────────────────────────────────
@@ -82,7 +102,7 @@ case "$TB2_THINK" in
 esac
 export TB2_THINK
 
-echo "[term2] harbor run (terminus-2, parser=json, W=$W, k=${TERM_REPEATS:-8}, temp 1.0, think=$TB2_THINK)"
+echo "[term2] harbor run ($DS_LABEL, terminus-2, parser=json, W=$W, k=${TERM_REPEATS:-8}, temp 1.0, think=$TB2_THINK)"
 RAW_C="/opt/harbor/proxy_raw/$RID"
 ssh -F "$SSHC" -o BatchMode=yes alpha-eval "rm -rf /opt/harbor/jobs/$RID $RAW_C" 2>/dev/null || true
 # 컨테이너의 프록시는 항상 리포 버전으로 덮는다 (표준 라이브러리만 쓴다).
@@ -106,7 +126,7 @@ ssh -F "$SSHC" -o BatchMode=yes alpha-eval 'bash -s' <<EOF
   PX=\$!
   for i in \$(seq 1 30); do curl -s -m 2 -o /dev/null http://localhost:8111/stats && break; sleep 1; done
   curl -s -m 2 -o /dev/null http://localhost:8111/stats || { echo "[term2] ❌ tau_proxy 기동 실패"; tail -5 $RAW_C/proxy.log; exit 1; }
-  ./venv/bin/harbor run -d terminal-bench@2.0 -a terminus-2 -m openai/alpha \
+  ./venv/bin/harbor run $HARBOR_DS -a terminus-2 -m openai/alpha \
     --ak api_base=http://localhost:8111/v1 \
     --ak temperature=1.0 \
     --ak parser_name=json \
@@ -149,15 +169,45 @@ for f in glob.glob(os.path.join(job, "*", "agent", "trajectory.json")):
             # 2026-09-14 스모크에서 restore·strip 모두 관측 — 하니스는 "No valid JSON found" 로 되받는다.
             if not str(st.get("message") or "").strip():
                 reasononly += 1
-print(json.dumps({"agent_steps": steps, "steps_with_commands": withcmd,
-                  "extraction_rate": (withcmd / steps if steps else 0.0),
-                  "steps_with_reasoning": withreason, "steps_reasoning_only": reasononly}))
+out = {"agent_steps": steps, "steps_with_commands": withcmd,
+       "extraction_rate": (withcmd / steps if steps else 0.0),
+       "steps_with_reasoning": withreason, "steps_reasoning_only": reasononly}
+# ── 부분 통과율 (2026-10-01) — 검증기는 AgentTimeout 트라이얼에도 돈다. verifier/ctrf.json 의 summary.passed/tests 를 센다.
+#    ctrf 가 없는 트라이얼(RuntimeError·VerifierTimeout 등)은 0 으로 센다(보수적). 수치는 트라이얼 평균(과제 가중 아님).
+n_tr = n_to = n_any = n_full = n_noctrf = 0
+fr, fr_ok, fr_to = [], [], []
+for f in glob.glob(os.path.join(job, "*", "result.json")):
+    try:
+        r = json.load(open(f))
+    except Exception:
+        continue
+    n_tr += 1
+    to = ((r.get("exception_info") or {}).get("exception_type") == "AgentTimeoutError")
+    n_to += to
+    try:
+        sm = json.load(open(os.path.join(os.path.dirname(f), "verifier", "ctrf.json")))["results"]["summary"]
+        p, t = int(sm.get("passed") or 0), int(sm.get("tests") or 0)
+    except Exception:
+        n_noctrf += 1
+        p, t = 0, 0
+    x = (p / t) if t else 0.0
+    fr.append(x)
+    (fr_to if to else fr_ok).append(x)
+    n_any += (p > 0)
+    n_full += (t > 0 and p == t)
+mean = lambda v: (sum(v) / len(v)) if v else 0.0  # noqa: E731
+out.update({"trials_scored": n_tr, "timeout_rate": (n_to / n_tr if n_tr else 0.0),
+            "partial_pass_mean": mean(fr), "any_pass_rate": (n_any / n_tr if n_tr else 0.0),
+            "full_pass_trials": n_full, "partial_pass_mean_completed": mean(fr_ok), "n_completed": len(fr_ok),
+            "partial_pass_mean_timeout": mean(fr_to), "no_ctrf": n_noctrf})
+print(json.dumps(out))
 PY2
 REMOTE
 
-python3 - "$OUT" "$SUBSAMPLED" <<'PY'
+python3 - "$OUT" "$SUBSAMPLED" "$RES_KEY" "$DS_LABEL" <<'PY'
 import json, sys, os
 outd, sub = sys.argv[1], sys.argv[2] == "true"
+res_key, ds_label = sys.argv[3], sys.argv[4]
 raw = os.path.join(outd, "terminal_raw.json")
 acc = 0.0; ntr = nerr = 0; rewards = {}; exc = {}
 try:
@@ -207,17 +257,29 @@ else:
         invalid.append(f"strip 인데 추론이 이력에 {px['restored']}회 삽입됨 — restore 와 구분되지 않는다")
 if mode == "restore" and ext.get("agent_steps", 0) > 1 and ext.get("steps_with_reasoning", 0) == 0:
     invalid.append("restore 인데 하니스가 받은 추론 0 스텝 — harbor 는 reasoning_content 만 읽는다(프록시 경로 확인)")
-res = {"results": {"terminal_bench_2": {"resolved,none": acc}},
-       "terminal_detail": {"harness": "terminal-bench@2.0 + harbor + terminus-2",
+pp = ext.get("partial_pass_mean"); ap = ext.get("any_pass_rate"); tr = ext.get("timeout_rate")
+main_res = {"resolved,none": acc}
+if pp is not None:
+    main_res.update({"partial_pass,none": pp, "any_pass,none": ap, "timeout_rate,none": tr})
+res = {"results": {res_key: main_res},
+       "terminal_detail": {"harness": f"{ds_label} + harbor 0.22 + terminus-2", "tb_version": os.environ.get("TB_VERSION", "2.1"),
                            "n_trials": ntr, "n_errors": nerr,
                            "reward_counts": rewards, "exception_stats": exc,
                            **{k: ext[k] for k in ext},
                            "think_mode": mode, "proxy": proxy, "invalid": invalid,
                            "subsampled": sub}}
+# 부분 통과율은 TRACKING 열을 위해 보조 키로도 낸다(bench_registry: *_partial, *_anypass). wandb 는 main 키의 지표로 올라간다.
+if pp is not None:
+    res["results"][res_key + "_partial"] = {"partial_pass,none": pp}
+    res["results"][res_key + "_anypass"] = {"any_pass,none": ap}
 if invalid:
-    res["results"]["terminal_bench_2"]["no_answer,none"] = 1.0
+    for k in list(res["results"]):
+        res["results"][k]["no_answer,none"] = 1.0
 json.dump(res, open(os.path.join(outd, "results_terminal.json"), "w"), ensure_ascii=False, indent=2)
-print(f"[term2] accuracy {acc*100:.1f}%  trials={ntr} errors={nerr}")
+print(f"[term2] accuracy {acc*100:.1f}%  trials={ntr} errors={nerr}  ({ds_label})")
+if pp is not None:
+    print(f"[term2] 부분 통과 — 트라이얼 평균 테스트 통과율 {pp*100:.1f}% · ≥1개 통과 {ap*100:.1f}% · 타임아웃 {tr*100:.1f}% · "
+          f"전부 통과 {ext.get('full_pass_trials')} · 시간 내 완료 {ext.get('n_completed')}(평균 {ext.get('partial_pass_mean_completed',0)*100:.1f}%) · ctrf 없음 {ext.get('no_ctrf')}")
 if ext.get("agent_steps"):
     print(f"[term2] 게이트 — 명령 추출 {ext['steps_with_commands']}/{ext['agent_steps']} "
           f"= {ext['extraction_rate']*100:.1f}%")
