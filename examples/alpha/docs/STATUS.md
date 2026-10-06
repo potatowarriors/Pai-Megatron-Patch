@@ -143,5 +143,6 @@ _마지막 갱신: 2026-10-06 14:20 (NeMo-RL RL 준비 착수 — Pai 컨테이�
 
 | 결정 | 선택지 · 권고 | 정본 |
 |---|---|---|
+| **벤치 fleet·채팅·SDG 교사 서빙의 GDN/KDA 재귀 상태 dtype (다른 세션 담당, 사용자 지정 10-06)** | 현재 전부 vLLM 기본 bf16 상태로 서빙 중. RL 롤아웃에서는 bf16 상태가 KL 을 위치 따라 2배로 키움이 실측됨(RL 은 fp32 기본값 적용 완료). 선택지: fp32 로 전환(`--mamba-ssm-cache-dtype float32`) + 기존 계열 재측정·연속성 처리 vs 유지. 조사 순서 제안 = 정량화 → 벤치 A/B → 메모리·처리량 비용(상태 2배) | `KNOWN_ISSUES` 10-06 |
 | 09-14 이전 에이전틱 수치(iter300~1800 SWE·TB-1) 표기 | 구 조건 계열로 유지(계열 내 추이만 유효) vs 무효 처리 | `SFT_BENCHMARKS.md` §3.10 · `KNOWN_ISSUES` 09-14 |
 | TB-2 restore 에서 `</think>` 미종결 턴 복원 제외(`tau_proxy` 옵트인 플래그, τ³ 세션 제안) | **권고: 보류** — NTC 학습 ckpt 에서 `steps_reasoning_only`·`think_unclosed_stop` 이 0 에 가까우면 불필요. 남으면 플래그 스모크 후 결정 | `SFT_BENCHMARKS.md` §3.14 |

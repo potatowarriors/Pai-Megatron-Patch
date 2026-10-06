@@ -167,6 +167,7 @@ submodule `tests/unit_tests/test_step_batch_size_schedule.py`, `test_muon_optimi
 
 | 날짜 | 증상 | 원인 → 대응 |
 |---|---|---|
+| 10-06 | NeMo-RL alpha GRPO KL 게이트 FAIL(0.0042) — rollout-vs-train KL 이 생성 위치를 따라 2배로 커짐 | vLLM `mamba_ssm_cache_dtype` 기본 auto = **GDN 재귀 상태 bf16** → 디코드마다 반올림 누적(+ MoE 경계 라우팅 뒤집힘). RL 레시피 기본값 float32 + R3 → 0.0014 PASS. **벤치 fleet·채팅·SDG 교사 서빙도 전부 bf16 상태 — 처리 결정은 다른 세션**. `KNOWN_ISSUES` 10-06 |
 | 10-01 | 세션 재생성 뒤 `main1` 의 VBIOS·호스트 가동 시간이 이전 sub1 값 — 노드 이름과 물리 호스트가 뒤바뀜(수리된 호스트가 `sub1` 로 올라옴) | 이름은 역할이다. **호스트는 GPU UUID 로 식별**(`gpu_identity_*`, 이전 런 `wandb-metadata.json`). GPU 7 결함은 보드 교체 + 양 노드 EP8 게이트 PASS 로 종결, 가드 해제·양 노드 8장. `KNOWN_ISSUES` 10-01 |
 | 09-25 | SWE 0/500 이 '유효'로 집계 — 500 전부 빈 패치, 프록시 요청 0 | docker_gc 뒤 빈 이미지 캐시 + W=96 동시 `docker run` 이 mini-swe-agent `pull_timeout` 120 s 초과(CalledProcessError 426 · TimeoutExpired 74). `run_swe.sh`: pull_timeout 1800 + 종료 상태·프록시 요청 0 무효 규칙. **에이전틱 0점은 종료 상태 분포부터 본다** |
 | 09-23 | MG→HF 변환이 1분 만에 끝나고 `hfmodel_*` 에 config·tokenizer 만 남음(`HFValidationError: Repo id must be…`) | `run_convert.sh` 가 `cd` 뒤 상대 `--hf-dir` 을 넘김 → 허브 repo id 로 해석. `cd` 전 절대화 + `eval_new_ckpt.sh` 재사용 판정에 `model.safetensors.index.json` 요구. **산출물 존재 판정은 마지막에 생기는 파일로** |

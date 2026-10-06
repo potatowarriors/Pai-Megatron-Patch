@@ -4,6 +4,45 @@
 CLAUDE.md의 "함정 표"는 이 문서의 한 줄 요약이며, 새 사고는 **여기에 서사를 쓰고 CLAUDE.md 표에는 한 줄만** 추가한다.
 날짜는 절대 표기. 두 스테이지 이상 지난 항목은 스테이지 경계에서 `archive/`로 이동.
 
+## GDN 재귀 상태가 vLLM 에서 bf16 으로 저장된다 — 디코드 토큰마다 반올림이 누적돼 rollout-vs-train logprob 이 생성 위치에 따라 벌어진다 (2026-10-06 ✅ RL 레시피 기본값 fp32 · 🔶 벤치 fleet·채팅·SDG 서빙 처리 결정 대기 — 다른 세션)
+
+**발견 경위**: NeMo-RL alpha 8-GPU GRPO KL 게이트(agentic iter2400, `NeMo-RL/examples/configs/alpha/grpo_alpha_smoke.yaml`, main1, EP8·colocated·16×8 롤아웃·최대 4096 토큰)가 Generation KL 0.0042 / 0.0037 / 0.0040 으로 기준 0.002 FAIL.
+같은 환경의 1.5B dense 스모크는 0.0007, 같은 ckpt 의 refit 검증(10 토큰)은 mean(exp|Δ|) 1.0293 PASS 였다.
+
+**진단 방법**: NeMo-RL 이 step 마다 남기는 `train_data_step*.jsonl` 의 토큰별 `generation_logprobs`(vLLM)·`prev_logprobs`(mcore)를 오프라인 분해(`/home/work/vidsearch/tools/nemo_rl/gates/analyze_kl.py`, CPU). 재계산 k3 KL 이 게이트 출력과 일치(0.00423 = 0.0042).
+seed 가 같아 런 사이 롤아웃이 동일하다(생성 토큰 440,577 · Avg Reward 0.1953 동일) → 설정 하나만 바꾼 통제 대조. 산출 `/home/work/vidsearch/tools/nemo_rl/gates/agentic_iter2400/`.
+
+| 런 (Adam) | KL step 1 / 2 / 3 | \|Δ\|>0.5 토큰 | 위치 0–256 | 1k–2k | 3k–4k | mult_prob_err |
+|---|---|---|---|---|---|---|
+| ① 기본 | 0.0042 / 0.0037 / 0.0040 | 0.248% | 0.0024 | 0.0044 | 0.0050 | 1.050 |
+| ② + R3 (Router Replay) | 0.0026 / 0.0022 / 0.0024 | 0.056% | 0.0014 | 0.0026 | 0.0032 | 1.036 |
+| ③ + R3 + GDN 상태 fp32 | **0.0015 / 0.0013 / 0.0014** | 0.011% | 0.0013 | 0.0015 | **0.0015** | 1.024 |
+
+**원인은 둘이다.**
+1. **MoE 라우팅 뒤집힘 (꼬리 오차)** — vLLM 과 mcore 의 hidden state 가 앞단 커널 차로 bf16 수준 달라 top-8 경계 expert 가 갈린다. 라우터 자체 정밀도는 문제가 아니다: 연산은 mcore fp64(NeMo-RL 기본 `moe_router_dtype`)·vLLM 플러그인 fp32, `expert_bias` 는 양쪽 fp32, refit 은 dtype 무변환 전송(라운드트립 게이트가 dtype 변화를 FAIL 로 잡는데 14,181/14,181 통과). R3 로 해결.
+2. **GDN 재귀 상태 bf16 저장 (위치 누적)** — vLLM `mamba_ssm_cache_dtype` 기본 `"auto"` 는 재귀 상태에 conv/KV 캐시 dtype = 모델 dtype(bf16)을 쓴다(vLLM 0.25.1 `model_executor/layers/mamba/mamba_utils.py:91-92`). 디코드는 토큰마다 상태를 읽고·갱신하고·bf16 으로 다시 쓰므로 반올림이 다음 토큰으로 넘어가 쌓인다. 학습(mcore fla chunked)은 한 forward 안에서 상태를 fp32 로 들고 간다. fp32 로 바꾸자 위치 프로파일이 평탄해졌다(③, step 2·3 도 0.0011~0.0015).
+
+**적용 — RL (이 세션, 사용자 지시 2026-10-06)**: alpha RL 레시피 기본값에 `policy.generation.vllm_kwargs.mamba_ssm_cache_dtype: float32` + `policy.router_replay.enabled: true` (`grpo_alpha_smoke.yaml`, 모든 alpha GRPO 레시피가 상속). NeMo-RL upstream 의 Mamba 계열 레시피(Nemotron nano·super·ultra 등 12종)는 전부 float32 를 지정한다 — alpha 레시피에만 빠져 있었다.
+
+**영향 범위 — 미검증, 처리 결정은 다른 세션(사용자 지정 2026-10-06)**: 저장소의 vLLM 서빙 스크립트는 전부 이 값을 지정하지 않는다 = bf16 상태.
+
+| 서빙 | 스크립트 | 가능한 영향 |
+|---|---|---|
+| 벤치 fleet (alpha) | `eval_sft/serve_alpha.sh` · `serve_fleet.sh` | SFT 벤치 전 계열(T1~T3 · SWE · TB 2.x · τ³ · RULER)이 bf16 상태로 측정됨. 오차는 디코드 길이에 비례해 쌓이므로 장문맥·장추론·멀티턴 에이전틱 티어가 상대적으로 더 영향받을 수 있다 |
+| 채팅 서빙 | `chat/serve_chat.sh` | 동일 |
+| SDG 교사 GLM-5.3-Flash (KDA 하이브리드) | `sdg/terminal/serve/serve_glm53.sh` · `sdg/ko_chat_v3/serve/serve_glm53_main1.sh` | vLLM 의 KDA 상태 dtype 도 같은 함수(`kda_state_dtype` → `_mamba_state_dtype`)로 정해진다 → ko_chat v3·SDG U/T/D 생성분이 bf16 상태 교사 출력일 가능성 |
+| prefix caching (`mamba-cache-mode align`) | `serve_alpha.sh PREFIX_CACHE=1` | 캐시된 GDN 상태도 같은 dtype |
+
+**다른 세션 조사 제안**:
+1. 정량화 — 같은 프롬프트에서 vLLM 디코드 logprob 을 bf16/fp32 상태로 받아 teacher-forced 기준(HF 또는 mcore) 대비 위치별 KL. `analyze_kl.py` 의 위치 분해와 `eval_sft/prefix_cache_check.py`(teacher-forced 틀) 재사용 가능.
+2. 벤치 영향 — RULER s2·mk·SWE·TB 를 fp32 상태로 재측정해 bf16 수치와 대조, 기존 계열(iter200~2862) 연속성 처리 결정.
+3. 비용 — GDN 재귀 상태 메모리 2배(시퀀스당 18 레이어 ≈18 MiB → ≈36 MiB, `serve_alpha.sh` 주석의 블록당 18 MiB 와 같은 셈) → fleet 동시성·prefix cache 블록 수·처리량 실측.
+4. 스위치 — `vllm serve --mamba-ssm-cache-dtype float32` (vLLM 0.25.1 `engine/arg_utils.py:1188`).
+
+**교훈**: ① 시간축으로 누적되는 상태(GDN·Mamba·KDA)는 **저장 dtype** 이 정확도를 좌우한다. 토큰마다 새로 계산하는 값(라우터 logits)과 달리 오차가 다음 토큰으로 넘어간다.
+② 짧은 검증은 이 누적을 못 본다 — forward 패리티는 teacher-forced prefill(디코드 없음), refit 검증은 10 토큰 디코드였다. 디코드 길이에 따른 **위치별 지표**로 본다.
+③ 오차의 원인이 하나라고 가정하지 않는다 — R3 만 켰을 때 0.0026 이라 "거의 됐다"로 오판할 수 있었다. 꼬리(라우팅)와 위치 누적(상태 dtype)은 분해해야 갈린다.
+
 ## GPU 7 결함 종결 — 보드 교체 확인·양 노드 실모델 EP8 게이트 PASS · 세션 재생성 5차에서 노드 이름과 물리 호스트가 뒤바뀜 (2026-10-01 ✅)
 
 **배경**: 사용자 통보 "main1 rank 7 GPU 수리 완료". 컴퓨팅 세션은 10-01 00:21 KST 에 양 컨테이너가 재생성돼 있었다(이미지 동일 25.05). agentic 본 런(`…agentic_20260925_215257`)은 iter 1337 로그 뒤 사망, ckpt iter 1200.
