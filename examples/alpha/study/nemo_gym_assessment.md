@@ -49,7 +49,7 @@ GPU 는 우리가 띄운 vLLM 이 쓴다.
 | 진단 | `gym eval profile`, `gym eval reverify`, 모델 호출 캡처(`ng_trajectory`), BLADE 분석 스킬 | + `gym eval health-check`(턴 누락·토큰 불일치·폭주 생성 자동 검출), `failure_reason` |
 
 v0.6.0 변경 중 우리에게 중요한 것: `agent_ref` 만으로 라우팅하던 데이터셋은 deprecated(`task_source` 필요, `gym dataset collate` 재실행) —
-`SFT_RL_DATASETS.md` §3.1 의 RL 블렌드가 이 형식이다. `openai==2.44.0` 강제 핀.
+`project_s/NeMo-RL/examples/configs/alpha/docs/RL_DATA.md` §1.1(구 `SFT_RL_DATASETS.md` §3.1)의 RL 블렌드가 이 형식이다. `openai==2.44.0` 강제 핀.
 
 ### 1.3 데이터 행 형식
 
@@ -253,7 +253,7 @@ SFT 단계에서 만든 리소스 서버(B·C)는 RL 환경으로 그대로 쓰�
 | 컨테이너 런타임 | main1·sub1 은 docker 불가(Backend.AI). 에이전틱은 gpu06 `alpha-eval` DinD 컨테이너(2-hop ssh, `EVAL_DOCKER_NODE.md`) | Docker 프로바이더는 로컬 데몬 전용 → SWE/TB-2 용 Gym 서버는 그 컨테이너 안에 Python 3.13 venv 로. 무도구 벤치·프로브·SDG 는 main1/sub1 CPU 에서 |
 | GPU 가용 | main1 GPU 장애(09-15 03:47, `nvidia-smi` 실패) · sub1 은 iter2448 스위트 점유 | 설치·CPU 단위 테스트(`pytest tests/unit_tests`)는 지금 가능, 모델 스모크는 fleet 여유 시 |
 | 벤더 사본 나이 | 08-05 (0.5.0-dev). 업스트림 v0.6.0 은 TB-2.1·Terminus-2 에이전트·health-check·`task_source` | SFT 평가용은 **별도 클론(v0.6.0)** 권장. 벤더 사본 갱신은 NeMo-RL uv.lock(uv 0.11.28)과 결합돼 있어 RL 재개 시점에 |
-| vLLM 의존 | `nemo-gym[vllm]` 은 flashinfer 0.6.12 핀(`NEMO_RL_SETUP.md` #10) | 외부 vLLM(`vllm_model`)만 쓰면 Gym 에 vLLM 을 설치하지 않는다. alpha 플러그인은 지금처럼 `alpha_serve_venv` 쪽 |
+| vLLM 의존 | `nemo-gym[vllm]` 은 flashinfer 0.6.12 핀(`project_s/NeMo-RL/examples/configs/alpha/docs/KNOWN_ISSUES.md` 원장 #10) | 외부 vLLM(`vllm_model`)만 쓰면 Gym 에 vLLM 을 설치하지 않는다. alpha 플러그인은 지금처럼 `alpha_serve_venv` 쪽 |
 | 하니스 관측성 | `harbor_agent`·`swe_agents`·`mini_swe_agent`(v1) 는 궤적 캡처 전 항목 X. `mini_swe_agent_2`·`tau2`·`simple_agent` 는 C1/C2/C4 V | TB-2 를 Gym 으로 옮겨도 턴별 증거는 Harbor 원본(`harbor_jobs_dir`)에서. 우리 프록시 지표(`steps_reasoning_only`·`think_unclosed_stop`·`mixed_content_and_tools`·`miss_rate` 무효화 규칙)는 `compute_metrics()`/캡처 후처리로 재구현 |
 | 비용 구조 | SWE 500 문항 ≈ 59,500 LLM 호출(T1 전체의 3.1×), 부분 표본은 무효 규약 | Gym 이 줄여주지 않는다. `--concurrency`·`--resume`·샤드 `aggregate` 로 운용만 편해짐 |
 | 미종결 think | simple_agent 경로는 미처리(§1.4) | 열린 결정(`STATUS.md` TB-2 복원 제외 플래그)과 동일 판단 필요 |

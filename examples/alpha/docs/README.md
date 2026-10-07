@@ -44,7 +44,7 @@
 | [LC_FILLER_HANDOFF.md](LC_FILLER_HANDOFF.md) | 2026-08-22~23 | filler specialized 인계·완료 기록 |
 | [gdn_cp_port.md](gdn_cp_port.md) | 2026-08 | GDN Context Parallel 포팅 + THD 잠복버그 규명 분석노트 3 |
 | [MUON_OFFLOAD_BACKPORT.md](MUON_OFFLOAD_BACKPORT.md) | 2026-08-22 | PR #6244 chunked offload 백포트 S0~S5, 128K@CP8 GO |
-| [SFT_RL_DATASETS.md](SFT_RL_DATASETS.md) | 2026-08 | SFT·RL 데이터 자산 49종, Ultra 파이프라인 설계, 예산·epoch 근거. **§2.11 = 57 멤버 개념 분류(reasoning/chat/agent/shared/etc, general·agentic 두 SFT base 용, 2026-09-22)**, **§2.12 = 두 base 블렌드 목표(general = 현 ckpt, agentic A58/R22/C15/E5, gradient 기준)** |
+| [SFT_RL_DATASETS.md](SFT_RL_DATASETS.md) | 2026-08 | SFT·RL 데이터 자산 49종, Ultra 파이프라인 설계, 예산·epoch 근거. **RL 절(§3·§4 일부)은 NeMo-RL `RL_DATA.md`·`RL_PLAN.md` 로 이관(2026-10-07)**. **§2.11 = 57 멤버 개념 분류(reasoning/chat/agent/shared/etc, general·agentic 두 SFT base 용, 2026-09-22)**, **§2.12 = 두 base 블렌드 목표(general = 현 ckpt, agentic A58/R22/C15/E5, gradient 기준)** |
 | [INTERLEAVED_THINKING.md](INTERLEAVED_THINKING.md) | 2026-08-24 | think-히스토리 규약 정비 (DSV4 분기·IF fan-out·keepthink) + 새 SFT 셋 규칙 9건 (8 = effort 렌더 플래그, 9 = tool_response 렌더 육안) |
 | [SFT_BENCHMARKS.md](SFT_BENCHMARKS.md) | 2026-08-29~ | **SFT 벤치 스위트 정본** — 운영 절차(§2.5)·구성요소(§2.6)·프론티어 규약(§3.4)·태스크 정의(§3.6·§3.9)·측정 결과(§3.8)·게이트 G1~G3·A1~A4·T1~T2(§7)·**τ³-bench 온보딩(§3.13)** |
 | [EVAL_DOCKER_NODE.md](EVAL_DOCKER_NODE.md) | 2026-08-29 | 에이전틱 벤치(SWE·Terminal) 실행용 외부 docker 호스트 gpu06 DinD — 접속·복구·재구축 runbook |
@@ -59,7 +59,6 @@
 |---|---|
 | [../study/terminal_sdg_study.md](../study/terminal_sdg_study.md) | 터미널 에이전트 증강 데이터 스터디 — 흐름·도구(Harbor/Terminus-2/vLLM, Data Designer 미사용 이유)·기능·데이터 형태·4층 검증 (2026-09-08) |
 | [../study/nemo_gym_assessment.md](../study/nemo_gym_assessment.md) | NeMo-Gym 분석 — 구조·사용법·우리 문제 4종(파서·이전 턴 보존·하니스·docker) 대응·SFT 단계 활용 3안·도입 제약·스모크 순서 (2026-09-15) |
-| [../study/pivotrl_study.md](../study/pivotrl_study.md) | PivotRL 스터디 — 방법(turn 단위 피벗·로컬 검증기·분산/평균 선별)·Ultra 사용처·공개 자산 실사(NeMo-RL 에 단계 설정 없음, Gym 에 검증기·포맷 도구, HF `SWE-Pivot-v1` 은 E2E 과제셋·`Terminal-Pivot-v1` 은 미프로파일 31k)·agentic SFT 이후 루프·검증기 매핑·게이트 (2026-09-22) |
 | [../study/gradient_reduce.md](../study/gradient_reduce.md) | gradient reduction 스터디 노트 |
 | [../study/2node_project_report.md](../study/2node_project_report.md) | 2노드 프로젝트 종합 보고 (2026-07-12~15) |
 | [../study/diloco_pilot.md](../study/diloco_pilot.md) | DiLoCo 파일럿 전체 실측·검증 (2026-07-14) |
@@ -107,6 +106,5 @@
 
 | 문서 | 한 줄 |
 |---|---|
-| `../../../../NEMO_RL_SETUP.md` | NeMo-RL post-training 환경 운영 가이드 (alpha 브리지·vLLM 플러그인·refit 검증) — RL은 이 리포 범위 밖, 보류 |
-| `../../../../ALPHA_POSTTRAIN_PROGRESS.md` | post-training 인프라 준비 경과·게이트 8종 (2026-08-12~21) |
+| `project_s/NeMo-RL/examples/configs/alpha/docs/README.md` | **RL 단계 문서 색인 (NeMo-RL)** — 상태판 `STATUS.md` · `KNOWN_ISSUES.md` · `GATES.md` · `SETUP.md` · `RL_PLAN.md` · `RL_DATA.md` · `study/pivotrl_study.md`. 2026-10-07 이관: 구 `NEMO_RL_SETUP.md`·`ALPHA_POSTTRAIN_PROGRESS.md`(→ `archive/`), `study/pivotrl_study.md`, `SFT_RL_DATASETS.md` §3·§4 RL 부분, STATUS 의 NeMo-RL 행 |
 | `../../../../RESTORE_AFTER_REBOOT.md` | 컨테이너 재시작 후 전체 복원 runbook |

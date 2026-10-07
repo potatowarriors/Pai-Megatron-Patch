@@ -4,6 +4,7 @@ alpha 훈련 순서는 **LC-phase → SFT → RL(MOPD)**이며, RL 단계는 Nem
 post-training 파이프라인(SFT → Student-RLVR → 전문 교사 RL → **MOPD** 증류)을
 재현한다. 이 문서는 그 단계에 투입할 보유 데이터 자산의 전수 정리 + Ultra 레시피
 매핑 + alpha 규모 적용 설계. LC 단계 데이터는 [`LC_DATASETS.md`](LC_DATASETS.md).
+**RL 부분(§3 RL 자산, §4 의 RL 설계, §5-6 MOPD 범위, §6 의 RL 후속)은 2026-10-07 NeMo-RL 로 이관했다** — `project_s/NeMo-RL/examples/configs/alpha/docs/RL_DATA.md`·`RL_PLAN.md`.
 
 **보유고** (2026-08-01, `/home/work/Datasets/LL_datasets/posttraining/`):
 SFT 25종 988G · RL 26종 62G(블렌드 3종 포함) — Nemotron-Post-Training-v3 컬렉션
@@ -427,52 +428,19 @@ agent 58% 내부 배분(풀 비율 code 65 / tool-call 19 / terminal 15 / search
 terminal 은 2.06 → 1.13 에폭(반복 감소). 프리셋 확정(09-25): lr 1.0e-5 constant(general cosine 의 61% 지점 상당) · warmup 50 iters · save 200 / valid 100.
 train% 낮은 SWE·opencode(17~27%)가 gradient 에서는 terminal 보다 작다. 이 배분을 gradient 로 다시 맞출지는 열린 결정.
 
-## 3. RL 자산
+## 3. RL 자산 → NeMo-RL 로 이관 (2026-10-07)
 
-### 3.1 훈련 블렌드 3종 (즉시 실행 가능한 레시피 — NeMo Gym 소비 포맷)
-
-행 = 프롬프트 + `agent_ref`(환경/보상) + 검증 메타. 행 수 실측:
-
-| 블렌드 | 파일별 행 수 |
-|---|---|
-| **Ultra** (재현 대상) | rlvr1 98,424 · rlvr2 99,116 · ifbench 34,649 · rlhf 6,500 · reasoning 5,236 · swe 7,816 · **mopd 85,980** |
-| Super (참고) | rlvr1 138,712 · rlvr2 156,278 · rlvr3 107,037 · rlhf 25,171 · swe1 50,661 · swe2 1,444 |
-| Nano (참고) | train 93,244 (11 agent 그룹 단일 블렌드) |
-
-구성 상세(agent×dataset×source별 카운트)는
-`posttraining/RL/nemotron_blend_recipe.json` (이 문서와 같이 생성).
-**주의**: math 일부 행은 DAPO/Skywork 라이선스로 질문·정답이 마스킹 —
-각 블렌드 동봉 `fill_placeholders.py`로 복원 필요(원본 HF 데이터셋 자동 다운로드).
-
-### 3.2 RL 환경 데이터셋 26종 분류
-
-| 분류 | 데이터셋 |
-|---|---|
-| IF 계열 (8) | RL-Instruction-Following-{Structured-Outputs-v2, Citation-Formatting, Free-Form-Formatting, Calendar-v2, MultiTurnChat, Adversarial} + RL-Identity-Following + RL-InverseIFEval |
-| Agentic (4) | RL-Agentic-{Function-Calling-Pivot, Conversational-Tool-Use-Pivot, SWE-Pivot(4.8G), Indirect-Prompt-Injection}. **주의(2026-09-22)**: `SWE-Pivot-v1` 은 이름과 달리 단일 스텝 피벗이 아니라 E2E SWE-RL 과제셋(6,436 이슈)이다. 진짜 피벗 행은 `Terminal-Pivot-v1`(31k, 미프로파일)·Conversational-Tool-Use(통과율 동봉). 실사·PivotRL 적용 설계는 `study/pivotrl_study.md` §4 |
-| Reasoning (5) | RL-Math-v2 · RL-Science-v1 · RL-ARC-AGI-v1 · RL-ReasoningGym-v1 · RLHF-GenRM-v1(5.1G) |
-| Safety/기타 (3) | RL-Safety-v1 · RL-QA-Abstention-v1 · RL-litmus-bench-v0.1(평가·모니터링용) |
-| 벤치 유래 (4) | RL-SysBench · RL-CFBench · RL-Multichallenge · RL-Multichallenge 계열 |
-| 블렌드 (3) | §3.1 |
-
-실행 스택: NeMo RL + NeMo Gym (둘 다 Apache 2.0 공개; 블렌드가 이 스택의 입력 포맷).
+`project_s/NeMo-RL/examples/configs/alpha/docs/RL_DATA.md` §1 이 정본이다 — 구 §3.1 훈련 블렌드 3종 = §1.1, 구 §3.2 RL 환경 데이터셋 26종 분류 = §1.2.
+준비된 alpha 블렌드(`rlvr{1,2}_alpha.jsonl`, identity 0.70%)도 같은 문서 §2.
 
 ## 4. alpha 적용 설계
 
-1. **컨텍스트 정합이 좋다**: Ultra의 RLVR ctx 49k→65k는 우리 SFT max 64k·LC 32k~64k
-   계획과 자연스럽게 맞는다. 충돌 지점은 **SWE 교사·MOPD의 192k** — alpha LC 상한이
-   128k이므로 **128k로 캡**(SWE rollout 축소) 또는 SWE 슬롯 축소가 필요.
-2. **교사 패널 현실화** (Ultra는 550B 학생 + 전문 교사들; alpha는 15B-A3B):
-   - general 교사 = alpha Student-RLVR 자신 (레시피 그대로, 추가 자원 불요)
-   - 전문 교사 = alpha 체크포인트에서 각각 소규모 RL (교사 RL은 GBS 2048·수백 step
-     규모라 우리 클러스터로 가능; 교사 수를 2~3종으로 축소 검토: Reasoning/IF 우선)
-   - 외부 교사 보강: LongBlocks의 응답 3열(Qwen3-Next-80B 등)은 **오프라인 증류**
-     소재로 즉시 사용 가능 — on-policy 전에 워밍업으로 유용
+RL 쪽 설계(구 1 컨텍스트 정합 · 2 교사 패널 현실화 · 4 의 "RL 입력 ≤32k")는 `project_s/NeMo-RL/examples/configs/alpha/docs/RL_PLAN.md` §4 로 이관했다 (2026-10-07). SFT 쪽 항목만 남긴다.
+
 3. **한국어 SFT**: Multilingual-v2 ko 81,646행(2.8G) + ja/pt 동급. LC 한국어 갭과
    별개로 SFT 단계 한국어는 이것으로 상당 부분 커버.
 4. **LC 능력 유지 게이트**: SFT 블렌드에 장문 샘플(LongBlocks doc-QA+응답, fit@64k
    84.6%) 수 % 포함 + 각 단계 통과 시 RULER@32k/64k(가능하면 128k) 회귀 측정.
-   RL은 rollout 비용상 long-context 환경 입력 ≤32k (Nemotron Nano 관행).
 5. **chat template**: SFT 데이터는 messages 포맷(system/user/assistant, tool 필드
    포함) — alpha tokenizer_v5의 chat template 정의·검증이 SFT 착수 전 선행 과제.
 
@@ -491,8 +459,7 @@ train% 낮은 SWE·opencode(17~27%)가 gradient 에서는 terminal 보다 작다
    messages → idxmap 변환기(스팬 마스킹 적용)는 별도 구현 필요.
 5. SFT 블렌드 비율 설계 (Ultra의 도메인 구성 참조: chat/IF·math·science·code·SWE·
    multilingual·safety) + LongBlocks-SFT 소량 편입
-6. MOPD 재현 범위 결정: 교사 슬롯 수(2~3 vs 5), 192k→128k 캡, NeMo RL/Gym 스택
-   포팅 vs 자체 구현(verl/ChatLearn 백엔드 검토)
+6. MOPD 재현 범위 결정 → `project_s/NeMo-RL/examples/configs/alpha/docs/STATUS.md` "열린 사용자 결정" · `RL_PLAN.md` §4 (2026-10-07 이관)
 7. ~~effort/budget 재변환 (§2.6)~~ **완료 (2026-08-25 변환·블렌드 반영, 08-28 사전 점검 재확인)**
 
 ## 6. 미해결/후속
@@ -503,8 +470,7 @@ train% 낮은 SWE·opencode(17~27%)가 gradient 에서는 terminal 보다 작다
 - 다운로드 50건의 **크기 검증**(HF API `/tree` 의 LFS size 대 로컬 size) 미실시 — Agentic-v2 tool_calling 절단 사고(2026-09-04).
 - Ultra SFT 자체의 블렌드 비율은 미공개(레시피는 "SFT 체크포인트에서 시작"만 명시) —
   Megatron-Bridge SFT 레시피 공개 여부 추적
-- litmus-bench 활용법(모니터링 셋) 조사
+- litmus-bench 활용법(모니터링 셋) 조사 → `project_s/NeMo-RL/examples/configs/alpha/docs/RL_DATA.md` §4 (2026-10-07 이관)
 - 교사 rollout 서빙: sglang alpha 어댑터(`examples/alpha/sglang/`)의 batch 성능 실측
 - effort/budget 가정 2건 (§2.6): 절단 예산 분포 U(0.1,0.9)·블렌드 1% 는 Ultra 미공개라 가정;
-  NeMo-RL `effort_levels` 계수(`low_weight`/`low_ub`/`low_penalty`)도 미공개 — RL 착수 시
-  medium-effort 응답 길이 실측으로 정한다
+  NeMo-RL `effort_levels` 계수 미공개 건은 `project_s/NeMo-RL/examples/configs/alpha/docs/RL_PLAN.md` §4.5 (2026-10-07 이관)
