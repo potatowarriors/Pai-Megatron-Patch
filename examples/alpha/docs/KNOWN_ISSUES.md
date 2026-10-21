@@ -4,26 +4,28 @@
 CLAUDE.md의 "함정 표"는 이 문서의 한 줄 요약이며, 새 사고는 **여기에 서사를 쓰고 CLAUDE.md 표에는 한 줄만** 추가한다.
 날짜는 절대 표기. 두 스테이지 이상 지난 항목은 스테이지 경계에서 `archive/`로 이동.
 
-## GDN 재귀 상태가 vLLM 에서 bf16 으로 저장된다 — 디코드 토큰마다 반올림이 누적돼 rollout-vs-train logprob 이 생성 위치에 따라 벌어진다 (2026-10-06 ✅ RL 레시피 기본값 fp32 · 🔶 벤치 fleet·채팅·SDG 서빙 처리 결정 대기 — 다른 세션)
+## GDN 재귀 상태가 vLLM 에서 bf16 으로 저장된다 — 디코드 토큰마다 반올림이 누적돼 rollout-vs-train logprob 이 생성 위치에 따라 벌어진다 (2026-10-06 ✅ RL 레시피 기본값 fp32 · 2026-10-21 ✅ 배포·평가 서빙도 fp32 — 사용자 결정 · 🔶 fp32 fleet 게이트 미실행)
 
-**RL 측 서사(발견 경위·통제 대조표·원인 분해·교훈)는 2026-10-07 NeMo-RL 로 이관했다** → `project_s/NeMo-RL/examples/configs/alpha/docs/KNOWN_ISSUES.md` 맨 위 항목. 여기에는 Pai 서빙 쪽 미결만 남긴다.
+**RL 측 서사(발견 경위·통제 대조표·원인 분해·교훈)와 업계 배포 관행 조사(2026-10-21)는 NeMo-RL 쪽에 있다** → `project_s/NeMo-RL/examples/configs/alpha/docs/KNOWN_ISSUES.md` "GDN 재귀 상태" 항목. 여기에는 Pai 서빙 쪽 처리만 남긴다.
 
 **요약**: NeMo-RL alpha 8-GPU GRPO KL 게이트(agentic iter2400)가 Generation KL 0.0042 로 FAIL(기준 0.002). 원인은 둘이다. ① vLLM 과 mcore 의 hidden state 차로 MoE top-8 경계 expert 가 갈린다(꼬리 오차, R3 로 해결). ② vLLM `mamba_ssm_cache_dtype` 기본 `"auto"` 가 GDN 재귀 상태를 모델 dtype(bf16)으로 저장해 디코드 토큰마다 반올림이 누적된다(vLLM 0.25.1 `model_executor/layers/mamba/mamba_utils.py:91-92`). 위치별 KL 은 bf16 상태에서 0–256 토큰 0.0024 → 3k–4k 0.0050 으로 커지고, R3 + fp32 상태에서 0.0013~0.0015 로 평탄하다(최종 0.0015/0.0013/0.0014 PASS). RL 레시피 기본값은 fp32 + R3 로 적용 완료.
 
-**영향 범위 — 미검증, 처리 결정은 다른 세션(사용자 지정 2026-10-06)**: 저장소의 vLLM 서빙 스크립트는 전부 이 값을 지정하지 않는다 = bf16 상태.
+**처리 (사용자 결정 2026-10-21: 배포·평가 기본값 fp32, 서빙 스크립트마다 플래그, 벤치도 fp32)** — `6ed19fc`. 2026-10-21 이전 서빙은 전부 bf16 상태였다.
 
-| 서빙 | 스크립트 | 가능한 영향 |
-|---|---|---|
-| 벤치 fleet (alpha) | `eval_sft/serve_alpha.sh` · `serve_fleet.sh` | SFT 벤치 전 계열(T1~T3 · SWE · TB 2.x · τ³ · RULER)이 bf16 상태로 측정됨. 오차는 디코드 길이에 비례해 쌓이므로 장문맥·장추론·멀티턴 에이전틱 티어가 상대적으로 더 영향받을 수 있다 |
-| 채팅 서빙 | `chat/serve_chat.sh` | 동일 |
-| SDG 교사 GLM-5.3-Flash (KDA 하이브리드) | `sdg/terminal/serve/serve_glm53.sh` · `sdg/ko_chat_v3/serve/serve_glm53_main1.sh` | vLLM 의 KDA 상태 dtype 도 같은 함수(`kda_state_dtype` → `_mamba_state_dtype`)로 정해진다 → ko_chat v3·SDG U/T/D 생성분이 bf16 상태 교사 출력일 가능성 |
-| prefix caching (`mamba-cache-mode align`) | `serve_alpha.sh PREFIX_CACHE=1` | 캐시된 GDN 상태도 같은 dtype |
+| 서빙 | 스크립트 | 10-21 이전 | 처리 |
+|---|---|---|---|
+| 벤치 fleet (alpha) | `eval_sft/serve_alpha.sh` (`serve_fleet.sh`·`probe_ckpt.sh`·`run_suite.sh` 가 호출) | SFT 벤치 전 계열(T1~T3 · SWE · TB 2.x · τ³ · RULER)과 NeMo-RL teacher τ³ 가 bf16 상태로 측정됨 | `SSM_STATE_DTYPE` 기본 float32. 이전 계열 재현만 `auto` |
+| 채팅 서빙 | `chat/serve_chat.sh` | bf16 | 같은 방식으로 fp32 |
+| SDG 교사 GLM-5.3-Flash (KDA 하이브리드) | `sdg/terminal/serve/serve_glm53.sh` · `sdg/ko_chat_v3/serve/serve_glm53_main1.sh` | **해당 없음 (2026-10-21 정정)** — vLLM 의 KDA 재귀 상태는 fp32 고정이다. `kda_state_dtype` 은 `mamba_ssm_cache_dtype` 을 받지 않고 `(conv dtype, torch.float32)` 를 반환한다 (glm_serve_venv 0.28.1rc1 `mamba_utils.py:133-139`, 0.25.1 `:119-125`). 10-06 기록은 이 경로를 잘못 읽었다. ko_chat v3·SDG U/T/D 생성분은 영향 없음 | 변경 없음 |
+| prefix caching (`mamba-cache-mode align`) | `serve_alpha.sh PREFIX_CACHE=1` (run_suite 기본) | bf16 상태, attention 블록 544 | fp32 상태, attention 블록 1056. **`prefix_cache_check.py` 재통과 전 — 벤치 fleet 사용 전에 게이트 필수 (미실행)** |
 
-**다른 세션 조사 제안**:
-1. 정량화 — 같은 프롬프트에서 vLLM 디코드 logprob 을 bf16/fp32 상태로 받아 teacher-forced 기준(HF 또는 mcore) 대비 위치별 KL. `analyze_kl.py` 의 위치 분해와 `eval_sft/prefix_cache_check.py`(teacher-forced 틀) 재사용 가능.
-2. 벤치 영향 — RULER s2·mk·SWE·TB 를 fp32 상태로 재측정해 bf16 수치와 대조, 기존 계열(iter200~2862) 연속성 처리 결정.
-3. 비용 — GDN 재귀 상태 메모리 2배(시퀀스당 18 레이어 ≈18 MiB → ≈36 MiB, `serve_alpha.sh` 주석의 블록당 18 MiB 와 같은 셈) → fleet 동시성·prefix cache 블록 수·처리량 실측.
-4. 스위치 — `vllm serve --mamba-ssm-cache-dtype float32` (vLLM 0.25.1 `engine/arg_utils.py:1188`).
+**fp32 fleet 검증 (미실행, GPU 승인 대기)** — 독립 검토(2026-10-21) 권고:
+1. V1 — 서버 1대 `PREFIX_CACHE=1` 기동. 로그에 `'mamba_ssm_cache_dtype': 'float32'` · `attention block size to 1056` · assert 없음.
+2. V2 — `prefix_cache_check.py --block 1056` 로 fp32 OFF ↔ ON 과 ON ↔ ON 대조군 (09-17 과 같은 TOOLS=1 · nemotron_v3 · 262144, 기준도 같다).
+3. V3 (선택) — 같은 프롬프트의 bf16/fp32 디코드 logprob 을 teacher-forced 기준과 위치별로 대조해 이득을 수치화.
+4. V5 — 16 세션 × 2턴 처리량 sweep 을 bf16 기준값(2턴 2.2 s, cached 800,768/802,633)과 대조.
+
+**비용 (계산·로그 역산, 실측 대기)**: 시퀀스당 상태 ≈18 → 36 MiB. vLLM 이 보고하는 최대 동시성은 max_len 40,960 에서 약 −6%, 262,144 에서 약 −1.4% 다. 디코드 대역폭은 GPU 당 12 요청 기준 +2~3% 로 추정한다. align 모드는 prefill 청크를 블록 배수로 내려 `MAX_BATCHED_TOKENS` 8192 중 7392 를 쓴다 (bf16 은 8160).
 
 **교훈**: 시간축으로 누적되는 상태(GDN·Mamba·KDA)는 **저장 dtype** 이 정확도를 좌우하고, 짧은 검증(teacher-forced prefill·10 토큰 디코드)은 이 누적을 못 본다 — 위치별 지표로 본다. 전문은 `project_s/NeMo-RL/examples/configs/alpha/docs/KNOWN_ISSUES.md`.
 

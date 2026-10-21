@@ -22,6 +22,7 @@ instruct 능력을 측정한다. 참조 좌표는 DSV4 post-training 표 + Nemot
 | SWE 인스턴스 이미지 (09-08) | **표준 정책** — 인스턴스별 이미지 500개를 상시 보존하지 않고 실행 후 정리(`docker_gc.sh` 기본). 레이어는 공유된다 (§7 디스크, `KNOWN_ISSUES` 09-08) |
 | 평가 대상 (09-13) | phase-1·2·3 계보 폐기 → 최종 단일 SFT(`SFT_FINAL_PLAN.md`). phase-1 최종 iter2448 은 **기준선**으로 잰다 |
 | 에이전틱 추론 조건 (09-14) | **도구를 쓰는 평가 = restore**(이전 턴 think 보존), **도구 없는 평가 = strip**(DSV4). SFT 데이터가 이 기준으로 만들어졌다. 에이전틱 fleet 는 reasoning 파서 `nemotron_v3` + 게이트 A5, SWE·TB-2 는 `tau_proxy` 로 복원 (§3.14) |
+| GDN 재귀 상태 dtype (10-21) | **fp32** 가 배포·평가 기본값 (사용자). `serve_alpha.sh`·`serve_chat.sh` 의 `SSM_STATE_DTYPE` 기본 float32 (`6ed19fc`). **10-21 이전 전 계열은 bf16 상태**(vLLM 기본 auto)로 측정됐다 — 그 계열 재현만 `SSM_STATE_DTYPE=auto`. fp32 + prefix caching 은 게이트 재통과 전 벤치 금지, 계열 연속성 처리는 미결 (STATUS 열린 결정). 근거 `KNOWN_ISSUES` 10-06 |
 
 ## 1. DSV4 테이블 26종 판정
 
@@ -176,6 +177,8 @@ RL 단계의 rollout 속도가 곧 학습 속도이므로 벤치 fleet 에서 �
 
 (top-1 일치 · mean exp\|Δlogprob\|.) 캐시 경로의 편차가 캐시 없는 경로·ON 끼리 대조군과 같은 수준이라 캐시가 오차를 더하지 않는다. `short` 가 양쪽 쌍에서 1.05 를 넘는 것은 서버 간 비결정(짧은 개방형 답변의 고엔트로피 위치)이라 참조값으로만 둔다. **free-running greedy 비교는 쓰지 않는다** — 동률 한 번 뒤집히면 이후가 전부 달라져 캐시 오류와 비결정을 구분 못 한다(1차 시도 실패). KV 용량은 mamba 블록 크기와 무관(544/4352/8704: 3.25M/3.19M/3.18M 토큰, OFF 3.27M) → 재사용 단위가 촘촘한 기본 544 채택.
 
+**정정 (2026-10-21)**: align 모드에서 `--mamba-block-size` 는 효과가 없다. vLLM 0.25.1 이 mamba 블록을 attention 블록으로 덮어쓴다 (`platforms/interface.py` `update_block_size_for_backend`). 위 4352·8704 서버도 실제로는 544 블록이었다 (적중 59,840 = 110 × 544). 따라서 대조군은 ON(544) ↔ ON(544) 서버 간 비교이고, "544 채택"은 고른 값이 아니라 강제된 값이다. 이 절의 수치는 **bf16 상태** 기준이다. fp32 상태(10-21~)는 attention 블록이 1056 이라 게이트를 `--block 1056` 으로 다시 통과해야 한다 (`KNOWN_ISSUES` 10-06).
+
 **16 세션 × 2턴 처리량(50K 프롬프트, 생성 ≤300, `eval_sft/results/sweep_{off,on}16.json`)**:
 
 | | 1턴(콜드) | 2턴(적중) | KV 피크 |
@@ -254,7 +257,7 @@ summary 에 넣으므로, 사본을 만들면 패널 목록이 두 배가 된다
 | 파일 | 역할 |
 |---|---|
 | **서빙** | |
-| `serve_alpha.sh` | 단일 vLLM 서버. `TOOLS=1` 이면 `--enable-auto-tool-choice --tool-call-parser ${TOOL_PARSER:-qwen3_xml}`. `PREFIX_CACHE=1`(기본, run_suite) → `--enable-prefix-caching --mamba-cache-mode align`, `MAMBA_BLOCK`·`MAX_BATCHED_TOKENS` 선택. `GPU_MEM_UTIL` 기본 **0.95**(2026-09-17 사용자 결정, 다음 기동부터; 이전 0.90) |
+| `serve_alpha.sh` | 단일 vLLM 서버. `TOOLS=1` 이면 `--enable-auto-tool-choice --tool-call-parser ${TOOL_PARSER:-qwen3_xml}`. `PREFIX_CACHE=1`(기본, run_suite) → `--enable-prefix-caching --mamba-cache-mode align`, `MAMBA_BLOCK`(align 모드에선 무효)·`MAX_BATCHED_TOKENS` 선택. `GPU_MEM_UTIL` 기본 **0.95**(2026-09-17 사용자 결정, 다음 기동부터; 이전 0.90). `SSM_STATE_DTYPE` 기본 **float32**(GDN 재귀 상태, 2026-10-21 사용자 결정; 이전 bf16) |
 | `serve_fleet.sh` / `lb_proxy.py` / `stop_fleet.sh` | N개 단일서버 + **세션 고정** 프록시(:8100, 신규 세션 최소 부하 배정, `GET /lb/stats`; 2026-09-17) / 정상 종료·GPU 회수 확인 |
 | `fleet_watchdog.py` | 백엔드 정지·사망 감시 → 같은 argv·env 재기동 + `fleet_logs/watchdog_events.jsonl` 기록. run_suite 와 별도로 띄운다: `python3 eval_sft/fleet_watchdog.py --ports 8000,…,8006` (lb_proxy 종료 시 자동 종료) |
 | `prefix_cache_check.py` | 하이브리드 prefix caching 게이트 — teacher-forced 다음 토큰 분포 대조(캐시 경로) + `/metrics` 적중 확인. fleet 에 켜기 전 필수 (§2.5 "추론 처리량") |
