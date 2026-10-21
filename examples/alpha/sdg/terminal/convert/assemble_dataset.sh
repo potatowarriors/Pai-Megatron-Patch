@@ -7,7 +7,7 @@
 # 산출:
 #   /home/work/Datasets/LL_datasets/posttraining/SFT/<name>/{train.jsonl, MANIFEST.json, FILTER_STATS.json}
 #   /home/work/Datasets/LL_preprocessed/v5/sft_packed_128k_terminal_pad16/terminal_terminus2_synth/  (bins, --keep-history-think)
-#   + verify_sft_bins PASS + render_check RENDER_CHECK.md  — 통과해야 블렌드 편입 (루트 CLAUDE.md 검증 규칙)
+#   + verify_sft_bins PASS + render_check RENDER_CHECK.md  — 통과해야 블렌드 편입 (사용자 공통 원칙 검증 규칙)
 set -uo pipefail
 RATIO="7:3"; NAME="alpha-SFT-Terminal-v1"; STRICT=""; CROOT=/home/work/vidsearch/tools/glm53/collect
 while [ $# -gt 0 ]; do case "$1" in

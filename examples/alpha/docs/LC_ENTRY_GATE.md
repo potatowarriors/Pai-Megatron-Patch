@@ -70,7 +70,7 @@ gdn-cp head-split의 rank-local 형상(전체 seq × heads/cp)을 재현하므�
 §4 결과가 **LC-A의 CP 값 선정 근거**가 된다 (CP=4 권장 기준선; 메모리 여유와 §2 처리량을
 함께 보고 결정). 128K가 selective recompute로 OOM이면 full recompute 재시도(러너북 §4 참조).
 
-**통과 시**: `feature/gdn-context-parallel`를 main에 머지하고 브랜치 삭제 (커밋 규칙 §2),
+**통과 시**: `feature/gdn-context-parallel`를 main에 머지하고 브랜치 삭제 (커밋 규칙 §1),
 실측치가 기입된 gdn_cp_port.md 갱신 커밋 포함. **실패 시**: LC-A를 32K CP=1로 겨우 시작할 수
 있는지(§4의 CP=1 32K 메모리 실측 추가 필요) 검토하되, LC-B(64K+)는 CP 수정 전까지 보류.
 

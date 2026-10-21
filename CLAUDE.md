@@ -174,7 +174,7 @@ submodule `tests/unit_tests/test_step_batch_size_schedule.py`, `test_muon_optimi
 
 승인 · 독립 검토 · 검증 · 공유 워킹트리 git(명시 pathspec·신원) · 기록 · 보고 문체는 사용자 공통 원칙 `/home/work/vidsearch/.claude-config/CLAUDE.md` 가 정본이다.
 검증 규칙 1 의 이 리포 선례: 2026-08-29 NGC modelopt 가 HF 로드를 깨뜨리자 `--skip-validate` 우회를 되돌리고 import 차단으로 복원 (`757fe93`).
-**세션 점검**: 이 세션 컨텍스트에 "공통 작업 원칙" 이 없으면 설정 위치(`CLAUDE_CONFIG_DIR`)가 빠진 세션이다. 작업 전에 사용자에게 알리고 그 파일을 Read 로 읽는다.
+**세션 점검**: 사용자 수준 CLAUDE.md(`/home/work/vidsearch/.claude-config/<노드>/CLAUDE.md`)의 내용이 이 세션 컨텍스트에 없으면 `CLAUDE_CONFIG_DIR` 없이 뜬 세션이다. 작업 전에 사용자에게 알리고 `/home/work/vidsearch/.claude-config/CLAUDE.md` 를 Read 로 읽는다.
 
 ### Commit & History Rules (adopted 2026-08-18)
 
@@ -190,6 +190,7 @@ submodule `tests/unit_tests/test_step_batch_size_schedule.py`, `test_muon_optimi
    (재생성법은 그 디렉토리 README). superproject의 서브모듈 포인터는 항상 **upstream
    커밋**을 가리켜야 하며, 로컬-전용 커밋 SHA를 기록하면 클론이 깨진다 —
    `git status`의 251125 `M` 표시는 설계상 정상이므로 절대 커밋하지 않는다.
+
 ### 메모리·문서 규칙 (adopted 2026-08-25)
 
 기록은 많을수록 좋지만 **매 세션 로드되는 것**은 작아야 한다. 기록의 양이 아니라 로드 시점이 비용이다.
