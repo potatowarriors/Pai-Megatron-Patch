@@ -12,6 +12,7 @@
 #      hermes 계열은 <tool_call>{"name":...} JSON 을 기대해 어긋난다 (KNOWN_ISSUES 2026-08-30).
 #   2. 단일 GPU · DP=1               : 1인 사용. 벤치의 8-레플리카 fleet 불필요.
 #   3. 보수적 메모리 예산            : 40GB A100 슬라이스에 30GB 가중치가 들어간다.
+# 공통 — GDN 재귀 상태 fp32 (SSM_STATE_DTYPE 기본 float32): 배포 기본값 (2026-10-21 사용자 결정, 근거는 serve_alpha.sh).
 #
 # 사용: bash chat/serve_chat.sh [HF_CKPT] [MAX_LEN] [PORT] [GPU]
 set -euo pipefail
@@ -35,10 +36,12 @@ export TOKENIZERS_PARALLELISM=false
 export NCCL_IB_DISABLE=1 NCCL_SOCKET_IFNAME=eth0 GLOO_SOCKET_IFNAME=eth0
 
 echo "[chat] ckpt=$CKPT"
-echo "[chat] gpu=$GPU port=$PORT max_len=$MAX_LEN name=$NAME"
+SSM_STATE_DTYPE="${SSM_STATE_DTYPE:-float32}"
+echo "[chat] gpu=$GPU port=$PORT max_len=$MAX_LEN name=$NAME ssm_state=$SSM_STATE_DTYPE"
 exec $VENV/bin/vllm serve "$CKPT" \
   --served-model-name "$NAME" alpha \
   --trust-remote-code \
+  --mamba-ssm-cache-dtype "$SSM_STATE_DTYPE" \
   --reasoning-parser nemotron_v3 \
   --enable-auto-tool-choice \
   --tool-call-parser "${TOOL_PARSER:-qwen3_xml}" \

@@ -52,10 +52,13 @@ fi
 # align 은 chunked prefill(기본 ON) 필수. 에이전틱은 턴마다 5.7만 토큰 접두사를 다시 보내므로 prefix caching 없이는
 # 처리 토큰의 99% 가 재-prefill 이었다. 세션 고정 라우팅(lb_proxy)과 함께 써야 적중한다.
 #   PREFIX_CACHE=1        → --enable-prefix-caching --mamba-cache-mode align
-#   MAMBA_BLOCK=<N>       → --mamba-block-size N (8 의 배수). 기본은 attention 블록(544). 블록마다 GDN 상태(18 레이어 ≈ 18 MiB)를
-#                           스냅샷하므로 작을수록 재사용은 촘촘하고 KV 풀 소모는 크다 — 선택 근거는 SFT_BENCHMARKS.md §2.5.
-#   MAX_BATCHED_TOKENS=N  → --max-num-batched-tokens N (기본 8192; 5.7만 프롬프트 prefill 스텝 수를 줄인다)
+#   MAMBA_BLOCK=<N>       → --mamba-block-size N. **align 모드에서는 효과가 없다** — vLLM 0.25.1 이 mamba 블록을 attention
+#                           블록으로 덮어쓴다 (`platforms/interface.py` `update_block_size_for_backend`, 2026-10-21 확인).
+#                           attention 블록은 GDN 상태 페이지에 맞춰진다: bf16 상태 544 · fp32 상태 1056 토큰 (실측 로그).
+#   MAX_BATCHED_TOKENS=N  → --max-num-batched-tokens N (기본 8192; 5.7만 프롬프트 prefill 스텝 수를 줄인다). align 모드는
+#                           N ≥ attention 블록을 assert 하고 prefill 청크를 블록 배수로 내린다 (fp32: 8192 중 7392 사용).
 # 정확도 게이트: eval_sft/prefix_cache_check.py (ON/OFF 로짓 대조 + 적중 확인) 를 통과한 뒤에만 fleet 에 켠다.
+# 2026-09-17 PASS 는 bf16 상태 기준이다 — fp32 상태(아래)로 재통과(`--block 1056`) 전에는 벤치 fleet 을 띄우지 않는다.
 # GPU 메모리 비율 (2026-09-17 사용자 결정: 0.90 → 0.95, 다음 기동부터). main1 GPU 는 fleet 전용이라 다른 점유가 없고, KV 풀이
 # 37.7 → 약 41.7 GiB 로 늘어 동시 세션 여유가 커진다. 0.90 이 필요하면(같은 GPU 에 프로브·채팅 서버 동거 등) GPU_MEM_UTIL=0.90.
 GPU_MEM_UTIL="${GPU_MEM_UTIL:-0.95}"
@@ -65,9 +68,15 @@ if [ "${PREFIX_CACHE:-0}" = "1" ]; then
   [ -n "${MAMBA_BLOCK:-}" ] && PC_FLAGS="$PC_FLAGS --mamba-block-size $MAMBA_BLOCK"
 fi
 [ -n "${MAX_BATCHED_TOKENS:-}" ] && PC_FLAGS="$PC_FLAGS --max-num-batched-tokens $MAX_BATCHED_TOKENS"
-echo "[serve] ckpt=$CKPT max_len=$MAX_LEN DP=$DP port=$PORT tools=${TOOLS:-0} reasoning=${REASONING_PARSER:-off} prefix_cache=${PREFIX_CACHE:-0}${MAMBA_BLOCK:+/block$MAMBA_BLOCK}${MAX_BATCHED_TOKENS:+ batched=$MAX_BATCHED_TOKENS} mem_util=$GPU_MEM_UTIL cache=$VLLM_CACHE_ROOT(${CACHE_AVAIL_GB}GB free)"
+# GDN 재귀 상태 dtype (2026-10-21 사용자 결정: 배포·평가 기본 fp32). vLLM 0.25.1 기본 auto 는 상태를 모델 dtype(bf16)으로
+# 저장해 디코드 토큰마다 반올림이 쌓인다 — RL 롤아웃에서 위치별 KL 이 4K 토큰까지 2배로 커짐을 실측했다 (KNOWN_ISSUES 10-06).
+# Qwen3.5 이후 Qwen·Nemotron 3 도 fp32 가 배포 기본값이다. 시퀀스당 상태 ≈ 18 → 36 MiB.
+# 2026-10-21 이전 벤치는 bf16 상태로 측정됐다 — 그 계열을 재현할 때만 SSM_STATE_DTYPE=auto.
+SSM_STATE_DTYPE="${SSM_STATE_DTYPE:-float32}"
+echo "[serve] ckpt=$CKPT max_len=$MAX_LEN DP=$DP port=$PORT tools=${TOOLS:-0} reasoning=${REASONING_PARSER:-off} prefix_cache=${PREFIX_CACHE:-0}${MAMBA_BLOCK:+/block$MAMBA_BLOCK}${MAX_BATCHED_TOKENS:+ batched=$MAX_BATCHED_TOKENS} ssm_state=$SSM_STATE_DTYPE mem_util=$GPU_MEM_UTIL cache=$VLLM_CACHE_ROOT(${CACHE_AVAIL_GB}GB free)"
 exec $VENV/bin/vllm serve "$CKPT" \
   $TOOL_FLAGS $REASON_FLAGS $PC_FLAGS \
+  --mamba-ssm-cache-dtype "$SSM_STATE_DTYPE" \
   --served-model-name alpha \
   --trust-remote-code \
   --tensor-parallel-size 1 \

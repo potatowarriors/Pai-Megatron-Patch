@@ -56,6 +56,7 @@ OpenWebUI `WEBUI_AUTH=false` 와 같은 노출 수준이다.
 |---|---|---|---|
 | reasoning 파서 | off | **`nemotron_v3`** | UI 가 사고 과정을 접어서 보여주려면 별도 필드로 분리돼야 한다 |
 | tool 파서 | `qwen3_xml` (TOOLS=1 일 때만) | `qwen3_xml` 상시 | 벤치와 같은 플래그. LibreChat 은 도구를 보내지 않으므로 발동하지 않는다 |
+| GDN 재귀 상태 | fp32 (`SSM_STATE_DTYPE`) | fp32 (`SSM_STATE_DTYPE`) | 같다 — 배포 기본값 (2026-10-21 사용자 결정, `docs/KNOWN_ISSUES.md` 10-06) |
 | 레플리카 | DP 8 (H100 fleet) | 단일 GPU | 1인 사용 |
 | GPU | sub1 H100 | main1 GPU3 (40GB A100 슬라이스) | 벤치와 자원 분리 |
 | `--max-num-seqs` | 기본 | 8 | 1인 사용. KV 여유는 충분하다(창의 10배) |

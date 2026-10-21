@@ -16,6 +16,7 @@
 #   STAGES: 쉼표 목록 (t1,t3,agentic,t2 · 세부 swe,tb2,tau). 기본 전부.
 # 환경변수:
 #   PREFIX_CACHE(기본 1) / MAMBA_BLOCK / MAX_BATCHED_TOKENS   serve_alpha.sh 로 전달(하이브리드 prefix caching, 2026-09-17 게이트 PASS 후 기본 ON)
+#   SSM_STATE_DTYPE(기본 float32)   serve_alpha.sh 로 전달 — GDN 재귀 상태 dtype (2026-10-21 사용자 결정). auto = 10-21 이전 bf16 계열 재현
 #   SWE_RESUME=1   SWE 완료분 건너뛰고 재개 (run_swe.sh)
 #   GPUS       서빙에 쓸 GPU (기본 0~7 전부). GPU0 은 2026-08-29 좀비 누수로 한시 제외했다가
 #              2026-08-30 회수 확인 후 복귀 (78.6GiB 여유, bf16 matmul 222 TFLOP/s).
