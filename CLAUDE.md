@@ -170,60 +170,38 @@ submodule `tests/unit_tests/test_step_batch_size_schedule.py`, `test_muon_optimi
 - **DO** modify `megatron_patch/training.py` or add patches.
 - **Exception**: core infrastructure not exposed for patching (e.g. the num-microbatches calculator) may be patched directly — see [Custom Training Features](#custom-training-features-alpha-stage1) for the precedent.
 
-### 검증 규칙 (adopted 2026-08-29)
+### 승인·검증·보고 — 공통 원칙 (2026-10-21 이관)
 
-검증을 거치지 않은 결과는 믿을 수 없다. 검증을 건너뛰어 얻은 "성공"은 잠재 문제를 안은 채 다음 단계로 넘기는 것이다.
-
-1. **검증이 깨지면 검증을 고친다 — 절대 건너뛰지 않는다.** 검증 스크립트·게이트가 환경 문제(라이브러리 몽키패치,
-   버전 충돌 등)로 실패하면 그 원인을 제거해 검증을 복원한다. `--skip-validate`류 우회 플래그, 검증 단계 주석 처리,
-   게이트 임계 완화로 "해결"하지 않는다. 우회 플래그는 **이미 통과한 산출물을 재사용**할 때만 쓴다.
-   선례: 2026-08-29 NGC modelopt가 HF 로드를 깨뜨리자 `--skip-validate`로 우회하던 것을 되돌리고 modelopt import
-   차단으로 검증을 복원 (`757fe93`).
-2. **모든 작업은 검증을 완료한 뒤 진행한다.** 코드·설정·데이터·체크포인트 어느 단계든 "검증 없이 그냥 진행"은 없다.
-   검증 수단이 없으면 먼저 **검증 방법을 제시**하고(단위 테스트, ON/OFF differential, smoke run, 수치 게이트 등)
-   완료한 뒤 다음 단계로 간다. 보고에는 무엇을 어떻게 검증했고 어떤 수치가 나왔는지 그대로 적는다
-   (예: `14181/14181 matched, ppl 5.91 PASS`). 실패·부분 통과·미실행을 통과처럼 쓰지 않는다.
+승인 · 독립 검토 · 검증 · 공유 워킹트리 git(명시 pathspec·신원) · 기록 · 보고 문체는 사용자 공통 원칙 `/home/work/vidsearch/.claude-config/CLAUDE.md` 가 정본이다.
+검증 규칙 1 의 이 리포 선례: 2026-08-29 NGC modelopt 가 HF 로드를 깨뜨리자 `--skip-validate` 우회를 되돌리고 import 차단으로 복원 (`757fe93`).
+**세션 점검**: 이 세션 컨텍스트에 "공통 작업 원칙" 이 없으면 설정 위치(`CLAUDE_CONFIG_DIR`)가 빠진 세션이다. 작업 전에 사용자에게 알리고 그 파일을 Read 로 읽는다.
 
 ### Commit & History Rules (adopted 2026-08-18)
 
 이 저장소의 커밋 이력 관리 규칙. Claude Code 세션에서도 동일하게 적용한다.
 
-1. **작업 단위 즉시 커밋.** 기능 하나가 완료·검증되면 그 자리에서 커밋한다.
-   여러 주 작업을 한 번에 몰아 커밋하지 않는다. 커밋 메시지는
-   `type(scope): summary` (feat/fix/docs/chore/perf/experiment/test) 관례를 따른다.
-2. **브랜치 규율.** 실험은 `experiment/*` 브랜치에서. 결론이 나면 — 기각이어도 —
+즉시 커밋·push(원격이 유일한 백업)와 공유 워킹트리 규율(명시 pathspec·HEAD 이동 금지)은 공통 원칙을 따른다. 아래는 이 리포 고유 규칙이다.
+
+1. **브랜치 규율.** 실험은 `experiment/*` 브랜치에서. 결론이 나면 — 기각이어도 —
    기록 커밋으로 main에 흡수하고 브랜치는 삭제한다 (`TESTED & REJECTED` 커밋 선례).
    검증 대기 중인 기능 브랜치(`feature/*`)만 장기 유지하되 main 위로 주기적 rebase.
-3. **서브모듈 수정 시 vendored patch 동시 갱신.** `backends/megatron/Megatron-LM-251125`
+2. **서브모듈 수정 시 vendored patch 동시 갱신.** `backends/megatron/Megatron-LM-251125`
    를 건드린 커밋에는 `backends/submodule_patches/` 재생성이 반드시 포함되어야 한다
    (재생성법은 그 디렉토리 README). superproject의 서브모듈 포인터는 항상 **upstream
    커밋**을 가리켜야 하며, 로컬-전용 커밋 SHA를 기록하면 클론이 깨진다 —
    `git status`의 251125 `M` 표시는 설계상 정상이므로 절대 커밋하지 않는다.
-4. **main 커밋 후 즉시 push.** 원격(origin)이 유일한 백업이다. 로컬에만 수십 커밋을
-   쌓아두지 않는다.
-5. **공유 워킹트리.** 여러 Claude 세션이 같은 워킹트리에서 동시에 커밋한다. 커밋은 항상
-   **명시 pathspec**(`git add <파일>`), `git add .`/`-A`/`commit -a` 금지. 커밋 전 `git status`로
-   staged에 내 파일만 있는지 확인. `git reset`류 HEAD 이동 금지(잘못 커밋했으면 revert/수정 커밋).
-   서브모듈 포인터가 staged면 반드시 unstage. 2026-08-23 사고(타 세션 커밋 낙마·포인터 오커밋)의 교훈.
-
 ### 메모리·문서 규칙 (adopted 2026-08-25)
 
 기록은 많을수록 좋지만 **매 세션 로드되는 것**은 작아야 한다. 기록의 양이 아니라 로드 시점이 비용이다.
 
-1. **한 사실은 한 곳에.** 우선순위 docs > CLAUDE.md/rules > auto-memory. 다른 곳에는 링크만.
+1. **한 사실은 한 곳에** (공통 원칙). 사고 서사·상태의 위치는 아래와 같다.
 2. **CLAUDE.md는 지침만.** 루트 ≤150줄, `examples/alpha/CLAUDE.md` ≤300줄. 사고 서사는 `examples/alpha/docs/KNOWN_ISSUES.md`에
-   쓰고 CLAUDE.md 함정 표에는 **한 줄**. 상대 시점("이번 세션") 금지, 날짜는 절대 표기.
-3. **상태는 `examples/alpha/docs/STATUS.md`에 커밋한다.** auto-memory에 진행 상태를 쓰지 않는다 — 메모리는 노드·컨테이너별이라
-   다른 세션이 못 보고 갱신 규율이 없어 모순이 쌓인다. 메모리는 사용자 피드백·선호 같은 진짜 개인화 정보에만.
+   쓰고 CLAUDE.md 함정 표에는 **한 줄**.
+3. **상태는 `examples/alpha/docs/STATUS.md`에 커밋한다.**
 4. **새 문서는 `examples/alpha/docs/README.md`에 한 줄 등록.** CLAUDE.md에 문서 요약을 쓰지 않는다. "단일 진입점" 문서를
    새로 만들기 전에 기존 문서에 절을 추가할 수 있는지 먼저 본다.
 5. **스테이지 경계마다 정리.** 두 스테이지 이상 지난 Known Issue는 `docs/archive/`로 옮기고 함정 표에서 제거. STATUS.md의
    끝난 트랙은 "완료" 절로 내린다.
-
-### 보고 문체
-
-- 결론 먼저, 근거는 뒤에. 한 문장에 한 주장. 괄호 속 부연 최소화, 수치 나열은 표로.
-- 긴 합성 명사구("A + B + C 정렬 스위치")를 피하고 풀어 쓴다. 보고는 의사결정 자료다 — 다시 읽게 만들면 요약의 의미가 없다.
 
 ## References
 
