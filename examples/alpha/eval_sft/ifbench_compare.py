@@ -70,6 +70,28 @@ def run_name(result_dir: Path) -> str:
     return result_dir.parent.name if result_dir.name == "alpha" else result_dir.name
 
 
+def nondeterministic_keys(raw: dict[str, dict]) -> set[str]:
+    """공식 검사기가 무작위 값으로 지시를 만드는 행 — 같은 kwargs 로 시드만 바꿔 build_description 이 달라지면 채점이 실행마다 달라진다.
+
+    알려진 사례: key 286 `repeat:repeat_span` 은 n_start=0 을 `if not n_start` 가 없음으로 보아 무작위 시작 위치를 쓴다 (ifbench_utils 머리말).
+    이 행은 lm_eval 기록값과 재채점 값이 다를 수 있어 일치 검사에서 허용하고 수를 보고한다. 나머지 행은 정확히 같아야 한다.
+    """
+    reg = U._ifbench().instructions_registry
+    state = random.getstate()
+    out = set()
+    for key, row in raw.items():
+        for index, iid in enumerate(row["instruction_id_list"]):
+            kw = {k: v for k, v in row["kwargs"][index].items() if v is not None}
+            descs = set()
+            for seed in range(4):
+                random.seed(seed)
+                descs.add(str(reg.INSTRUCTION_DICT[iid](iid).build_description(**kw)))
+            if len(descs) > 1:
+                out.add(key)
+    random.setstate(state)
+    return out
+
+
 def rescore(resps: dict[str, list[str]], raw: dict[str, dict]) -> dict[str, dict]:
     per = {}
     for key, texts in resps.items():
@@ -151,6 +173,8 @@ def main() -> int:
     subsets["ood"] = sorted(k for k in raw if not set(raw[k]["instruction_id_list"]) & overlap)
     subsets["ood_nontrivial"] = sorted(set(subsets["ood"]) & set(subsets["nontrivial"]))
     print("subsets: " + " · ".join(f"{k} {len(v)}" for k, v in subsets.items()) + f"  (ood excludes {sorted(overlap)})")
+    nondet = nondeterministic_keys(raw)
+    print(f"nondeterministic official checker rows (match check tolerated, re-scored value used): {sorted(nondet)}")
 
     names, pers, valid = [], [], {}
     for rd in map(Path, a.result_dirs):
@@ -158,16 +182,18 @@ def main() -> int:
         if set(resps) != set(raw):
             raise SystemExit(f"{rd}: samples cover {len(resps)} keys, expected {len(raw)}")
         per = rescore(resps, raw)
-        mism = sum(abs(mean(per[k]["loose"]) - logged[k]) > 1e-9 for k in raw)
-        if mism:
-            raise SystemExit(f"{rd}: re-score differs from logged per-doc loose on {mism} prompts")
+        mism = [k for k in raw if abs(mean(per[k]["loose"]) - logged[k]) > 1e-9]
+        hard = [k for k in mism if k not in nondet]
+        if hard:
+            raise SystemExit(f"{rd}: re-score differs from logged per-doc loose on {len(hard)} deterministic prompts {hard[:10]}")
         name = run_name(rd)
         if name in valid:
             raise SystemExit(f"duplicate checkpoint name {name!r} ({rd}) — give distinct run directories")
         names.append(name)
         pers.append(per)
         valid[name] = invalid_reasons(task_res)
-        print(f"{name}: {f.name} · re-score = logged on {len(raw)}/{len(raw)} prompts")
+        print(f"{name}: {f.name} · re-score = logged on {len(raw) - len(mism)}/{len(raw)} prompts"
+              + (f" (differs only on nondeterministic rows {mism}: " + ", ".join(f"logged {logged[k]:.3f} vs re-scored {mean(per[k]['loose']):.3f}" for k in mism) + ")" if mism else ""))
 
     k = len(next(iter(pers[0].values()))["loose"])
     out = {"subsets": {s: len(v) for s, v in subsets.items()}, "checkpoints": {}, "primary": [], "sensitivity": []}
