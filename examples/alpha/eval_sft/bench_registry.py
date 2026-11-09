@@ -25,6 +25,8 @@ HEADLINE: dict[str, tuple[str | tuple[str, ...], str]] = {
     "aime25_aa":              ("exact_match",          "aime25"),
     "hmmt_feb_2025_aa":       ("exact_match",          "hmmt_feb_2025"),
     "ifeval_aa":              ("prompt_level_strict_acc", "ifeval_prompt_strict"),
+    # IFBench (2026-11-09): 대표 = prompt-level loose — IFBench 저자 권고 지표. strict 는 결과 JSON 에 있다.
+    "ifbench_aa":             ("prompt_level_loose_acc", "ifbench_prompt_loose"),
     # ── T2 롱컨텍스트 (Reasoning-Off)
     "ruler_niah_single_1_aa":   (("65536", "131072", "258048"), "ruler_single_1_avg"),
     "ruler_niah_single_2_aa":   (("65536", "131072", "258048"), "ruler_single_2_avg"),
@@ -62,7 +64,7 @@ HEADLINE: dict[str, tuple[str | tuple[str, ...], str]] = {
 
 # 표 컬럼 순서
 TASK_ORDER = [
-    "mmlu_pro_aa", "gpqa_diamond_aa", "aime25_aa", "hmmt_feb_2025_aa", "ifeval_aa",
+    "mmlu_pro_aa", "gpqa_diamond_aa", "aime25_aa", "hmmt_feb_2025_aa", "ifeval_aa", "ifbench_aa",
     "ruler_niah_single_1_aa", "ruler_niah_single_2_aa",
     "ruler_niah_multikey_1_aa", "ruler_niah_multivalue_aa",
     "ruler_niah_single_1_512k", "ruler_niah_single_2_512k",
@@ -75,11 +77,17 @@ TASK_ORDER = [
 
 # 측정이 성립했는지 보는 진단 지표 (점수가 아니라 **게이트**).
 # 프론티어 규약: 점수만 보면 측정 실패가 오답으로 위장된다 (NeMo-Skills `no_answer`).
-DIAGNOSTIC = ("no_answer", "think_closed", "gen_chars", "samples_k", "empty")
+DIAGNOSTIC = ("no_answer", "think_closed", "gen_chars", "samples_k", "empty",
+              "checker_error", "short_answer", "empty_answer")
 
 # 무효 판정 임계
 NO_ANSWER_MAX = 0.10      # 추출 실패율 — 넘으면 하니스/서빙 결함 의심
 THINK_CLOSED_MIN = 0.50   # 사고 마감률 — 밑돌면 예산 부족 또는 모델 미성숙
+# 퇴화 출력 (2026-11-09, IFBench 적대적 검토): IFBench 검사기는 빈 참이 많아 "Yes" 만 답해도 loose 38.4 를 준다.
+#   short_answer = 사고를 닫은 답이 5단어 미만인 응답 비율 — 공식 표본 응답 5.1%, "."·"Ok."·"Yes" 100%. 지시가 단답을 요구하는
+#   유형(format:options 6건 = 2%)이 있어 여유를 둔다. empty_answer = 사고를 닫았는데 답이 빈 비율.
+SHORT_ANSWER_MAX = 0.25
+EMPTY_ANSWER_MAX = 0.05
 
 
 def get(task_res: dict, metric: str) -> float | None:
@@ -121,4 +129,10 @@ def invalid_reasons(task_res: dict) -> list[str]:
         out.append(f"추출실패 {na * 100:.0f}%>{NO_ANSWER_MAX * 100:.0f}%")
     if tc is not None and tc < THINK_CLOSED_MIN:
         out.append(f"사고마감 {tc * 100:.0f}%<{THINK_CLOSED_MIN * 100:.0f}%")
+    sa = get(task_res, "short_answer")
+    ea = get(task_res, "empty_answer")
+    if sa is not None and sa > SHORT_ANSWER_MAX:
+        out.append(f"단답 {sa * 100:.0f}%>{SHORT_ANSWER_MAX * 100:.0f}%")
+    if ea is not None and ea > EMPTY_ANSWER_MAX:
+        out.append(f"빈답 {ea * 100:.0f}%>{EMPTY_ANSWER_MAX * 100:.0f}%")
     return out

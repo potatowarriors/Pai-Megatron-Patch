@@ -1,0 +1,65 @@
+# IFBench (AllenAI, 고정 데이터 294 프롬프트 · 지시 57종) — AA/Nemotron 규약, ifeval_aa 와 같은 생성 설정. 반복 8 (Nemotron 3 Ultra IFBench 8).
+# 2026-11-09 추가 (NeMo-RL General teacher 평가): IFEval 은 RL 보상 검사기와 같은 유형이라 분포 안이다. IFBench 지시 id 는 General 블렌드에
+# 0종이지만, 문장 템플릿이 같은 유형 2종 · 비슷한 유형 6종이 있다 (ifbench_utils.SAME_TEMPLATE_TYPES · SIMILAR_TYPES).
+# 데이터는 공식 리포 고정 커밋 c6767a19 의 data/IFBench_test.jsonl (NeMo-Gym 과 같은 커밋, upstream main 은 이후 300 개로 늘었다).
+# 채점은 공식 검사기 그대로 — 사고 구간 제거·kwargs 원본 읽기·NLTK 오프라인·검사기 예외=미이행 넷만 다르다 (ifbench_utils.py 머리말).
+# 모듈 import 때 사전 점검이 돈다 (sha256 · 공식 표본 재채점 294/294 · 공식 단위시험 49 · 합성 준수 답). 실패하면 생성 전에 멈춘다.
+# 대표 지표: prompt_level_loose_acc — IFBench 저자 권고 ("In the paper we generally report the prompt-level loose accuracy").
+# strict 도 같이 남긴다. Nemotron 의 "IFBench (prompt)" 가 strict 인지 loose 인지는 확인하지 못했다.
+# 단답 바닥값이 높다 ("Yes" 38.4 · "Ok." 34.0 · "." 26.5) — 체크포인트 비교는 eval_sft/ifbench_compare.py (비자명·OOD 부분 · 짝 SE).
+# **단독 실행** (TASKS=ifbench_aa): 모듈이 nltk 전역 상태를 바꾼다 — run_tier1.sh 기본 TASKS 에 넣지 않는다.
+task: ifbench_aa
+dataset_path: json
+dataset_kwargs:
+  data_files:
+    test: /home/work/vidsearch/tools/ifbench/IFBench/data/IFBench_test.jsonl
+test_split: test
+output_type: generate_until
+num_fewshot: 0
+doc_to_text: prompt
+doc_to_target: 0
+process_results: !function ifbench_utils.process_results_ifbench
+filter_list:
+  - name: avg
+    filter:
+      - function: take_first_k
+        k: 8
+generation_kwargs:
+  until: []
+  do_sample: true
+  temperature: 1.0
+  top_p: 0.95
+  max_gen_toks: 32768
+  seed: null
+  skip_special_tokens: false
+repeats: 8
+metric_list:
+  - metric: prompt_level_loose_acc
+    aggregation: mean
+    higher_is_better: true
+  - metric: prompt_level_strict_acc
+    aggregation: mean
+    higher_is_better: true
+  - metric: inst_level_loose_acc
+    aggregation: !function aa_utils.agg_inst_level_acc
+    higher_is_better: true
+  - metric: inst_level_strict_acc
+    aggregation: !function aa_utils.agg_inst_level_acc
+    higher_is_better: true
+  - metric: checker_error
+    aggregation: mean
+    higher_is_better: false
+  - metric: short_answer
+    aggregation: mean
+    higher_is_better: false
+  - metric: empty_answer
+    aggregation: mean
+    higher_is_better: false
+  - metric: think_closed
+    aggregation: mean
+    higher_is_better: true
+  - metric: samples_k
+    aggregation: mean
+    higher_is_better: true
+metadata:
+  version: 1.0
