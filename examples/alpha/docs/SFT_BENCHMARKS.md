@@ -522,6 +522,7 @@ lm_eval 내장 태스크를 쓰지 않는다. 내장은 base 모델용이라 채
 | `mmlu_pro_aa` | 12,032 | 1 | 0-shot, AA 프롬프트(보기 개수 가변 — 3~10), 8단 폴백 추출 |
 | `gpqa_diamond_aa` | 198 | 8 | 0-shot, AA 프롬프트, **보기 순열 결정론적**(내장은 시드 없는 shuffle → 재현 불가) |
 | `ifeval_aa` | 541 | 8 | 사고 구간 제거 후 채점, 예산 1280→32768. 지시 검사기는 내장 그대로 |
+| `ifbench_aa` (2026-11-09) | 294 | 8 | 내장 없음. AllenAI 공식 검사기 @ c6767a19 (NeMo-Gym 과 같은 고정 커밋). **단독 실행** (`TASKS=ifbench_aa`) — 아래 IFBench 절 |
 | `aime25_aa` | 30 | 16 | boxed 프롬프트, **avg@16 실제 작동** |
 | `hmmt_feb_2025_aa` | 30 | 16 | 동일 |
 
@@ -534,6 +535,15 @@ lm_eval 내장 태스크를 쓰지 않는다. 내장은 base 모델용이라 채
 3. **`no_answer`·`think_closed` 를 함께 보고.** 점수만 보면 측정 실패가 오답으로 위장된다
    (NeMo-Skills 규약). 판정은 `eval_sft/summarize.py` — `no_answer>10%` 또는
    `think_closed<50%` 면 **무효**로 판정하고 기록을 막는다.
+
+**IFBench (`ifbench_aa`, 2026-11-09 추가 — NeMo-RL General teacher 평가)**: IFEval 은 RL 보상 검사기와 같은 유형이라 RL 뒤에는 포화(step 640 90.4)되고
+분포 안 측정이 된다. IFBench 는 지시 57종(고정 데이터 294 프롬프트)으로 일반화를 잰다 — 지시 id 는 General 블렌드와 0종이지만 템플릿이 같은 2종 ·
+비슷한 6종이 있다. 정본 설명은 `eval_sft/tasks/ifbench_utils.py` 머리말이다. 요점:
+- 대표 지표 prompt-level loose (IFBench 저자 권고), strict 병기. 의존성 `/home/work/vidsearch/tools/ifbench` (IFBench 고정 커밋 · emoji 2.16 · syllapy · nltk_data) — 시스템 python 무변경.
+- import 때 사전 점검 (sha256 9 · nltk≥3.9 · 공식 표본 재채점 294/294 · 공식 단위시험 49 · 합성 준수 답 17). 실패하면 생성 전에 멈춘다. 사용자 site 의 nltk 3.10.3 이 필요하다 (시스템 nltk 3.7 이면 멈춘다).
+- **검사기 빈 참이 많다**: "Yes" 만 답해도 loose 38.4 · "Ok." 34.0 · "." 26.5 (공식 표본 응답 29.9). 그래서 퇴화 판정 `short_answer>25%` · `empty_answer>5%` 를 무효로 둔다 (`bench_registry`).
+- 체크포인트 비교는 `eval_sft/ifbench_compare.py <결과 디렉토리>...` — 주 비교(전체·loose·프롬프트 짝 SE·쌍 수 Bonferroni)와 판정 없는 민감도 분석(비자명 181 · OOD 250 · 둘 다 사고 마감).
+- 적대적 검토 (Opus xhigh, 2026-11-09): 하니스 1차 보완 필요 → 2차 신뢰 가능, 비교 스크립트 3차 보완 필요(이름 충돌) → 4차 신뢰 가능.
 
 **구 avg@16 버그 (2026-08-30 발견·수정)**: `repeats: k` 는 동일 Instance 를 k번 복제해
 `resps` 에 k개를 쌓는데, `filter_list` 를 지정하지 않으면 lm_eval 이 기본 `take_first` 를

@@ -66,6 +66,7 @@ def load_run(result_dir: Path):
 
 def run_name(result_dir: Path) -> str:
     """lm_eval 은 results/<RUN_TAG>/alpha/ 에 쓴다 — `.../alpha` 를 받으면 run tag 를 이름으로 쓴다."""
+    result_dir = result_dir.resolve()
     return result_dir.parent.name if result_dir.name == "alpha" else result_dir.name
 
 
