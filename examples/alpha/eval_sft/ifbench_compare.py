@@ -53,14 +53,20 @@ def load_run(result_dir: Path):
         r = d["filtered_resps"][0]
         resps[key] = [str(x) for x in r] if isinstance(r, list) else [str(r)]
         logged[key] = d["prompt_level_loose_acc"]
-    task_res = None
-    for jf in sorted(result_dir.rglob("results_*.json"), key=lambda p: p.stat().st_mtime):
-        res = json.loads(jf.read_text()).get("results", {})
-        if "ifbench_aa" in res:
-            task_res = res["ifbench_aa"]
-    if task_res is None:
-        raise SystemExit(f"no ifbench_aa results JSON under {result_dir}")
-    return resps, logged, task_res, files[-1]
+    # 같은 런의 결과 JSON 을 파일 이름의 타임스탬프로 짝짓는다 (mtime 으로 따로 고르면 끊긴 런의 파일이 섞일 수 있다)
+    ts = files[-1].name[len("samples_ifbench_aa_"):-len(".jsonl")]
+    jf = files[-1].with_name(f"results_{ts}.json")
+    if not jf.exists():
+        raise SystemExit(f"{files[-1]}: matching {jf.name} not found")
+    res = json.loads(jf.read_text()).get("results", {})
+    if "ifbench_aa" not in res:
+        raise SystemExit(f"{jf}: no ifbench_aa result")
+    return resps, logged, res["ifbench_aa"], files[-1]
+
+
+def run_name(result_dir: Path) -> str:
+    """lm_eval 은 results/<RUN_TAG>/alpha/ 에 쓴다 — `.../alpha` 를 받으면 run tag 를 이름으로 쓴다."""
+    return result_dir.parent.name if result_dir.name == "alpha" else result_dir.name
 
 
 def rescore(resps: dict[str, list[str]], raw: dict[str, dict]) -> dict[str, dict]:
@@ -94,7 +100,6 @@ def score(per, keys, metric="loose"):
 
 def checkpoint_row(per, keys_all, keys_nontrivial, k):
     answers = [a for key in keys_all for a in per[key]["answers"]]
-    words = [w for a in answers for w in a.lower().split()]
     n_resp = len(keys_all) * k
     long_n = sum(per[key]["long_n"] for key in keys_all)
     long_err = sum(per[key]["long_err"] for key in keys_all)
@@ -110,7 +115,7 @@ def checkpoint_row(per, keys_all, keys_nontrivial, k):
         "long_checker_error": 100 * long_err / long_n if long_n else 0.0,
         "answer_chars_median": statistics.median([len(a) for a in answers]) if answers else float("nan"),
         "dup_answer": 100 * top[0][1] / len(norm) if top else 0.0,
-        "unique_word_ratio": len(set(words)) / len(words) if words else 0.0,
+        "unique_word_ratio": mean([len(set(a.lower().split())) / len(a.split()) for a in answers if a.split()]),
         "nontrivial_over_all": score(per, keys_nontrivial) / loose_all if loose_all else float("nan"),
     }
 
@@ -129,7 +134,7 @@ def paired(pa, pb, keys, z, q, seed=20261109):
     rng = random.Random(seed)
     bs = sorted(mean([d[rng.randrange(n)] for _ in range(n)]) for _ in range(BOOT))
     return {"n": n, "delta": 100 * delta, "se": 100 * se, "ci_lo": 100 * (delta - z * se), "ci_hi": 100 * (delta + z * se),
-            "boot_lo": 100 * bs[int(q * BOOT)], "boot_hi": 100 * bs[int((1 - q) * BOOT) - 1], "se_samp": 100 * se_samp}
+            "boot_lo": 100 * bs[int(q * BOOT)], "boot_hi": 100 * bs[BOOT - 1 - int(q * BOOT)], "se_samp": 100 * se_samp}
 
 
 def main() -> int:
@@ -155,10 +160,13 @@ def main() -> int:
         mism = sum(abs(mean(per[k]["loose"]) - logged[k]) > 1e-9 for k in raw)
         if mism:
             raise SystemExit(f"{rd}: re-score differs from logged per-doc loose on {mism} prompts")
-        names.append(rd.name)
+        name = run_name(rd)
+        if name in valid:
+            raise SystemExit(f"duplicate checkpoint name {name!r} ({rd}) — give distinct run directories")
+        names.append(name)
         pers.append(per)
-        valid[rd.name] = invalid_reasons(task_res)
-        print(f"{rd.name}: {f.name} · re-score = logged on {len(raw)}/{len(raw)} prompts")
+        valid[name] = invalid_reasons(task_res)
+        print(f"{name}: {f.name} · re-score = logged on {len(raw)}/{len(raw)} prompts")
 
     k = len(next(iter(pers[0].values()))["loose"])
     out = {"subsets": {s: len(v) for s, v in subsets.items()}, "checkpoints": {}, "primary": [], "sensitivity": []}
@@ -174,7 +182,7 @@ def main() -> int:
         flags = [c for c, bad in (("dup_answer", row["dup_answer"] > 10), ("nontrivial_over_all", row["nontrivial_over_all"] < 0.5)) if bad]
         verdict = ("무효: " + ", ".join(valid[name])) if valid[name] else "유효"
         verdict += (" ⚠퇴화 " + ",".join(flags)) if flags else ""
-        out["checkpoints"][name] = {"verdict": verdict, "all": row,
+        out["checkpoints"][name] = {"verdict": verdict, "degenerate": bool(flags), "all": row,
                                     "subsets": {s: {"loose": score(per, keys), "strict": score(per, keys, "strict")} for s, keys in subsets.items()}}
         print(f"| {name} | {verdict} | " + " | ".join(f"{row[c]:.3f}" if c == "unique_word_ratio" else f"{row[c]:.2f}" if c == "nontrivial_over_all" else f"{row[c]:.1f}" for c in cols) + " |")
     print("\n| checkpoint | " + " | ".join(f"{s} loose / strict" for s in subsets) + " |")
@@ -200,10 +208,14 @@ def main() -> int:
         else:
             verdict = "구분 불가"
         flag = " ⚠" if abs(dtc) > 2 else ""
+        if out["checkpoints"][names[j]]["degenerate"] or out["checkpoints"][names[i]]["degenerate"]:
+            verdict += " ⚠퇴화 체크포인트 포함"
         print(f"| {names[j]} − {names[i]} | {p['n']} | {p['delta']:+.1f} | {p['se']:.2f} | [{p['ci_lo']:+.1f}, {p['ci_hi']:+.1f}] | "
               f"[{p['boot_lo']:+.1f}, {p['boot_hi']:+.1f}] | {p['se_samp']:.2f} | {dtc:+.1f}{flag} | {verdict} |")
         out["primary"].append({"a": names[j], "b": names[i], **p, "d_think_closed": dtc, "verdict": verdict})
 
+    print("\n읽기 규칙: \"구분 불가\" 는 \"같다\" 가 아니다 (80% 검정력의 최소 검출 차 약 3.5pp, 적대적 검토 모의실험). "
+          "Δthink_closed ⚠ 인 쌍은 주 비교의 차이에 사고 마감 실패분이 들어 있으므로 아래 both_closed 의 부호와 함께 읽는다.")
     print("\n## 민감도 분석 — 판정 없음 (Δ · 짝 SE · 주 비교와 부호 일치)\n")
     print("| pair | subset | n | Δ | 짝 SE | 부호 일치 |")
     print("|---|---|---:|---:|---:|---|")
