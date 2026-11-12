@@ -4,6 +4,14 @@
 CLAUDE.md의 "함정 표"는 이 문서의 한 줄 요약이며, 새 사고는 **여기에 서사를 쓰고 CLAUDE.md 표에는 한 줄만** 추가한다.
 날짜는 절대 표기. 두 스테이지 이상 지난 항목은 스테이지 경계에서 `archive/`로 이동.
 
+## 에이전틱 벤치를 sub1 에서 돌리자 SWE 500/500 · TB-2.1 712/712 가 BadRequestError — 컨테이너 :8199 를 main1 의 묵은 역터널이 잡고 있었다 (2026-11-11, ✅ main1 로 옮겨 재측정)
+
+- **증상**: NeMo-RL MOPD1 학생 (`mopd1_s3_iter120_fp32pc0`) 을 sub1 에서 `run_suite.sh … swe,tb2` (07:42~08:46) — 게이트 A1~A5 PASS 뒤 전부 `BadRequestError`, 판정 "무효 (추출 실패 100%)", 프록시 추론 관측 0.
+- **원인 (자명)**: `start_swe_tunnel.sh` → `swe_tunnel_keep.sh` 는 실행 노드의 `localhost:8100` 을 컨테이너 :8199 로 연다. main1 에 약 35일 된 keeper 와 ssh (`-R 8199:localhost:8100`) 가 남아 :8199 를 잡고 있어 sub1 터널은 `remote port forwarding failed for listen port 8199` 로 5초마다 재시도만 했다. 하니스 요청은 main1 의 T1 fleet (도구 파서 없음 · 40,960) 로 가 400. 게이트 A2 (컨테이너 :8199 → fleet 200) 는 응답 여부만 봐 통과했다. `start_swe_tunnel.sh` 의 `pkill -f swe_tunnel_keep` 은 실행 노드의 keeper 만 죽이고 다른 노드나 ssh 자식은 남긴다.
+- **덧붙은 실수 2건**: ① 무효 결과를 `results/<TAG>/` 안 하위 폴더로 옮겼더니 `summarize.py:31` (`rglob`) 이 다시 읽어 다음 집계에서 W&B 에 0.0 을 한 번 더 올렸다 → 결과 트리 밖 `/home/work/vidsearch/tools/bench_logs/invalid/` 로 옮김. ② W&B run 을 지운 뒤 같은 id 로 재기록이 안 됐다 → `-r2` id 로 재기록 (§2.5 wandb).
+- **대응**: 에이전틱은 터널이 가리키는 main1 에서 T1 뒤 재측정 (SWE-V 12.0% · TB-2.1 2.9, 유효), sub1 은 터널이 필요 없는 T2. sub1 의 재시도 루프는 사용자가 직접 종료 (09:59).
+- **교훈 · 보완 후보**: 에이전틱을 다른 노드로 옮기기 전에 두 노드의 `-R 8199` 프로세스를 본다 (§2.5 두 노드로 나눠 돌리기). A2 는 fleet 식별 (예: `/v1/models` 의 `max_model_len` 262,144 · 도구 파서) 까지 봐야 한다 — 게이트 보완은 승인 대상.
+
 ## GDN 재귀 상태가 vLLM 에서 bf16 으로 저장된다 — 디코드 토큰마다 반올림이 누적돼 rollout-vs-train logprob 이 생성 위치에 따라 벌어진다 (2026-10-06 ✅ RL 레시피 기본값 fp32 · 2026-10-21 ✅ 배포·평가 서빙도 fp32 — 사용자 결정 · 🔶 fp32 fleet 게이트 미실행)
 
 **RL 측 서사(발견 경위·통제 대조표·원인 분해·교훈)와 업계 배포 관행 조사(2026-10-21)는 NeMo-RL 쪽에 있다** → `project_s/NeMo-RL/examples/configs/alpha/docs/KNOWN_ISSUES.md` "GDN 재귀 상태" 항목. 여기에는 Pai 서빙 쪽 처리만 남긴다.

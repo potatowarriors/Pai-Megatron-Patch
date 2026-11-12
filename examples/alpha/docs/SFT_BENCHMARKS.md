@@ -214,7 +214,23 @@ RL 단계의 rollout 속도가 곧 학습 속도이므로 벤치 fleet 에서 �
 진행은 **산출물 개수**로 센다 — 컨테이너의 `preds_<TAG>/<instance>/` 디렉토리 수,
 `runs/<rid>/` 하위 태스크 수, `docker ps` 개수. `progress.sh` 가 이를 한 화면에 모은다.
 
+### 두 노드로 나눠 돌리기 (2026-11-11, NeMo-RL MOPD1 학생 벤치)
+
+main1 에서 `ssh sub1` 이 된다 (같은 NFS 경로 · lm_eval 0.4.13 · 서빙 venv `tools/alpha_serve_venv` 공유). 예전 주석의 "sub1 ssh 막힘" 은 틀렸다.
+`run_suite.sh` 는 실행한 노드의 GPU 0~7 로 fleet 를 띄우므로, 단계(`t1` · `t2` · `swe,tb2`)를 노드별로 나눠 같은 `RUN_TAG` 로 돌리면 결과가 한 디렉토리에 모인다.
+`ssh sub1 "cd …/examples/alpha && PREFIX_CACHE=0 SSM_STATE_DTYPE=float32 setsid nohup bash eval_sft/run_suite.sh <CK> <TAG> t2 > <log> 2>&1 < /dev/null &"`.
+지킬 것:
+- **에이전틱은 역터널이 가리키는 노드에서만 돌린다.** 컨테이너 :8199 를 먼저 잡은 `swe_tunnel_keep.sh` 의 노드가 이긴다 — 다른 노드의 새 터널은
+  `remote port forwarding failed for listen port 8199` 로 재시도만 하고, 하니스 요청은 원래 노드 fleet 로 간다. 게이트 A2 는 응답만 보고 **어느 fleet 인지**는
+  보지 않아 통과한다 (`KNOWN_ISSUES.md` 2026-11-11). 기동 전에 두 노드에서 `ps -eo pid,etimes,args | grep -- '-R 8199'` 로 잡은 쪽을 확인한다.
+- **무효 결과는 `results/<TAG>/` 밖으로 옮긴다.** `summarize.py` 는 `rglob("results_*.json")` 이라 하위 폴더도 읽어 다시 집계하고 W&B 에 올린다.
+- **fleet 로그 이름이 두 노드에서 겹친다** (`/home/work/vidsearch/tools/fleet_logs/serve_80xx.log`, NFS). 동시에 돌리면 로그가 섞이므로 조건 확인
+  (`prefix_cache` · `ssm_state`) 은 그 노드의 vLLM 프로세스 인자로 한다 (`ps -eo args | grep alpha_serve_venv/bin/vllm`).
+- **긴 꼬리 과제는 다른 노드로.** AIME25 · HMMT25 (30 × 32, 40K 사고) 가 T1 끝에 남으면 GPU 8장 중 5장이 논다 (MOPD1 학생 T1 5시간 15분 중 마지막 1시간).
+
 ### wandb — 키 규약 `<task>/<metric>`
+
+**지운 run 의 id 는 다시 못 쓴다** (`CommError: run … was previously created and deleted`). `log_eval_wandb.py` 의 id 는 태그로 정해지므로 run 을 지우고 다시 올리려면 다른 id (예: `-r2`) 로 같은 이름 · config · 지표를 올리고, 그 태그의 다음 자동 기록도 실패하니 손으로 다시 올린다 (2026-11-11 `mopd1_s3_iter120_fp32pc0` → `eval-v3-…-r2`).
 
 `python3 eval_sft/log_eval_wandb.py --results-dir eval_sft/results --run-tag <TAG>`
 (`run_suite.sh` 가 집계 후 자동 호출. `WANDB=0` 이면 건너뜀. `--all-tags` 백필,
